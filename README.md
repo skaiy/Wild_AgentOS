@@ -1228,8 +1228,8 @@ sequenceDiagram
 
 ```bash
 # Clone repository
-git clone https://github.com/your-org/gliding_horse_agent_os.git
-cd gliding_horse_agent_os
+git clone https://github.com/doiito/gliding_horse.git
+cd gliding_horse
 
 # Build in release mode
 cargo build --release
@@ -1467,7 +1467,7 @@ cargo test --test integration_test
 ### Project Structure
 
 ```
-gliding_horse_agent_os/
+gliding_horse/
 ├── src/
 │   ├── api/              # gRPC + HTTP servers
 │   ├── core/             # Agent orchestration (SA, AR, BizAgent)
@@ -1563,9 +1563,9 @@ Special thanks to:
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/your-org/gliding_horse_agent_os/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/your-org/gliding_horse_agent_os/discussions)
-- **Email**: support@gliding-horse.dev
+- **Issues**: [GitHub Issues](https://github.com/doiito/gliding_horse/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/doiito/gliding_horse/discussions)
+- **Email**: doiito@qq.com
 
 ---
 
@@ -1577,8 +1577,8 @@ Like the Wooden Ox and Gliding Horse that revolutionized ancient logistics, **Gl
 
 **Star ⭐ this repo if you find it useful!**
 
-[![GitHub stars](https://img.shields.io/github/stars/your-org/gliding_horse_agent_os.svg?style=social&label=Star)](https://github.com/your-org/gliding_horse_agent_os)
-[![GitHub forks](https://img.shields.io/github/forks/your-org/gliding_horse_agent_os.svg?style=social&label=Fork)](https://github.com/your-org/gliding_horse_agent_os)
+[![GitHub stars](https://img.shields.io/github/stars/doiito/gliding_horse.svg?style=social&label=Star)](https://github.com/doiito/gliding_horse)
+[![GitHub forks](https://img.shields.io/github/forks/doiito/gliding_horse.svg?style=social&label=Fork)](https://github.com/doiito/gliding_horse)
 
 *"Wisdom is not inherited; it is built upon the shoulders of those who came before."*  
 — Inspired by Zhuge Liang
