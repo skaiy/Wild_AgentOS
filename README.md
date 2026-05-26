@@ -535,81 +535,90 @@ This design achieves:
 
 **The Foundation of All Structured Thinking**
 
-5W2H (What, Why, Who, When, Where, How, How Much) is not just another framework—it is the **fundamental ontology of all actionable tasks**. Unlike specialized models that address specific aspects of problem-solving, 5W2H captures the complete essence of any executable work.
+Gliding Horse Agent OS is built on **two universal frameworks** that are essential for handling any task:
+
+1. **5W2H (What, Why, Who, When, Where, How, How Much)** - The **Task Ontology**
+   - Answers: "What exactly needs to be done?"
+   - Purpose: Clarifies intent, constraints, and success criteria
+   - Timing: Applied at **task initialization** phase
+
+2. **PDCA Cycle (Plan-Do-Check-Act)** - The **Execution Model**
+   - Answers: "How do we systematically execute and improve?"
+   - Purpose: Provides iterative execution with continuous feedback
+   - Timing: Applied throughout **task lifecycle**
 
 ```mermaid
 graph TB
-    subgraph "Universal Frameworks"
-        U1["5W2H<br/>━━━━━━━━<br/>Complete task ontology<br/>Covers ALL dimensions"]
+    subgraph "Universal Frameworks (Always Required)"
+        U1["5W2H<br/>━━━━━━━━<br/>Task Ontology<br/>Clarifies WHAT to do"]
+        U2["PDCA Cycle<br/>━━━━━━━━<br/>Execution Model<br/>Defines HOW to execute"]
     end
     
-    subgraph "Specialized Models"
-        S1["SWOT Analysis<br/>━━━━━━━━<br/>Strategic positioning only"]
-        S2["5 Whys<br/>━━━━━━━━<br/>Root cause analysis only"]
-        S3["PDCA Cycle<br/>━━━━━━━━<br/>Process improvement only"]
-        S4["SMART Goals<br/>━━━━━━━━<br/>Goal-setting criteria only"]
+    subgraph "Specialized Models (Skill Extensions)"
+        S1["SWOT Analysis<br/>Strategic positioning"]
+        S2["5 Whys<br/>Root cause analysis"]
+        S3["SMART Goals<br/>Goal refinement"]
+        S4["Kanban<br/>Workflow visualization"]
     end
     
     U1 -->|Foundation| TASK[Executable Task]
-    S1 -.->|Skill Extension| TASK
-    S2 -.->|Skill Extension| TASK
-    S3 -.->|Skill Extension| TASK
-    S4 -.->|Skill Extension| TASK
+    U2 -->|Process| TASK
+    S1 -.->|Optional Skill| TASK
+    S2 -.->|Optional Skill| TASK
+    S3 -.->|Optional Skill| TASK
+    S4 -.->|Optional Skill| TASK
     
     style U1 fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px
+    style U2 fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px
     style S1 fill:#fff3e0,stroke:#f57c00,stroke-dasharray: 5 5
     style S2 fill:#fff3e0,stroke:#f57c00,stroke-dasharray: 5 5
     style S3 fill:#fff3e0,stroke:#f57c00,stroke-dasharray: 5 5
     style S4 fill:#fff3e0,stroke:#f57c00,stroke-dasharray: 5 5
 ```
 
-**Why 5W2H is Irreplaceable:**
-
-| Dimension | Question It Answers | Consequence if Missing |
-|-----------|-------------------|----------------------|
-| **What** | What needs to be done? | No clear objective → aimless execution |
-| **Why** | Why is this important? | No motivation/priority → low engagement |
-| **Who** | Who is responsible? | Accountability gap → nobody owns it |
-| **When** | When must it be completed? | No deadline → perpetual procrastination |
-| **Where** | Where does it happen? | Context ambiguity → wrong environment |
-| **How** | How will it be executed? | No method → chaotic implementation |
-| **How Much** | What resources are available? | Budget overrun → project failure |
-
-**Critical Insight**: If you cannot clearly articulate all 7 dimensions, the task is **inherently unexecutable**. Ambiguity in any dimension leads to:
-- Misaligned expectations between stakeholders
-- Resource misallocation (time, budget, personnel)
-- Inability to measure success or failure
-- Failed audits and accountability gaps
-
-**Comparison with Specialized Models:**
+**Why Both Are Irreplaceable:**
 
 ```
-5W2H = Universal Task Skeleton (Always Required)
-  ├── SWOT Analysis → Skill for strategic planning tasks
-  ├── 5 Whys → Skill for root cause investigation tasks
-  ├── PDCA → Skill for process improvement tasks
-  └── SMART → Skill for goal refinement tasks
+Any Executable Task = 5W2H (Intent Clarity) + PDCA (Systematic Execution)
 ```
 
-In Gliding Horse Agent OS, specialized models like SWOT or 5 Whys are implemented as **reusable Skills** within the Skill Graph system. They are invoked when the 5W2H metadata indicates their applicability:
+| Framework | Role | Without It... |
+|-----------|------|---------------|
+| **5W2H** | Defines **WHAT** needs to be done | Ambiguous goals → misaligned expectations |
+| **PDCA** | Defines **HOW** to execute iteratively | Chaotic implementation → no quality control |
 
-```json
-{
-  "task:5W2H": {
-    "what": "Analyze market competition",
-    "why": "Identify strategic positioning opportunities",
-    "how": {
-      "preferredSkills": ["skill:swot-analysis", "skill:porter-five-forces"]
-    }
-  }
-}
+**The Complete Workflow:**
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant SA as SupervisorAgent
+    participant PA as PlanAgent
+    participant DA as DoAgent
+    participant CA as CheckAgent
+    participant AA as ActAgent
+    
+    User->>SA: Submit task request
+    Note over SA: Step 1: Extract 5W2H<br/>(What/Why/Who/When/Where/How/HowMuch)
+    
+    SA->>PA: Execute PLAN phase
+    PA->>PA: Generate micro-flow DAG
+    PA-->>SA: Return execution plan
+    
+    SA->>DA: Execute DO phase
+    DA->>DA: Call tools, write artifacts
+    DA-->>SA: Return implementation
+    
+    SA->>CA: Execute CHECK phase
+    CA->>CA: Audit by 5W2H dimensions
+    CA-->>SA: Return audit verdict
+    
+    SA->>AA: Execute ACT phase
+    AA->>AA: Decide: Pass/Rollback/Terminate
+    AA-->>SA: Final decision
+    
+    SA-->>User: Deliver result + archive
 ```
-
-This design ensures:
-1. **Consistency**: Every task has the same structural foundation (5W2H)
-2. **Extensibility**: Specialized analysis methods are pluggable skills
-3. **Auditability**: Each dimension can be independently verified by CA
-4. **Pattern Recognition**: Historical tasks with similar 5W2H profiles trigger relevant skill recommendations
 
 #### 4.2 Beyond Free-Text Prompts
 
