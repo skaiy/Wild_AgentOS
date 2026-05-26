@@ -1249,11 +1249,11 @@ Create `config.yaml` or set environment variables:
 gateway:
   base_url: "http://localhost:3000"
   api_key: "${GLIDING_HORSE_GATEWAY_API_KEY}"
-  default_model: "gpt-3.5-turbo"
+  default_model: "deepseek-v4-flash"
   model_mapping:
-    planning: "gpt-4-turbo-preview"
-    execution: "gpt-4-turbo-preview"
-    analysis: "gpt-3.5-turbo"
+    planning: "deepseek-v4-pro"
+    execution: "deepseek-v4-flash"
+    analysis: "deepseek-v4-pro"
 
 memory:
   l0:
