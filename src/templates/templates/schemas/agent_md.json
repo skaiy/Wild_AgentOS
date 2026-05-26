@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AgentMd",
+  "description": "Schema for agent markdown prompt definition",
+  "type": "object",
+  "properties": {
+    "@context": { "type": "string" },
+    "@id": { "type": "string" },
+    "@type": { "type": "string", "enum": ["AgentMd"] },
+    "role": { "type": "string", "enum": ["PA", "DA", "CA", "AA"] },
+    "task_description": { "type": "string" },
+    "available_skills": { "type": "array", "items": { "type": "string" } },
+    "context_summary": { "type": "string" },
+    "constraints": { "type": "object" },
+    "output_format": { "type": "string" }
+  },
+  "required": ["role", "task_description"]
+}

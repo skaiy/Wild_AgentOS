@@ -1,0 +1,782 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use chrono::Utc;
+use parking_lot::RwLock;
+use serde_json::Value;
+use tracing::{debug, info, warn};
+
+use crate::memory::l0_store::L0Store;
+use crate::memory::l2_blackboard::Blackboard;
+use crate::skill_graph::index::PreAggregatedIndex;
+use crate::skill_graph::types::*;
+use crate::CoreError;
+
+const SKILL_GRAPH_NAMED_GRAPH: &str = "system:skill_graph";
+
+pub struct SkillGraphStore {
+    skills: RwLock<HashMap<String, SkillGraphNode>>,
+    mocs: RwLock<HashMap<String, MOCNode>>,
+    fragments: RwLock<HashMap<String, KnowledgeFragment>>,
+    index: PreAggregatedIndex,
+    blackboard: Option<Arc<Blackboard>>,
+    l0_store: Option<Arc<L0Store>>,
+}
+
+impl SkillGraphStore {
+    pub fn new() -> Self {
+        Self {
+            skills: RwLock::new(HashMap::new()),
+            mocs: RwLock::new(HashMap::new()),
+            fragments: RwLock::new(HashMap::new()),
+            index: PreAggregatedIndex::new(),
+            blackboard: None,
+            l0_store: None,
+        }
+    }
+
+    pub fn with_blackboard(mut self, blackboard: Arc<Blackboard>) -> Self {
+        self.blackboard = Some(blackboard);
+        self
+    }
+
+    pub fn with_l0_store(mut self, l0_store: Arc<L0Store>) -> Self {
+        self.l0_store = Some(l0_store);
+        self
+    }
+
+    pub fn get_index(&self) -> &PreAggregatedIndex {
+        &self.index
+    }
+
+    pub fn register_skill(&self, skill: SkillGraphNode) -> Result<(), CoreError> {
+        let iri = skill.skill_iri.clone();
+        info!("注册技能到图谱: {} ({})", skill.name, iri);
+
+        if let Some(ref blackboard) = self.blackboard {
+            let json_ld = skill.to_json_ld();
+            let json_str = serde_json::to_string(&json_ld).unwrap_or_default();
+            debug!("技能 JSON-LD 已生成: {} bytes", json_str.len());
+        }
+
+        self.index.index_skill(&skill);
+        self.skills.write().insert(iri.clone(), skill);
+
+        if let Some(ref l0_store) = self.l0_store {
+            let now = Utc::now();
+            let entry = crate::memory::l0_store::L0Entry {
+                iri: iri.clone(),
+                content: format!("skill:{}", iri),
+                importance: 0.5,
+                access_count: 0,
+                created_at: now,
+                last_accessed: now,
+                tags: vec!["skill".to_string(), "skill_graph".to_string()],
+                metadata: serde_json::Map::new(),
+                mesi_state: crate::memory::l0_store::MesiState::Shared,
+                content_hash: String::new(),
+                named_graph: Some(SKILL_GRAPH_NAMED_GRAPH.to_string()),
+                qdrant_point_id: None,
+                jsonld_context: None,
+                jsonld_types: vec!["skill:Skill".to_string()],
+            };
+            l0_store.store(&iri, &serde_json::to_string(&entry).unwrap_or_default())?;
+            debug!("技能已写入 L0 存储: {}", iri);
+        }
+
+        Ok(())
+    }
+
+    pub fn get_skill(&self, skill_iri: &str) -> Option<SkillGraphNode> {
+        self.skills.read().get(skill_iri).cloned()
+    }
+
+    pub fn update_skill(&self, skill: SkillGraphNode) -> Result<(), CoreError> {
+        let iri = skill.skill_iri.clone();
+        if self.skills.read().contains_key(&iri) {
+            self.index.update_skill(&skill);
+            self.skills.write().insert(iri, skill);
+            Ok(())
+        } else {
+            Err(CoreError::SkillNotFound {
+                iri: format!("Skill not found: {}", iri),
+            })
+        }
+    }
+
+    pub fn remove_skill(&self, skill_iri: &str) -> Result<(), CoreError> {
+        if self.skills.write().remove(skill_iri).is_some() {
+            self.index.remove_skill(skill_iri);
+            info!("技能已从图谱移除: {}", skill_iri);
+            Ok(())
+        } else {
+            Err(CoreError::SkillNotFound {
+                iri: format!("Skill not found: {}", skill_iri),
+            })
+        }
+    }
+
+    pub fn add_link(
+        &self,
+        source_iri: &str,
+        target_iri: &str,
+        link_type: SkillLinkType,
+        strength: LinkStrength,
+        description: &str,
+    ) -> Result<(), CoreError> {
+        let mut skills = self.skills.write();
+        
+        if let Some(source) = skills.get_mut(source_iri) {
+            source.links.push(SkillLink {
+                link_type,
+                target_iri: target_iri.to_string(),
+                strength,
+                description: description.to_string(),
+            });
+            debug!("添加链接: {} -> {} ({:?})", source_iri, target_iri, link_type);
+
+            let updated = skills.get(source_iri).cloned();
+            drop(skills);
+            if let Some(skill) = updated {
+                self.index.update_skill(&skill);
+            }
+            Ok(())
+        } else {
+            Err(CoreError::SkillNotFound {
+                iri: format!("Source skill not found: {}", source_iri),
+            })
+        }
+    }
+
+    pub fn traverse_links(
+        &self,
+        start_iri: &str,
+        link_types: Option<&[SkillLinkType]>,
+        max_depth: u32,
+    ) -> Vec<(String, SkillLinkType, u32)> {
+        let mut result = Vec::new();
+        let mut visited = HashSet::new();
+        let mut queue: Vec<(String, u32)> = vec![(start_iri.to_string(), 0)];
+
+        while let Some((current_iri, depth)) = queue.pop() {
+            if depth >= max_depth {
+                continue;
+            }
+
+            if visited.contains(&current_iri) {
+                continue;
+            }
+            visited.insert(current_iri.clone());
+
+            let skills = self.skills.read();
+            if let Some(skill) = skills.get(&current_iri) {
+                for link in &skill.links {
+                    if let Some(types) = link_types {
+                        if !types.contains(&link.link_type) {
+                            continue;
+                        }
+                    }
+
+                    result.push((link.target_iri.clone(), link.link_type, depth + 1));
+
+                    if !visited.contains(&link.target_iri) {
+                        queue.push((link.target_iri.clone(), depth + 1));
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    pub fn resolve_dependencies(&self, skill_iri: &str) -> Vec<String> {
+        let mut result = Vec::new();
+        let mut visited = HashSet::new();
+        self.resolve_dependencies_recursive(skill_iri, &mut result, &mut visited);
+        result
+    }
+
+    fn resolve_dependencies_recursive(
+        &self,
+        skill_iri: &str,
+        result: &mut Vec<String>,
+        visited: &mut HashSet<String>,
+    ) {
+        if visited.contains(skill_iri) {
+            return;
+        }
+        visited.insert(skill_iri.to_string());
+
+        let skills = self.skills.read();
+        if let Some(skill) = skills.get(skill_iri) {
+            for link in &skill.links {
+                if link.link_type == SkillLinkType::Prerequisite {
+                    self.resolve_dependencies_recursive(&link.target_iri, result, visited);
+                }
+            }
+        }
+
+        result.push(skill_iri.to_string());
+    }
+
+    pub fn find_alternatives(&self, skill_iri: &str) -> Vec<(String, String)> {
+        let skills = self.skills.read();
+        
+        if let Some(skill) = skills.get(skill_iri) {
+            skill
+                .get_alternatives()
+                .iter()
+                .map(|link| (link.target_iri.clone(), link.description.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn find_skills_by_5w2h(
+        &self,
+        what_keyword: Option<&str>,
+        why_keyword: Option<&str>,
+        phase: Option<&str>,
+        agent_role: Option<&str>,
+        min_success_rate: Option<f32>,
+    ) -> Vec<SkillGraphNode> {
+        let role_candidates: Option<Vec<String>> = agent_role.map(|role| {
+            self.index.find_by_role(role)
+        });
+
+        let skills = self.skills.read();
+        
+        skills
+            .values()
+            .filter(|skill| {
+                if let Some(ref candidates) = role_candidates {
+                    if !candidates.contains(&skill.skill_iri) {
+                        return false;
+                    }
+                }
+
+                if let Some(kw) = what_keyword {
+                    if !skill.w2h.what.to_lowercase().contains(&kw.to_lowercase()) {
+                        return false;
+                    }
+                }
+
+                if let Some(kw) = why_keyword {
+                    if !skill.w2h.why.to_lowercase().contains(&kw.to_lowercase()) {
+                        return false;
+                    }
+                }
+
+                if let Some(p) = phase {
+                    if !skill.w2h.when.applicable_phases.iter().any(|ph| ph.to_lowercase() == p.to_lowercase()) {
+                        return false;
+                    }
+                }
+
+                if let Some(min_rate) = min_success_rate {
+                    if skill.graph_meta.success_rate < min_rate {
+                        return false;
+                    }
+                }
+
+                true
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn find_skills_by_tags(&self, tags: &[&str]) -> Vec<SkillGraphNode> {
+        let candidates = self.index.find_by_tags_intersection(tags);
+        if !candidates.is_empty() {
+            let skills = self.skills.read();
+            return candidates
+                .iter()
+                .filter_map(|iri| skills.get(iri).cloned())
+                .collect();
+        }
+
+        let skills = self.skills.read();
+        skills
+            .values()
+            .filter(|skill| {
+                tags.iter().all(|tag| {
+                    skill.tags.iter().any(|t| t.to_lowercase() == tag.to_lowercase())
+                })
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn register_moc(&self, moc: MOCNode) -> Result<(), CoreError> {
+        let moc_iri = moc.moc_iri.clone();
+        info!("注册 MOC 节点: {} ({})", moc.name, moc_iri);
+        self.mocs.write().insert(moc_iri, moc);
+        Ok(())
+    }
+
+    pub fn get_moc(&self, moc_iri: &str) -> Option<MOCNode> {
+        self.mocs.read().get(moc_iri).cloned()
+    }
+
+    pub fn list_mocs(&self) -> Vec<MOCNode> {
+        self.mocs.read().values().cloned().collect()
+    }
+
+    pub fn create_fragment(
+        &self,
+        fragment_iri: &str,
+        attached_to: &str,
+        problem: &str,
+        recommendation: &str,
+        discoverer: Option<&str>,
+    ) -> Result<KnowledgeFragment, CoreError> {
+        let mut fragment = KnowledgeFragment::new(fragment_iri, attached_to, problem, recommendation);
+        
+        if let Some(d) = discoverer {
+            fragment = fragment.with_discoverer(d);
+        }
+
+        info!("创建知识碎片: {} -> {}", attached_to, fragment_iri);
+        
+        self.fragments.write().insert(fragment_iri.to_string(), fragment.clone());
+        
+        let skill_clone = {
+            self.skills.read().get(attached_to).cloned()
+        };
+        
+        if let Some(mut skill) = skill_clone {
+            skill.graph_meta.known_failure_modes.push(FailureMode {
+                mode: problem.to_string(),
+                discovered_by: discoverer.map(|s| s.to_string()),
+                mitigation: recommendation.to_string(),
+            });
+            self.index.update_skill(&skill);
+            self.skills.write().insert(attached_to.to_string(), skill);
+        }
+
+        Ok(fragment)
+    }
+
+    pub fn get_fragments_for_skill(&self, skill_iri: &str) -> Vec<KnowledgeFragment> {
+        self.fragments
+            .read()
+            .values()
+            .filter(|f| f.attached_to == skill_iri)
+            .cloned()
+            .collect()
+    }
+
+    pub fn record_skill_usage(&self, skill_iri: &str, success: bool) -> Result<(), CoreError> {
+        let mut skills = self.skills.write();
+        
+        if let Some(skill) = skills.get_mut(skill_iri) {
+            skill.graph_meta.record_usage(success);
+            debug!(
+                "记录技能使用: {} (success={}, rate={:.2})",
+                skill_iri, success, skill.graph_meta.success_rate
+            );
+
+            let updated = skills.get(skill_iri).cloned();
+            drop(skills);
+            if let Some(skill) = updated {
+                self.index.update_skill(&skill);
+            }
+            Ok(())
+        } else {
+            Err(CoreError::SkillNotFound {
+                iri: format!("Skill not found: {}", skill_iri),
+            })
+        }
+    }
+
+    pub fn get_skill_at_level(&self, skill_iri: &str, level: DisclosureLevel) -> Option<Value> {
+        if level == DisclosureLevel::MOCIndex || level == DisclosureLevel::Summary5W2H {
+            if let Some(entry) = self.index.get_summary(skill_iri) {
+                return Some(match level {
+                    DisclosureLevel::MOCIndex => {
+                        serde_json::json!({
+                            "@id": entry.skill_iri,
+                            "name": entry.name,
+                            "node_type": format!("{:?}", entry.node_type),
+                            "tags": entry.tags
+                        })
+                    }
+                    DisclosureLevel::Summary5W2H => {
+                        serde_json::json!({
+                            "@id": entry.skill_iri,
+                            "name": entry.name,
+                            "what": entry.what,
+                            "why": entry.why,
+                            "tags": entry.tags,
+                            "success_rate": entry.success_rate
+                        })
+                    }
+                    _ => unreachable!(),
+                });
+            }
+        }
+
+        let skills = self.skills.read();
+        let skill = skills.get(skill_iri)?;
+
+        Some(match level {
+            DisclosureLevel::MOCIndex => {
+                serde_json::json!({
+                    "@id": skill.skill_iri,
+                    "name": skill.name,
+                    "description": skill.description,
+                    "node_type": format!("{:?}", skill.node_type),
+                    "tags": skill.tags
+                })
+            }
+            DisclosureLevel::Summary5W2H => {
+                serde_json::json!({
+                    "@id": skill.skill_iri,
+                    "name": skill.name,
+                    "what": skill.w2h.what,
+                    "why": skill.w2h.why,
+                    "when": skill.w2h.when.applicable_phases,
+                    "who": skill.w2h.who.required_agent_role,
+                    "tags": skill.tags,
+                    "success_rate": skill.graph_meta.success_rate
+                })
+            }
+            DisclosureLevel::LinksExpanded => {
+                let links: Vec<Value> = skill.links.iter().map(|l| {
+                    serde_json::json!({
+                        "type": format!("{:?}", l.link_type),
+                        "target": l.target_iri,
+                        "strength": format!("{:?}", l.strength),
+                        "description": l.description
+                    })
+                }).collect();
+                
+                serde_json::json!({
+                    "@id": skill.skill_iri,
+                    "name": skill.name,
+                    "what": skill.w2h.what,
+                    "why": skill.w2h.why,
+                    "links": links,
+                    "success_rate": skill.graph_meta.success_rate
+                })
+            }
+            DisclosureLevel::SchemaSteps => {
+                let steps: Vec<Value> = skill.content.as_ref().map(|c| {
+                    c.steps.iter().map(|s| {
+                        serde_json::json!({
+                            "step_id": s.step_id,
+                            "order": s.order,
+                            "action": s.action
+                        })
+                    }).collect()
+                }).unwrap_or_default();
+                
+                serde_json::json!({
+                    "@id": skill.skill_iri,
+                    "name": skill.name,
+                    "what": skill.w2h.what,
+                    "steps": steps,
+                    "validation": skill.content.as_ref().and_then(|c| c.validation.as_ref().map(|v| {
+                        serde_json::json!({
+                            "method": v.method,
+                            "success_condition": v.success_condition
+                        })
+                    }))
+                })
+            }
+            DisclosureLevel::FullContent => {
+                skill.to_json_ld()
+            }
+        })
+    }
+
+    pub fn list_all_skills(&self) -> Vec<SkillGraphNode> {
+        self.skills.read().values().cloned().collect()
+    }
+
+    pub fn skill_count(&self) -> usize {
+        self.skills.read().len()
+    }
+
+    pub fn suggest_links(&self, skill_iri: &str) -> Vec<(String, SkillLinkType, f32)> {
+        let mut suggestions = Vec::new();
+        let skills = self.skills.read();
+        
+        if let Some(source) = skills.get(skill_iri) {
+            let source_tags: HashSet<&String> = source.tags.iter().collect();
+            
+            for (other_iri, other) in skills.iter() {
+                if other_iri == skill_iri {
+                    continue;
+                }
+
+                let other_tags: HashSet<&String> = other.tags.iter().collect();
+                let common_tags = source_tags.intersection(&other_tags).count();
+                
+                if common_tags > 0 {
+                    let similarity = common_tags as f32 / ((source_tags.len() + other_tags.len()) as f32 / 2.0);
+                    
+                    if similarity > 0.3 {
+                        suggestions.push((other_iri.clone(), SkillLinkType::Related, similarity));
+                    }
+                }
+            }
+        }
+
+        suggestions.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        suggestions.truncate(10);
+        suggestions
+    }
+
+    pub fn index_stats(&self) -> crate::skill_graph::index::IndexStats {
+        self.index.stats()
+    }
+}
+
+impl Default for SkillGraphStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_register_and_get_skill() {
+        let store = SkillGraphStore::new();
+        let skill = SkillGraphNode::new(
+            "iri://skills/test-skill",
+            "Test Skill",
+            "A test skill",
+        );
+
+        store.register_skill(skill.clone()).unwrap();
+        
+        let retrieved = store.get_skill("iri://skills/test-skill").unwrap();
+        assert_eq!(retrieved.name, "Test Skill");
+    }
+
+    #[test]
+    fn test_add_link() {
+        let store = SkillGraphStore::new();
+        
+        let skill1 = SkillGraphNode::new("iri://skills/skill1", "Skill 1", "First skill");
+        let skill2 = SkillGraphNode::new("iri://skills/skill2", "Skill 2", "Second skill");
+        
+        store.register_skill(skill1).unwrap();
+        store.register_skill(skill2).unwrap();
+        
+        store.add_link(
+            "iri://skills/skill1",
+            "iri://skills/skill2",
+            SkillLinkType::Prerequisite,
+            LinkStrength::Required,
+            "Skill 2 is required before Skill 1",
+        ).unwrap();
+        
+        let skill = store.get_skill("iri://skills/skill1").unwrap();
+        assert_eq!(skill.links.len(), 1);
+        assert_eq!(skill.links[0].link_type, SkillLinkType::Prerequisite);
+    }
+
+    #[test]
+    fn test_resolve_dependencies() {
+        let store = SkillGraphStore::new();
+        
+        let skill_a = SkillGraphNode::new("iri://skills/a", "A", "Skill A");
+        let mut skill_b = SkillGraphNode::new("iri://skills/b", "B", "Skill B");
+        skill_b.add_prerequisite("iri://skills/a", "A is required");
+        let mut skill_c = SkillGraphNode::new("iri://skills/c", "C", "Skill C");
+        skill_c.add_prerequisite("iri://skills/b", "B is required");
+        
+        store.register_skill(skill_a).unwrap();
+        store.register_skill(skill_b).unwrap();
+        store.register_skill(skill_c).unwrap();
+        
+        let deps = store.resolve_dependencies("iri://skills/c");
+        
+        assert_eq!(deps, vec!["iri://skills/a", "iri://skills/b", "iri://skills/c"]);
+    }
+
+    #[test]
+    fn test_find_skills_by_5w2h() {
+        let store = SkillGraphStore::new();
+        
+        let w2h = Skill5W2H::new("JWT Authentication", "Secure API access")
+            .with_phase("Do")
+            .with_agent_role("DA");
+        
+        let skill = SkillGraphNode::new(
+            "iri://skills/jwt-auth",
+            "JWT Auth",
+            "JWT authentication implementation",
+        ).with_5w2h(w2h);
+        
+        store.register_skill(skill).unwrap();
+        
+        let results = store.find_skills_by_5w2h(
+            Some("jwt"),
+            None,
+            Some("Do"),
+            Some("DA"),
+            None,
+        );
+        
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].skill_iri, "iri://skills/jwt-auth");
+    }
+
+    #[test]
+    fn test_find_alternatives() {
+        let store = SkillGraphStore::new();
+        
+        let mut skill1 = SkillGraphNode::new("iri://skills/jwt", "JWT", "JWT auth");
+        skill1.add_alternative("iri://skills/oauth", "OAuth is an alternative");
+        
+        let skill2 = SkillGraphNode::new("iri://skills/oauth", "OAuth", "OAuth auth");
+        
+        store.register_skill(skill1).unwrap();
+        store.register_skill(skill2).unwrap();
+        
+        let alts = store.find_alternatives("iri://skills/jwt");
+        assert_eq!(alts.len(), 1);
+        assert_eq!(alts[0].0, "iri://skills/oauth");
+    }
+
+    #[test]
+    fn test_disclosure_levels() {
+        let store = SkillGraphStore::new();
+        
+        let skill = SkillGraphNode::new(
+            "iri://skills/test",
+            "Test Skill",
+            "A test skill",
+        ).with_tag("testing");
+        
+        store.register_skill(skill).unwrap();
+        
+        let l1 = store.get_skill_at_level("iri://skills/test", DisclosureLevel::MOCIndex).unwrap();
+        assert!(l1.get("name").is_some());
+        assert!(l1.get("what").is_none());
+        
+        let l2 = store.get_skill_at_level("iri://skills/test", DisclosureLevel::Summary5W2H).unwrap();
+        assert!(l2.get("what").is_some());
+    }
+
+    #[test]
+    fn test_record_usage() {
+        let store = SkillGraphStore::new();
+        
+        let skill = SkillGraphNode::new("iri://skills/test", "Test", "Test skill");
+        store.register_skill(skill).unwrap();
+        
+        store.record_skill_usage("iri://skills/test", true).unwrap();
+        store.record_skill_usage("iri://skills/test", false).unwrap();
+        
+        let updated = store.get_skill("iri://skills/test").unwrap();
+        assert_eq!(updated.graph_meta.usage_count, 2);
+        assert_eq!(updated.graph_meta.success_rate, 0.5);
+    }
+
+    #[test]
+    fn test_moc_node() {
+        let store = SkillGraphStore::new();
+        
+        let mut moc = MOCNode::new(
+            "iri://moc/auth",
+            "Authentication",
+            "Authentication skills",
+        );
+        moc.add_entry_point("iri://skills/jwt");
+        moc.add_entry_point("iri://skills/oauth");
+        
+        store.register_moc(moc).unwrap();
+        
+        let retrieved = store.get_moc("iri://moc/auth").unwrap();
+        assert_eq!(retrieved.skill_count, 2);
+    }
+
+    #[test]
+    fn test_knowledge_fragment() {
+        let store = SkillGraphStore::new();
+        
+        let skill = SkillGraphNode::new("iri://skills/jwt", "JWT", "JWT auth");
+        store.register_skill(skill).unwrap();
+        
+        let fragment = store.create_fragment(
+            "iri://fragment/jwt-1",
+            "iri://skills/jwt",
+            "Token expiration issues",
+            "Use refresh tokens",
+            Some("agent:ca/001"),
+        ).unwrap();
+        
+        assert_eq!(fragment.problem, "Token expiration issues");
+        
+        let fragments = store.get_fragments_for_skill("iri://skills/jwt");
+        assert_eq!(fragments.len(), 1);
+    }
+
+    #[test]
+    fn test_suggest_links() {
+        let store = SkillGraphStore::new();
+        
+        let skill1 = SkillGraphNode::new("iri://skills/rust-auth", "Rust Auth", "Auth in Rust")
+            .with_tag("rust")
+            .with_tag("authentication");
+        
+        let skill2 = SkillGraphNode::new("iri://skills/rust-crypto", "Rust Crypto", "Crypto in Rust")
+            .with_tag("rust")
+            .with_tag("cryptography");
+        
+        let skill3 = SkillGraphNode::new("iri://skills/python-auth", "Python Auth", "Auth in Python")
+            .with_tag("python")
+            .with_tag("authentication");
+        
+        store.register_skill(skill1).unwrap();
+        store.register_skill(skill2).unwrap();
+        store.register_skill(skill3).unwrap();
+        
+        let suggestions = store.suggest_links("iri://skills/rust-auth");
+        
+        assert!(!suggestions.is_empty());
+        assert!(suggestions.iter().any(|(iri, _, _)| iri == "iri://skills/rust-crypto"));
+    }
+
+    #[test]
+    fn test_index_auto_updated_on_register() {
+        let store = SkillGraphStore::new();
+
+        let skill = SkillGraphNode::new("iri://skills/jwt", "JWT Auth", "JWT")
+            .with_tag("auth")
+            .with_tag("jwt");
+        store.register_skill(skill).unwrap();
+
+        let stats = store.index_stats();
+        assert_eq!(stats.total_skills, 1);
+        assert_eq!(stats.tag_count, 2);
+    }
+
+    #[test]
+    fn test_find_by_tags_uses_index() {
+        let store = SkillGraphStore::new();
+
+        let s1 = SkillGraphNode::new("iri://skills/s1", "S1", "S1")
+            .with_tag("auth")
+            .with_tag("jwt");
+        let s2 = SkillGraphNode::new("iri://skills/s2", "S2", "S2")
+            .with_tag("auth")
+            .with_tag("oauth");
+        store.register_skill(s1).unwrap();
+        store.register_skill(s2).unwrap();
+
+        let results = store.find_skills_by_tags(&["auth"]);
+        assert_eq!(results.len(), 2);
+
+        let results = store.find_skills_by_tags(&["auth", "jwt"]);
+        assert_eq!(results.len(), 1);
+    }
+}

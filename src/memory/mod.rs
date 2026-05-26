@@ -1,0 +1,21 @@
+pub mod l0_store;
+pub mod l1_session;
+pub mod l2_blackboard;
+pub mod l3_projection;
+pub mod memory_bus;
+pub mod memory_manager;
+pub mod consistency_engine;
+pub mod vector_store;
+pub mod prefetch_engine;
+pub mod scheduler;
+
+pub use l0_store::{L0Store, MesiState};
+pub use l1_session::L1Session;
+pub use l2_blackboard::Blackboard;
+pub use l3_projection::ProjectionEngine;
+pub use memory_bus::MemoryBus;
+pub use memory_manager::MemoryManager;
+pub use consistency_engine::{ConsistencyEngine, WriteStrategy};
+pub use vector_store::{VectorStore, EmbeddingService, OneApiEmbeddingService, FallbackEmbeddingService, HybridSearchFilter, ScoredEntry};
+pub use prefetch_engine::PrefetchEngine;
+pub use scheduler::MemoryScheduler;

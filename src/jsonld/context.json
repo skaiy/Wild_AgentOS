@@ -1,0 +1,100 @@
+{
+  "@context": {
+    "@vocab": "https://pdca-agent.org/vocab#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    
+    "Task": "pdca:Task",
+    "Agent": "pdca:Agent",
+    "PlanNode": "pdca:PlanNode",
+    "ExecutionResult": "pdca:ExecutionResult",
+    "CheckResult": "pdca:CheckResult",
+    "Decision": "pdca:Decision",
+    "EmphasisContent": "pdca:EmphasisContent",
+    
+    "task_iri": {
+      "@id": "pdca:taskIri",
+      "@type": "@id"
+    },
+    "agent_id": {
+      "@id": "pdca:agentId",
+      "@type": "xsd:string"
+    },
+    "role": {
+      "@id": "pdca:role",
+      "@type": "@vocab"
+    },
+    "status": {
+      "@id": "pdca:status",
+      "@type": "xsd:string"
+    },
+    "summary": {
+      "@id": "pdca:summary",
+      "@type": "xsd:string"
+    },
+    "objective": {
+      "@id": "pdca:objective",
+      "@type": "xsd:string"
+    },
+    "content": {
+      "@id": "pdca:content",
+      "@type": "xsd:string"
+    },
+    "thought": {
+      "@id": "pdca:thought",
+      "@type": "xsd:string"
+    },
+    "emphasis": {
+      "@id": "pdca:emphasis",
+      "@type": "xsd:string"
+    },
+    "timestamp": {
+      "@id": "pdca:timestamp",
+      "@type": "xsd:dateTime"
+    },
+    "permanent": {
+      "@id": "pdca:permanent",
+      "@type": "xsd:boolean"
+    },
+    "confidence": {
+      "@id": "pdca:confidence",
+      "@type": "xsd:float"
+    },
+    "turn_count": {
+      "@id": "pdca:turnCount",
+      "@type": "xsd:integer"
+    },
+    "tool_call_count": {
+      "@id": "pdca:toolCallCount",
+      "@type": "xsd:integer"
+    },
+    "dependencies": {
+      "@id": "pdca:dependsOn",
+      "@type": "@id"
+    },
+    "created_by": {
+      "@id": "pdca:createdBy",
+      "@type": "@id"
+    },
+    "parent_task": {
+      "@id": "pdca:parentTask",
+      "@type": "@id"
+    },
+    "subtasks": {
+      "@id": "pdca:hasSubtask",
+      "@type": "@id"
+    },
+    "artifacts": {
+      "@id": "pdca:hasArtifact",
+      "@type": "@id"
+    },
+    "errors": {
+      "@id": "pdca:hasError",
+      "@type": "xsd:string"
+    },
+    "tags": {
+      "@id": "pdca:hasTag",
+      "@type": "xsd:string"
+    }
+  }
+}

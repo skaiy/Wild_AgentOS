@@ -1,0 +1,933 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use async_trait::async_trait;
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum HookPoint {
+    AgentInit,
+    AgentStart,
+    AgentEnd,
+    AgentError,
+    TaskStart,
+    TaskEnd,
+    TaskError,
+    LlmRequest,
+    LlmResponse,
+    MemoryWrite,
+    MemoryRead,
+    SkillBefore,
+    SkillAfter,
+    BlackboardWrite,
+    BlackboardRead,
+    PhaseStart,
+    PhaseEnd,
+    CycleStart,
+    CycleEnd,
+    McpToolCall,
+    McpToolResult,
+}
+
+impl HookPoint {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::AgentInit => "agent_init",
+            Self::AgentStart => "agent_start",
+            Self::AgentEnd => "agent_end",
+            Self::AgentError => "agent_error",
+            Self::TaskStart => "task_start",
+            Self::TaskEnd => "task_end",
+            Self::TaskError => "task_error",
+            Self::LlmRequest => "llm_request",
+            Self::LlmResponse => "llm_response",
+            Self::MemoryWrite => "memory_write",
+            Self::MemoryRead => "memory_read",
+            Self::SkillBefore => "skill_before",
+            Self::SkillAfter => "skill_after",
+            Self::BlackboardWrite => "blackboard_write",
+            Self::BlackboardRead => "blackboard_read",
+            Self::PhaseStart => "phase_start",
+            Self::PhaseEnd => "phase_end",
+            Self::CycleStart => "cycle_start",
+            Self::CycleEnd => "cycle_end",
+            Self::McpToolCall => "mcp_tool_call",
+            Self::McpToolResult => "mcp_tool_result",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HookResult {
+    Continue,
+    Skip,
+    Abort,
+    Retry,
+    Modify,
+    SkipRemaining,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookContext {
+    pub hook_point: HookPoint,
+    pub agent_id: String,
+    pub agent_role: String,
+    pub task_id: Option<String>,
+    pub task_iri: Option<String>,
+    pub data: HashMap<String, Value>,
+    pub metadata: HashMap<String, Value>,
+    pub timestamp: u64,
+    pub error: Option<String>,
+}
+
+impl HookContext {
+    pub fn new(hook_point: HookPoint, agent_id: &str, agent_role: &str) -> Self {
+        Self {
+            hook_point,
+            agent_id: agent_id.to_string(),
+            agent_role: agent_role.to_string(),
+            task_id: None,
+            task_iri: None,
+            data: HashMap::new(),
+            metadata: HashMap::new(),
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            error: None,
+        }
+    }
+
+    pub fn with_task(mut self, task_id: &str, task_iri: &str) -> Self {
+        self.task_id = Some(task_id.to_string());
+        self.task_iri = Some(task_iri.to_string());
+        self
+    }
+
+    pub fn with_data(mut self, key: &str, value: Value) -> Self {
+        self.data.insert(key.to_string(), value);
+        self
+    }
+
+    pub fn with_error(mut self, error: &str) -> Self {
+        self.error = Some(error.to_string());
+        self
+    }
+}
+
+#[async_trait]
+pub trait Hook: Send + Sync {
+    fn name(&self) -> &str;
+    fn hook_points(&self) -> Vec<HookPoint>;
+    fn priority(&self) -> i32 { 100 }
+    
+    async fn execute(&self, context: &mut HookContext) -> HookResult;
+}
+
+#[derive(Clone)]
+pub struct FunctionHook {
+    name: String,
+    hook_points: Vec<HookPoint>,
+    priority: i32,
+    handler: Arc<dyn Fn(&mut HookContext) -> HookResult + Send + Sync>,
+}
+
+impl FunctionHook {
+    pub fn new<F>(name: &str, hook_points: Vec<HookPoint>, priority: i32, handler: F) -> Self
+    where
+        F: Fn(&mut HookContext) -> HookResult + Send + Sync + 'static,
+    {
+        Self {
+            name: name.to_string(),
+            hook_points,
+            priority,
+            handler: Arc::new(handler),
+        }
+    }
+}
+
+#[async_trait]
+impl Hook for FunctionHook {
+    fn name(&self) -> &str { &self.name }
+    fn hook_points(&self) -> Vec<HookPoint> { self.hook_points.clone() }
+    fn priority(&self) -> i32 { self.priority }
+    
+    async fn execute(&self, context: &mut HookContext) -> HookResult {
+        (self.handler)(context)
+    }
+}
+
+pub struct AsyncFunctionHook {
+    name: String,
+    hook_points: Vec<HookPoint>,
+    priority: i32,
+    handler: Arc<dyn Fn(&mut HookContext) -> std::pin::Pin<Box<dyn std::future::Future<Output = HookResult> + Send>> + Send + Sync>,
+}
+
+impl AsyncFunctionHook {
+    pub fn new<F, Fut>(name: &str, hook_points: Vec<HookPoint>, priority: i32, handler: F) -> Self
+    where
+        F: Fn(&mut HookContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = HookResult> + Send + 'static,
+    {
+        Self {
+            name: name.to_string(),
+            hook_points,
+            priority,
+            handler: Arc::new(move |ctx| Box::pin(handler(ctx))),
+        }
+    }
+}
+
+#[async_trait]
+impl Hook for AsyncFunctionHook {
+    fn name(&self) -> &str { &self.name }
+    fn hook_points(&self) -> Vec<HookPoint> { self.hook_points.clone() }
+    fn priority(&self) -> i32 { self.priority }
+    
+    async fn execute(&self, context: &mut HookContext) -> HookResult {
+        (self.handler)(context).await
+    }
+}
+
+pub struct LoggingHook;
+
+impl LoggingHook {
+    pub fn new() -> Box<dyn Hook> {
+        Box::new(FunctionHook::new(
+            "logging",
+            vec![
+                HookPoint::AgentStart,
+                HookPoint::AgentEnd,
+                HookPoint::TaskStart,
+                HookPoint::TaskEnd,
+                HookPoint::PhaseStart,
+                HookPoint::PhaseEnd,
+            ],
+            1000,
+            |ctx| {
+                tracing::info!(
+                    "[{}] [{}] {}",
+                    ctx.timestamp,
+                    ctx.agent_id,
+                    ctx.hook_point.as_str()
+                );
+                HookResult::Continue
+            },
+        ))
+    }
+}
+
+pub struct TimingHook {
+    timings: Arc<RwLock<HashMap<String, u64>>>,
+}
+
+impl TimingHook {
+    pub fn new() -> Box<dyn Hook> {
+        let timings = Arc::new(RwLock::new(HashMap::new()));
+        let timings_clone = timings.clone();
+        
+        Box::new(FunctionHook::new(
+            "timing",
+            vec![
+                HookPoint::TaskStart,
+                HookPoint::TaskEnd,
+                HookPoint::SkillBefore,
+                HookPoint::SkillAfter,
+                HookPoint::LlmRequest,
+                HookPoint::LlmResponse,
+            ],
+            0,
+            move |ctx| {
+                let key = format!(
+                    "{}:{}:{}",
+                    ctx.agent_id,
+                    ctx.task_id.as_deref().unwrap_or("none"),
+                    ctx.hook_point.as_str()
+                );
+                
+                match ctx.hook_point {
+                    HookPoint::TaskStart | HookPoint::SkillBefore | HookPoint::LlmRequest => {
+                        let mut timings = timings_clone.write();
+                        timings.insert(key, ctx.timestamp);
+                    }
+                    _ => {
+                        let start_key = key
+                            .replace("_end", "_start")
+                            .replace("_after", "_before")
+                            .replace("_response", "_request");
+                        let mut timings = timings_clone.write();
+                        if let Some(start) = timings.remove(&start_key) {
+                            let duration = ctx.timestamp.saturating_sub(start);
+                            ctx.metadata.insert("duration_seconds".to_string(), Value::Number(duration.into()));
+                        }
+                    }
+                }
+                HookResult::Continue
+            },
+        ))
+    }
+}
+
+pub struct RateLimitHook {
+    max_calls: usize,
+    window_seconds: u64,
+    calls: Arc<RwLock<HashMap<String, Vec<u64>>>>,
+}
+
+impl RateLimitHook {
+    pub fn new(max_calls: usize, window_seconds: u64) -> Box<dyn Hook> {
+        let calls = Arc::new(RwLock::new(HashMap::new()));
+        let calls_clone = calls.clone();
+        
+        Box::new(FunctionHook::new(
+            "rate_limit",
+            vec![HookPoint::LlmRequest],
+            10,
+            move |ctx| {
+                let agent_id = ctx.agent_id.clone();
+                let now = ctx.timestamp;
+                
+                let mut calls = calls_clone.write();
+                let entry: &mut Vec<u64> = calls.entry(agent_id.clone()).or_default();
+                
+                entry.retain(|&t| now.saturating_sub(t) < window_seconds);
+                
+                if entry.len() >= max_calls {
+                    ctx.error = Some("Rate limit exceeded".to_string());
+                    return HookResult::Abort;
+                }
+                
+                entry.push(now);
+                HookResult::Continue
+            },
+        ))
+    }
+}
+
+pub struct MetricsHook {
+    metrics: Arc<RwLock<HashMap<String, Vec<Value>>>>,
+}
+
+impl MetricsHook {
+    pub fn new() -> Box<dyn Hook> {
+        let metrics = Arc::new(RwLock::new(HashMap::new()));
+        let metrics_clone = metrics.clone();
+        
+        Box::new(FunctionHook::new(
+            "metrics",
+            vec![
+                HookPoint::TaskEnd,
+                HookPoint::SkillAfter,
+                HookPoint::LlmResponse,
+                HookPoint::CycleEnd,
+            ],
+            500,
+            move |ctx| {
+                let metric_name = ctx.hook_point.as_str().to_string();
+                let mut metrics = metrics_clone.write();
+                
+                let entry: &mut Vec<Value> = metrics.entry(metric_name).or_default();
+                entry.push(serde_json::json!({
+                    "agent_id": ctx.agent_id,
+                    "task_id": ctx.task_id,
+                    "timestamp": ctx.timestamp,
+                    "metadata": ctx.metadata,
+                }));
+                
+                HookResult::Continue
+            },
+        ))
+    }
+}
+
+pub struct HookManager {
+    hooks: RwLock<HashMap<HookPoint, Vec<Arc<dyn Hook>>>>,
+}
+
+impl HookManager {
+    pub fn new() -> Self {
+        Self {
+            hooks: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub fn with_default_hooks() -> Self {
+        let manager = Self::new();
+        manager.register(LoggingHook::new());
+        manager.register(TimingHook::new());
+        manager.register(RateLimitHook::new(100, 60));
+        manager.register(MetricsHook::new());
+        manager
+    }
+
+    pub fn register(&self, hook: Box<dyn Hook>) {
+        let hook: Arc<dyn Hook> = hook.into();
+        let mut hooks = self.hooks.write();
+        for point in hook.hook_points() {
+            let entry = hooks.entry(point).or_default();
+            entry.push(hook.clone());
+            entry.sort_by_key(|h| h.priority());
+        }
+    }
+
+    pub fn register_arc(&self, hook: Arc<dyn Hook>) {
+        let mut hooks = self.hooks.write();
+        for point in hook.hook_points() {
+            let entry = hooks.entry(point).or_default();
+            entry.push(hook.clone());
+            entry.sort_by_key(|h| h.priority());
+        }
+    }
+
+    pub async fn execute(&self, hook_point: HookPoint, context: &mut HookContext) -> HookResult {
+        let hooks: Vec<Arc<dyn Hook>> = {
+            let guard = self.hooks.read();
+            guard.get(&hook_point)
+                .map(|v| v.clone())
+                .unwrap_or_default()
+        };
+
+        if hooks.is_empty() {
+            return HookResult::Continue;
+        }
+        
+        let mut result = HookResult::Continue;
+        
+        for hook in &hooks {
+            match hook.execute(context).await {
+                HookResult::Continue => {}
+                HookResult::Abort => {
+                    result = HookResult::Abort;
+                    break;
+                }
+                HookResult::Modify => {
+                    result = HookResult::Continue;
+                }
+                HookResult::SkipRemaining => {
+                    result = HookResult::Continue;
+                    break;
+                }
+                other => {
+                    result = other;
+                }
+            }
+        }
+        
+        result
+    }
+
+    pub fn get_hooks(&self, hook_point: HookPoint) -> Vec<String> {
+        let hooks = self.hooks.read();
+        hooks
+            .get(&hook_point)
+            .map(|h| h.iter().map(|hook| hook.name().to_string()).collect())
+            .unwrap_or_default()
+    }
+}
+
+impl Default for HookManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================
+// Human Approval Hook 相关结构
+// ============================================================
+
+use chrono::{DateTime, Utc};
+use tokio::sync::mpsc;
+
+/// 确认条件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ApprovalCondition {
+    /// 总是需要确认
+    Always,
+    /// 失败时确认
+    OnFailure,
+    /// 阶段完成时确认
+    OnStageComplete,
+    /// 自定义条件 (LLM 判断)
+    Custom(String),
+}
+
+/// 超时默认行为
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DefaultAction {
+    /// 超时默认批准
+    Approve,
+    /// 超时默认拒绝
+    Reject,
+    /// 超时重试
+    Retry,
+    /// 超时终止
+    Abort,
+}
+
+impl Default for DefaultAction {
+    fn default() -> Self {
+        Self::Approve
+    }
+}
+
+/// 确认点配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalPoint {
+    /// 触发的 Hook 点
+    pub hook_point: HookPoint,
+    /// 触发条件
+    pub condition: ApprovalCondition,
+    /// 消息模板
+    pub message_template: String,
+    /// 超时时间（秒）
+    pub timeout_seconds: u64,
+    /// 超时默认行为
+    pub default_action: DefaultAction,
+    /// 适用的阶段列表（空表示所有阶段）
+    pub stages: Vec<String>,
+}
+
+impl Default for ApprovalPoint {
+    fn default() -> Self {
+        Self {
+            hook_point: HookPoint::PhaseEnd,
+            condition: ApprovalCondition::OnStageComplete,
+            message_template: "阶段 {stage} 完成，请确认是否继续".to_string(),
+            timeout_seconds: 3600,
+            default_action: DefaultAction::Approve,
+            stages: Vec::new(),
+        }
+    }
+}
+
+/// 确认请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequest {
+    /// 请求 ID
+    pub request_id: String,
+    /// 任务 IRI
+    pub task_iri: String,
+    /// 阶段 ID
+    pub stage_id: String,
+    /// 消息内容
+    pub message: String,
+    /// 可选项
+    pub options: Vec<String>,
+    /// 创建时间
+    pub created_at: DateTime<Utc>,
+}
+
+impl ApprovalRequest {
+    pub fn new(task_iri: String, stage_id: String, message: String, options: Vec<String>) -> Self {
+        Self {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            task_iri,
+            stage_id,
+            message,
+            options,
+            created_at: Utc::now(),
+        }
+    }
+}
+
+/// 确认响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalResponse {
+    /// 对应的请求 ID
+    pub request_id: String,
+    /// 阶段 ID
+    pub stage_id: String,
+    /// 是否批准
+    pub approved: bool,
+    /// 评论
+    pub comments: Option<String>,
+    /// 响应时间
+    pub responded_at: DateTime<Utc>,
+}
+
+impl ApprovalResponse {
+    pub fn approved(request_id: String, stage_id: String, comments: Option<String>) -> Self {
+        Self {
+            request_id,
+            stage_id,
+            approved: true,
+            comments,
+            responded_at: Utc::now(),
+        }
+    }
+
+    pub fn rejected(request_id: String, stage_id: String, comments: Option<String>) -> Self {
+        Self {
+            request_id,
+            stage_id,
+            approved: false,
+            comments,
+            responded_at: Utc::now(),
+        }
+    }
+
+    pub fn timeout(request_id: String, stage_id: String) -> Self {
+        Self {
+            request_id,
+            stage_id,
+            approved: false,
+            comments: Some("确认超时".to_string()),
+            responded_at: Utc::now(),
+        }
+    }
+}
+
+/// 确认状态
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalState {
+    /// 请求
+    pub request: ApprovalRequest,
+    /// 响应（如果有）
+    pub response: Option<ApprovalResponse>,
+    /// 是否已处理
+    pub processed: bool,
+}
+
+/// Human Approval Hook 配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HumanApprovalConfig {
+    /// 是否启用
+    pub enabled: bool,
+    /// 确认点列表
+    pub approval_points: Vec<ApprovalPoint>,
+    /// 默认超时时间（秒）
+    pub default_timeout_seconds: u64,
+    /// 默认超时行为
+    pub default_action: DefaultAction,
+}
+
+impl Default for HumanApprovalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            approval_points: Vec::new(),
+            default_timeout_seconds: 3600,
+            default_action: DefaultAction::Approve,
+        }
+    }
+}
+
+/// 确认通知器 trait
+#[async_trait]
+pub trait ApprovalNotifier: Send + Sync {
+    /// 发送确认请求
+    async fn notify(&self, request: &ApprovalRequest) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    
+    /// 等待确认响应
+    async fn wait_for_response(&self, request_id: &str, timeout: std::time::Duration) 
+        -> Option<ApprovalResponse>;
+}
+
+/// 基于通道的确认通知器（用于测试和进程内通信）
+pub struct ChannelApprovalNotifier {
+    pending: Arc<RwLock<HashMap<String, ApprovalState>>>,
+    response_tx: mpsc::Sender<ApprovalResponse>,
+    response_rx: parking_lot::Mutex<Option<mpsc::Receiver<ApprovalResponse>>>,
+}
+
+impl ChannelApprovalNotifier {
+    pub fn new() -> Self {
+        let (response_tx, response_rx) = mpsc::channel(100);
+        Self {
+            pending: Arc::new(RwLock::new(HashMap::new())),
+            response_tx,
+            response_rx: parking_lot::Mutex::new(Some(response_rx)),
+        }
+    }
+
+    pub fn get_pending(&self) -> Vec<ApprovalRequest> {
+        let pending = self.pending.read();
+        pending.values()
+            .filter(|s| !s.processed && s.response.is_none())
+            .map(|s| s.request.clone())
+            .collect()
+    }
+
+    pub async fn submit_response(&self, response: ApprovalResponse) {
+        let mut pending = self.pending.write();
+        if let Some(state) = pending.get_mut(&response.request_id) {
+            state.response = Some(response.clone());
+        }
+        let _ = self.response_tx.send(response).await;
+    }
+}
+
+impl Default for ChannelApprovalNotifier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl ApprovalNotifier for ChannelApprovalNotifier {
+    async fn notify(&self, request: &ApprovalRequest) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut pending = self.pending.write();
+        pending.insert(request.request_id.clone(), ApprovalState {
+            request: request.clone(),
+            response: None,
+            processed: false,
+        });
+        Ok(())
+    }
+
+    async fn wait_for_response(&self, request_id: &str, timeout: std::time::Duration) 
+        -> Option<ApprovalResponse> 
+    {
+        let rx = {
+            let mut guard = self.response_rx.lock();
+            guard.take()
+        };
+        
+        if let Some(mut rx) = rx {
+            let result = tokio::time::timeout(timeout, async {
+                while let Some(response) = rx.recv().await {
+                    if response.request_id == request_id {
+                        return Some(response);
+                    }
+                }
+                None
+            }).await.ok().flatten();
+            
+            let mut guard = self.response_rx.lock();
+            *guard = Some(rx);
+            
+            if let Some(ref response) = result {
+                let mut pending = self.pending.write();
+                if let Some(state) = pending.get_mut(&response.request_id) {
+                    state.response = Some(response.clone());
+                    state.processed = true;
+                }
+            }
+            
+            return result;
+        }
+        
+        None
+    }
+}
+
+/// Human Approval Hook
+pub struct HumanApprovalHook {
+    config: HumanApprovalConfig,
+    notifier: Arc<dyn ApprovalNotifier>,
+}
+
+impl HumanApprovalHook {
+    pub fn new(config: HumanApprovalConfig, notifier: Arc<dyn ApprovalNotifier>) -> Box<Self> {
+        Box::new(Self { config, notifier })
+    }
+
+    pub fn with_channel_notifier(config: HumanApprovalConfig) -> (Box<Self>, Arc<ChannelApprovalNotifier>) {
+        let notifier = Arc::new(ChannelApprovalNotifier::new());
+        let hook = Box::new(Self {
+            config,
+            notifier: notifier.clone(),
+        });
+        (hook, notifier)
+    }
+
+    fn needs_approval(&self, ctx: &HookContext) -> bool {
+        if !self.config.enabled {
+            return false;
+        }
+
+        for point in &self.config.approval_points {
+            if point.hook_point != ctx.hook_point {
+                continue;
+            }
+
+            match &point.condition {
+                ApprovalCondition::Always => return true,
+                ApprovalCondition::OnFailure => {
+                    if ctx.error.is_some() {
+                        return true;
+                    }
+                }
+                ApprovalCondition::OnStageComplete => {
+                    if let Some(stage) = ctx.data.get("stage_id").and_then(|v| v.as_str()) {
+                        if point.stages.is_empty() || point.stages.iter().any(|s| s == stage) {
+                            return true;
+                        }
+                    }
+                }
+                ApprovalCondition::Custom(_) => {
+                    // TODO: 实现自定义条件判断
+                }
+            }
+        }
+
+        false
+    }
+
+    fn create_request(&self, ctx: &HookContext) -> ApprovalRequest {
+        let stage_id = ctx.data.get("stage_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        
+        let task_iri = ctx.task_iri.clone().unwrap_or_default();
+        
+        let message = ctx.error.as_ref()
+            .map(|e| format!("执行出错: {}，请确认是否继续", e))
+            .unwrap_or_else(|| format!("阶段 {} 完成，请确认是否继续", stage_id));
+
+        ApprovalRequest::new(
+            task_iri,
+            stage_id,
+            message,
+            vec!["批准".to_string(), "拒绝".to_string(), "回滚".to_string()],
+        )
+    }
+
+    fn find_matching_point(&self, ctx: &HookContext) -> Option<&ApprovalPoint> {
+        self.config.approval_points.iter().find(|point| {
+            if point.hook_point != ctx.hook_point {
+                return false;
+            }
+            match &point.condition {
+                ApprovalCondition::Always => true,
+                ApprovalCondition::OnFailure => ctx.error.is_some(),
+                ApprovalCondition::OnStageComplete => {
+                    ctx.data.get("stage_id").is_some()
+                }
+                ApprovalCondition::Custom(_) => false,
+            }
+        })
+    }
+}
+
+#[async_trait]
+impl Hook for HumanApprovalHook {
+    fn name(&self) -> &str {
+        "human_approval"
+    }
+
+    fn hook_points(&self) -> Vec<HookPoint> {
+        self.config.approval_points.iter()
+            .map(|p| p.hook_point)
+            .collect()
+    }
+
+    fn priority(&self) -> i32 {
+        0 // 高优先级
+    }
+
+    async fn execute(&self, ctx: &mut HookContext) -> HookResult {
+        if !self.needs_approval(ctx) {
+            return HookResult::Continue;
+        }
+
+        let request = self.create_request(ctx);
+        let request_id = request.request_id.clone();
+        let point = self.find_matching_point(ctx);
+        let timeout = point
+            .map(|p| std::time::Duration::from_secs(p.timeout_seconds))
+            .unwrap_or_else(|| std::time::Duration::from_secs(self.config.default_timeout_seconds));
+        let default_action = point
+            .map(|p| p.default_action.clone())
+            .unwrap_or_else(|| self.config.default_action.clone());
+
+        tracing::info!(
+            request_id = %request_id,
+            stage_id = %request.stage_id,
+            "发送确认请求"
+        );
+
+        if let Err(e) = self.notifier.notify(&request).await {
+            tracing::error!("发送确认请求失败: {}", e);
+            return HookResult::Continue;
+        }
+
+        match self.notifier.wait_for_response(&request_id, timeout).await {
+            Some(response) if response.approved => {
+                tracing::info!(request_id = %request_id, "用户批准");
+                HookResult::Continue
+            }
+            Some(response) => {
+                tracing::warn!(request_id = %request_id, comments = ?response.comments, "用户拒绝");
+                ctx.error = Some(format!("用户拒绝: {:?}", response.comments));
+                HookResult::Abort
+            }
+            None => {
+                tracing::warn!(request_id = %request_id, "确认超时");
+                match default_action {
+                    DefaultAction::Approve => HookResult::Continue,
+                    DefaultAction::Reject => {
+                        ctx.error = Some("确认超时，自动拒绝".to_string());
+                        HookResult::Abort
+                    }
+                    DefaultAction::Retry => HookResult::Retry,
+                    DefaultAction::Abort => HookResult::Abort,
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_hook_manager() {
+        let manager = HookManager::new();
+        
+        let hook = FunctionHook::new(
+            "test_hook",
+            vec![HookPoint::TaskStart],
+            100,
+            |ctx| {
+                ctx.data.insert("hooked".to_string(), Value::Bool(true));
+                HookResult::Continue
+            },
+        );
+        
+        manager.register(Box::new(hook));
+        
+        let mut context = HookContext::new(HookPoint::TaskStart, "agent_1", "DA");
+        
+        let result = manager.execute(HookPoint::TaskStart, &mut context).await;
+        
+        assert_eq!(result, HookResult::Continue);
+        assert_eq!(context.data.get("hooked"), Some(&Value::Bool(true)));
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_hook() {
+        let manager = HookManager::new();
+        manager.register(RateLimitHook::new(2, 60));
+        
+        let mut ctx1 = HookContext::new(HookPoint::LlmRequest, "agent_1", "DA");
+        let result1 = manager.execute(HookPoint::LlmRequest, &mut ctx1).await;
+        assert_eq!(result1, HookResult::Continue);
+        
+        let mut ctx2 = HookContext::new(HookPoint::LlmRequest, "agent_1", "DA");
+        let result2 = manager.execute(HookPoint::LlmRequest, &mut ctx2).await;
+        assert_eq!(result2, HookResult::Continue);
+        
+        let mut ctx3 = HookContext::new(HookPoint::LlmRequest, "agent_1", "DA");
+        let result3 = manager.execute(HookPoint::LlmRequest, &mut ctx3).await;
+        assert_eq!(result3, HookResult::Abort);
+    }
+
+    #[test]
+    fn test_hook_context() {
+        let ctx = HookContext::new(HookPoint::TaskStart, "agent_1", "DA")
+            .with_task("task_123", "iri://task/123")
+            .with_data("key", Value::String("value".to_string()));
+        
+        assert_eq!(ctx.agent_id, "agent_1");
+        assert_eq!(ctx.agent_role, "DA");
+        assert_eq!(ctx.task_id, Some("task_123".to_string()));
+        assert_eq!(ctx.data.get("key"), Some(&Value::String("value".to_string())));
+    }
+}

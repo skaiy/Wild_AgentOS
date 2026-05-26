@@ -1,0 +1,187 @@
+use crate::config::settings::ToolResultRouterSettings;
+use super::{RouteDecision, ToolResultMeta};
+
+pub struct ResultRouter {
+    enabled: bool,
+    threshold_small: usize,
+    threshold_large: usize,
+    preview_size: usize,
+}
+
+impl ResultRouter {
+    pub fn new(settings: &ToolResultRouterSettings) -> Self {
+        Self {
+            enabled: settings.enabled,
+            threshold_small: settings.threshold_small,
+            threshold_large: settings.threshold_large,
+            preview_size: settings.preview_size,
+        }
+    }
+
+    pub fn route(&self, result_str: &str, tool_name: &str, call_id: &str) -> RouteDecision {
+        if !self.enabled {
+            return RouteDecision::Truncate { max_chars: 8000 };
+        }
+
+        let size = result_str.len();
+
+        if size < self.threshold_small {
+            return RouteDecision::PassThrough;
+        }
+
+        if size <= self.threshold_large {
+            return RouteDecision::Truncate { max_chars: self.threshold_large };
+        }
+
+        if Self::is_structured_json(result_str) {
+            let graph_name = format!("graph:tool-result:{}", call_id);
+            RouteDecision::Graphify {
+                call_id: call_id.to_string(),
+                graph_name,
+            }
+        } else {
+            RouteDecision::Summarize {
+                call_id: call_id.to_string(),
+                preview_size: self.preview_size,
+            }
+        }
+    }
+
+    pub fn analyze(&self, result_str: &str, tool_name: &str, call_id: &str) -> ToolResultMeta {
+        let size_bytes = result_str.len();
+        let is_json = Self::try_parse_json(result_str).is_some();
+        let is_structured = is_json && Self::has_complex_structure(result_str);
+
+        ToolResultMeta {
+            tool_name: tool_name.to_string(),
+            call_id: call_id.to_string(),
+            size_bytes,
+            is_json,
+            is_structured,
+        }
+    }
+
+    fn is_structured_json(s: &str) -> bool {
+        let trimmed = s.trim();
+        if !trimmed.starts_with('[') && !trimmed.starts_with('{') {
+            return false;
+        }
+
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            return Self::has_complex_value(&val);
+        }
+        false
+    }
+
+    fn has_complex_structure(s: &str) -> bool {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(s.trim()) {
+            return Self::has_complex_value(&val);
+        }
+        false
+    }
+
+    fn has_complex_value(val: &serde_json::Value) -> bool {
+        match val {
+            serde_json::Value::Array(arr) => {
+                if arr.is_empty() {
+                    return false;
+                }
+                if let Some(first) = arr.first() {
+                    matches!(first, serde_json::Value::Object(_) | serde_json::Value::Array(_))
+                } else {
+                    false
+                }
+            }
+            serde_json::Value::Object(obj) => {
+                obj.values().any(|v| matches!(v, serde_json::Value::Object(_) | serde_json::Value::Array(_)))
+                    || obj.len() > 5
+            }
+            _ => false,
+        }
+    }
+
+    fn try_parse_json(s: &str) -> Option<serde_json::Value> {
+        serde_json::from_str(s.trim()).ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_settings() -> ToolResultRouterSettings {
+        ToolResultRouterSettings::default()
+    }
+
+    fn disabled_settings() -> ToolResultRouterSettings {
+        let mut s = ToolResultRouterSettings::default();
+        s.enabled = false;
+        s
+    }
+
+    #[test]
+    fn test_small_result_passthrough() {
+        let router = ResultRouter::new(&default_settings());
+        let result = "small result";
+        let decision = router.route(result, "test_tool", "call_1");
+        assert_eq!(decision, RouteDecision::PassThrough);
+    }
+
+    #[test]
+    fn test_medium_result_truncate() {
+        let router = ResultRouter::new(&default_settings());
+        let result = "x".repeat(3000);
+        let decision = router.route(&result, "test_tool", "call_2");
+        assert_eq!(decision, RouteDecision::Truncate { max_chars: 8192 });
+    }
+
+    #[test]
+    fn test_large_json_graphify() {
+        let router = ResultRouter::new(&default_settings());
+        let items: Vec<serde_json::Value> = (0..300)
+            .map(|i| serde_json::json!({"id": i, "name": format!("item_{}", i), "value": i * 10}))
+            .collect();
+        let result = serde_json::to_string(&items).unwrap();
+        assert!(result.len() > 8192);
+
+        let decision = router.route(&result, "test_tool", "call_3");
+        assert!(matches!(decision, RouteDecision::Graphify { .. }));
+    }
+
+    #[test]
+    fn test_large_text_summarize() {
+        let router = ResultRouter::new(&default_settings());
+        let result = "line\n".repeat(2000);
+        assert!(result.len() > 8192);
+
+        let decision = router.route(&result, "test_tool", "call_4");
+        assert!(matches!(decision, RouteDecision::Summarize { .. }));
+    }
+
+    #[test]
+    fn test_disabled_fallback_truncate() {
+        let router = ResultRouter::new(&disabled_settings());
+        let result = "x".repeat(10000);
+        let decision = router.route(&result, "test_tool", "call_5");
+        assert_eq!(decision, RouteDecision::Truncate { max_chars: 8000 });
+    }
+
+    #[test]
+    fn test_large_simple_json_summarize() {
+        let router = ResultRouter::new(&default_settings());
+        let result = format!("{{\"data\": \"{}\"}}", "x".repeat(10000));
+        assert!(result.len() > 8192);
+
+        let decision = router.route(&result, "test_tool", "call_6");
+        assert!(matches!(decision, RouteDecision::Summarize { .. }));
+    }
+
+    #[test]
+    fn test_analyze_meta() {
+        let router = ResultRouter::new(&default_settings());
+        let meta = router.analyze("{\"key\": \"value\"}", "test_tool", "call_7");
+        assert_eq!(meta.tool_name, "test_tool");
+        assert_eq!(meta.call_id, "call_7");
+        assert!(meta.is_json);
+    }
+}
