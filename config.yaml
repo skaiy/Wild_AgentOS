@@ -1,0 +1,124 @@
+gateway:
+  base_url: "http://localhost:3000"
+  api_key: "${AGENT_OS_GATEWAY_API_KEY}"
+  default_model: "gpt-3.5-turbo"
+  timeout_seconds: 300
+  max_retries: 3
+  model_mapping:
+    planning: "gpt-4-turbo-preview"
+    execution: "gpt-4-turbo-preview"
+    analysis: "gpt-3.5-turbo"
+    default: "gpt-3.5-turbo"
+
+memory:
+  l0:
+    path: "/tmp/agent_os_data/l0"
+    max_entries: 1000000
+    compression: true
+  l1:
+    max_messages: 100
+    compression_threshold: 50
+    max_tokens: 4096
+  l2:
+    max_node_size: 2048
+    max_projection_size: 500
+  l3:
+    default_frame: "summary_only"
+    max_size: 500
+
+perception:
+  enabled: true
+  triggers:
+    - TaskStart
+    - PlanCompleted
+    - ProgressAnomaly
+    - CheckCompleted
+    - TaskEnd
+  cache_ttl_seconds: 300
+  cache_max_entries: 1000
+  anomaly_dedup_window_seconds: 60
+  simple_input_threshold: 50
+  medium_input_threshold: 200
+  cycle_timeout_secs: 300
+  max_iterations_before_alert: 10
+  error_rate_threshold: 0.5
+
+agents:
+  max_iterations: 100
+  parallel_execution: true
+  max_parallel_agents: 10
+  timeout_seconds: 300
+  api_timeout_seconds: 120
+  event_bus_capacity: 100
+
+api:
+  grpc_addr: "0.0.0.0:50051"
+  http_addr: "0.0.0.0:8080"
+  enable_metrics: true
+  metrics_port: 9090
+
+output:
+  directory: "/tmp/agent_os_data/output"
+
+emphasis:
+  enabled: true
+  extraction_prompt: |
+    ## 强调内容提取
+    如果用户输入中包含强调性质的内容（如"必须"、"重要"、"不要忘记"、"关键"等），
+    请将这些内容提取出来，放在 JSON 的 "emphasis" 字段中（字符串数组）。
+    
+    示例：
+    {
+      "thought": "用户强调了必须使用异步方式...",
+      "content": "好的，我会...",
+      "summary": "确认异步实现",
+      "emphasis": ["必须使用异步方式实现"]
+    }
+  max_items: 50
+  dedup_threshold: 0.85
+
+logging:
+  level: "info"
+  format: "text"
+  console_output: true
+  file_output:
+    enabled: false
+    path: "/tmp/agent_os_logs"
+    prefix: "agent_os"
+    rotation: "daily"
+    max_files: 30
+  filters:
+    - module: "agent_os::gateway"
+      level: "debug"
+    - module: "agent_os::core"
+      level: "debug"
+  sensitive_fields:
+    - "api_key"
+    - "password"
+    - "token"
+    - "secret"
+
+tool_result_router:
+  enabled: true
+  threshold_small: 2048
+  threshold_large: 8192
+  preview_size: 2000
+  max_graph_entities: 500
+  max_micro_tools: 5
+  sparql_query_timeout_ms: 100
+  auto_cleanup: true
+
+embedding:
+  enabled: true
+  provider: "ollama"
+  ollama:
+    base_url: "http://localhost:11434"
+    model: "nomic-embed-text"
+    dimension: 768
+  oneapi:
+    base_url: ""
+    api_key: ""
+    model: "text-embedding-3-small"
+    dimension: 1536
+  fallback:
+    dimension: 128
