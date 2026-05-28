@@ -29,8 +29,7 @@ mermaid-rs-renderer = { version = "0.2", default-features = false }
 unicode-width = "0.1"
 unicode-segmentation = "1.10"
 
-[target.'cfg(target_env = "musl")'.dependencies]
-# 强制 openssl 从源码编译（vendored），解决 musl 静态编译时找不到交叉编译 openssl 的问题
+# vendored openssl: 配合 cargo-zigbuild 自动交叉编译 OpenSSL，实现 musl 全静态链接
 openssl-sys = { version = "0.9", features = ["vendored"] }
 
 [dev-dependencies]

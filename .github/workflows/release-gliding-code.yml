@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 env:
   BINARY_NAME: glidingcode
@@ -20,10 +21,11 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
+            use_zigbuild: true
 
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            use_cross: true
+            use_zigbuild: true
 
           - os: macos-latest
             target: aarch64-apple-darwin
@@ -44,57 +46,55 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Install musl-tools (x86_64 musl)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Install protoc (all platforms)
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in
+            Linux)
+              sudo apt-get update && sudo apt-get install -y protobuf-compiler
+              ;;
+            macOS)
+              brew install protobuf
+              ;;
+            Windows)
+              choco install protoc --yes
+              ;;
+          esac
 
-      - name: Install cross (aarch64 musl)
-        if: matrix.use_cross
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cross
+      - name: Install cargo-zigbuild (musl targets)
+        if: matrix.use_zigbuild
+        run: pip install cargo-zigbuild
 
       - name: Set RUSTFLAGS for fully static musl linking
         if: contains(matrix.target, 'musl')
         run: echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
 
-      - name: Build with cross
-        if: matrix.use_cross
-        working-directory: apps/gliding_code
-        run: cross build --release --target ${{ matrix.target }}
-        env:
-          RUSTFLAGS: ${{ env.RUSTFLAGS }}
+      - name: Build with zigbuild
+        if: matrix.use_zigbuild
+        run: cargo zigbuild --release --target ${{ matrix.target }} --manifest-path apps/gliding_code/Cargo.toml
 
       - name: Build directly
-        if: ${{ !matrix.use_cross }}
+        if: ${{ !matrix.use_zigbuild }}
         run: cargo build --release --target ${{ matrix.target }} --manifest-path apps/gliding_code/Cargo.toml
-
-      - name: Set target root path
-        run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            echo "TARGET_ROOT=apps/gliding_code/target" >> $GITHUB_ENV
-          else
-            echo "TARGET_ROOT=target" >> $GITHUB_ENV
-          fi
 
       - name: Verify static linking (Linux musl)
         if: contains(matrix.target, 'musl')
         shell: bash
         run: |
-          BIN="${{ env.TARGET_ROOT }}/${{ matrix.target }}/release/${{ env.BINARY_NAME }}"
+          BIN="target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}"
           file "$BIN"
           ldd "$BIN" 2>&1 && echo "⚠️  DYNAMIC: linked to shared libraries" || echo "✅ STATIC: no dynamic dependencies"
 
       - name: Package (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
-        working-directory: ${{ env.TARGET_ROOT }}/${{ matrix.target }}/release
+        working-directory: target/${{ matrix.target }}/release
         run: tar czvf ${{ github.workspace }}/glidingcode-${{ matrix.target }}.tar.gz ${{ env.BINARY_NAME }}
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        working-directory: ${{ env.TARGET_ROOT }}/${{ matrix.target }}/release
+        working-directory: target/${{ matrix.target }}/release
         run: Compress-Archive -Path ${{ env.BINARY_NAME }}.exe -DestinationPath ${{ github.workspace }}/glidingcode-${{ matrix.target }}.zip
 
       - name: Upload to Release
