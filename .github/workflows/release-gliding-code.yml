@@ -57,7 +57,9 @@ jobs:
               brew install protobuf
               ;;
             Windows)
-              choco install protoc --yes
+              curl -sL https://github.com/protocolbuffers/protobuf/releases/download/v28.2/protoc-28.2-win64.zip -o /tmp/protoc.zip
+              unzip -q /tmp/protoc.zip -d /tmp/protoc
+              echo "/tmp/protoc/bin" >> $GITHUB_PATH
               ;;
           esac
 
