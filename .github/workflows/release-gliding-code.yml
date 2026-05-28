@@ -54,24 +54,27 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Install protoc (all platforms)
-        shell: bash
+      - name: Install protoc (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
         run: |
-          case "${{ runner.os }}" in
-            Linux)
-              sudo apt-get update && sudo apt-get install -y protobuf-compiler
-              ;;
-            macOS)
-              curl -sL https://github.com/protocolbuffers/protobuf/releases/download/v28.2/protoc-28.2-osx-universal_binary.zip -o /tmp/protoc.zip
-              unzip -q /tmp/protoc.zip -d /tmp/protoc
-              echo "/tmp/protoc/bin" >> $GITHUB_PATH
-              ;;
-            Windows)
-              curl -sL https://github.com/protocolbuffers/protobuf/releases/download/v28.2/protoc-28.2-win64.zip -o /tmp/protoc.zip
-              unzip -q /tmp/protoc.zip -d /tmp/protoc
-              echo "/tmp/protoc/bin" >> $GITHUB_PATH
-              ;;
-          esac
+          curl -sL https://github.com/protocolbuffers/protobuf/releases/download/v28.2/protoc-28.2-osx-universal_binary.zip -o /tmp/protoc.zip
+          unzip -q /tmp/protoc.zip -d /tmp/protoc
+          echo "/tmp/protoc/bin" >> $GITHUB_PATH
+
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v28.2/protoc-28.2-win64.zip"
+          $zip = "$env:TEMP\protoc.zip"
+          $dest = "$env:TEMP\protoc"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          echo "$dest\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       # ----- musl targets: toolchain setup -----
       - name: Install musl-gcc (x86_64 musl)
