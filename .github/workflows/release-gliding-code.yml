@@ -8,6 +8,7 @@ on:
 
 env:
   BINARY_NAME: glidingcode
+  CARGO_TERM_COLOR: always
 
 jobs:
   build:
@@ -22,18 +23,20 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             use_zigbuild: false
+            openssl_target: linux-x86_64
+            openssl_cc: musl-gcc
 
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             use_zigbuild: true
+            openssl_target: linux-aarch64
+            openssl_cc: zig cc -target aarch64-linux-musl
 
           - os: macos-latest
             target: aarch64-apple-darwin
-            use_zigbuild: false
 
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            use_zigbuild: false
 
     steps:
       - uses: actions/checkout@v4
@@ -46,20 +49,9 @@ jobs:
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.target }}-v2
 
-      # ----- musl targets: toolchain setup -----
-      - name: Install musl-gcc (x86_64 musl)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      - name: Install zig & cargo-zigbuild (aarch64 musl)
-        if: matrix.use_zigbuild
-        run: |
-          pip install cargo-zigbuild
-          zig version
-
-      # ----- protoc installation (platform-specific) -----
+      # ----- protoc (platform-specific) -----
       - name: Install protoc (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -85,16 +77,42 @@ jobs:
           $dest = "${{ runner.temp }}\protoc"
           curl.exe -sSL $url -o $zip
           Expand-Archive -Path $zip -DestinationPath $dest -Force
-          $protocPath = "$dest\bin\protoc.exe"
+          $p = "$dest\bin\protoc.exe"
           Add-Content -Path $env:GITHUB_PATH -Value "$dest\bin" -Encoding utf8
-          Add-Content -Path $env:GITHUB_ENV -Value "PROTOC=$protocPath" -Encoding utf8
-          & $protocPath --version
+          Add-Content -Path $env:GITHUB_ENV -Value "PROTOC=$p" -Encoding utf8
+          & $p --version
 
-      # ----- build -----
+      # ----- musl targets: cross toolchain -----
+      - name: Install musl-gcc (x86_64 musl)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install zig & cargo-zigbuild (aarch64 musl)
+        if: matrix.use_zigbuild
+        run: pip install cargo-zigbuild && zig version
+
+      # ----- musl targets: build OpenSSL from source (static) -----
+      - name: Build OpenSSL static libs for musl
+        if: contains(matrix.target, 'musl')
+        run: |
+          set -ex
+          curl -sL https://github.com/openssl/openssl/releases/download/openssl-3.0.15/openssl-3.0.15.tar.gz | tar xz
+          cd openssl-3.0.15
+          CC="${{ matrix.openssl_cc }}" ./Configure ${{ matrix.openssl_target }} \
+            no-shared no-tests no-dso no-engine no-ui-console \
+            --prefix=${{ runner.temp }}/openssl-musl --openssldir=${{ runner.temp }}/openssl-musl
+          make -j$(nproc) 2>&1 | tail -20
+          make install_sw 2>&1 | tail -10
+          ls -la ${{ runner.temp }}/openssl-musl/lib/libssl.a ${{ runner.temp }}/openssl-musl/lib/libcrypto.a
+          echo "OPENSSL_DIR=${{ runner.temp }}/openssl-musl" >> $GITHUB_ENV
+          echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+
       - name: Set RUSTFLAGS for fully static musl linking
         if: contains(matrix.target, 'musl')
         run: echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
 
+      # ----- build -----
       - name: Build with zigbuild (aarch64 musl)
         if: matrix.use_zigbuild
         run: cargo zigbuild --release --target ${{ matrix.target }} --manifest-path apps/gliding_code/Cargo.toml
@@ -106,26 +124,23 @@ jobs:
       # ----- verification -----
       - name: Verify static linking (Linux musl)
         if: contains(matrix.target, 'musl')
-        shell: bash
         run: |
           BIN="target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}"
           file "$BIN"
-          ldd "$BIN" 2>&1 && echo "dynamic: linked to shared libraries" || echo "static: no dynamic dependencies"
+          ldd "$BIN" 2>&1 && echo "dynamic" || echo "static"
 
       # ----- packaging -----
-      - name: Package (Linux/macOS)
+      - name: Package tar.gz (Linux/macOS)
         if: runner.os != 'Windows'
-        shell: bash
         working-directory: target/${{ matrix.target }}/release
         run: tar czvf ${{ github.workspace }}/glidingcode-${{ matrix.target }}.tar.gz ${{ env.BINARY_NAME }}
 
-      - name: Package (Windows)
+      - name: Package zip (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: target/${{ matrix.target }}/release
         run: Compress-Archive -Path ${{ env.BINARY_NAME }}.exe -DestinationPath ${{ github.workspace }}/glidingcode-${{ matrix.target }}.zip
 
-      # ----- release upload -----
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
