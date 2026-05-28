@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 env:
-  BINARY_NAME: gliding
+  BINARY_NAME: glidingcode
 
 jobs:
   build:
@@ -60,7 +60,8 @@ jobs:
 
       - name: Build with cross
         if: matrix.use_cross
-        run: cross build --release --target ${{ matrix.target }} --manifest-path apps/gliding_code/Cargo.toml
+        working-directory: apps/gliding_code
+        run: cross build --release --target ${{ matrix.target }}
         env:
           RUSTFLAGS: ${{ env.RUSTFLAGS }}
 
@@ -68,25 +69,33 @@ jobs:
         if: ${{ !matrix.use_cross }}
         run: cargo build --release --target ${{ matrix.target }} --manifest-path apps/gliding_code/Cargo.toml
 
+      - name: Set target root path
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            echo "TARGET_ROOT=apps/gliding_code/target" >> $GITHUB_ENV
+          else
+            echo "TARGET_ROOT=target" >> $GITHUB_ENV
+          fi
+
       - name: Verify static linking (Linux musl)
         if: contains(matrix.target, 'musl')
         shell: bash
         run: |
-          BIN="target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}"
+          BIN="${{ env.TARGET_ROOT }}/${{ matrix.target }}/release/${{ env.BINARY_NAME }}"
           file "$BIN"
           ldd "$BIN" 2>&1 && echo "⚠️  DYNAMIC: linked to shared libraries" || echo "✅ STATIC: no dynamic dependencies"
 
       - name: Package (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
-        working-directory: target/${{ matrix.target }}/release
-        run: tar czvf ../../../glidingcode-${{ matrix.target }}.tar.gz ${{ env.BINARY_NAME }}
+        working-directory: ${{ env.TARGET_ROOT }}/${{ matrix.target }}/release
+        run: tar czvf ${{ github.workspace }}/glidingcode-${{ matrix.target }}.tar.gz ${{ env.BINARY_NAME }}
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        working-directory: target/${{ matrix.target }}/release
-        run: Compress-Archive -Path ${{ env.BINARY_NAME }}.exe -DestinationPath ../../../glidingcode-${{ matrix.target }}.zip
+        working-directory: ${{ env.TARGET_ROOT }}/${{ matrix.target }}/release
+        run: Compress-Archive -Path ${{ env.BINARY_NAME }}.exe -DestinationPath ${{ github.workspace }}/glidingcode-${{ matrix.target }}.zip
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
