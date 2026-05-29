@@ -1,0 +1,26 @@
+.container {
+  background: #1e1e1e;
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 12px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #3d3d3d;
+}
+
+.diffContainer {
+  overflow: auto;
+}
+
+.diffContainer :global(.react-diff-viewer) {
+  background: transparent !important;
+}
+
+.diffContainer :global(.react-diff-viewer pre) {
+  margin: 0 !important;
+}

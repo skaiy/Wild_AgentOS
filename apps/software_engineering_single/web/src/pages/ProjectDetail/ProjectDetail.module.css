@@ -1,0 +1,89 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.infoCard {
+  margin-bottom: 16px;
+}
+
+.workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.actions {
+  margin-bottom: 16px;
+}
+
+.stagesCard {
+  flex: 1;
+}
+
+.stagesList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stageItem {
+  padding: 12px;
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.stageItem:hover {
+  background: #fafafa;
+  border-color: #d9d9d9;
+}
+
+.stageInfo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.stageName {
+  font-weight: 500;
+}
+
+.stageMeta {
+  display: flex;
+  gap: 16px;
+  color: #666;
+  font-size: 12px;
+}
+
+.empty {
+  text-align: center;
+  color: #999;
+  padding: 40px;
+}
+
+.outputSection {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.outputPre {
+  background: #f5f5f5;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  overflow-x: auto;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.editorPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+}

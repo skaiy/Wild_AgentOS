@@ -1,0 +1,28 @@
+.container {
+  padding: 0;
+}
+
+.reviewDetail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.info {
+  background: #f5f5f5;
+  padding: 16px;
+  border-radius: 6px;
+}
+
+.info p {
+  margin: 8px 0;
+}
+
+.comment {
+  margin-top: 8px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+}

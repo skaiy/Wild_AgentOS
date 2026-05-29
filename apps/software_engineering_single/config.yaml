@@ -1,0 +1,24 @@
+grpc:
+    target: '[::1]:50051'
+llm:
+    apikey: sk-70a09d6db67647fa8fe41c24b986e412
+    baseurl: https://api.deepseek.com
+    model: deepseek-v4-flash
+meta_store:
+    driver: sqlite
+    dsn: se_pipeline.db
+sandbox:
+    enabled: true
+    basedir: ""
+    baseport: 0
+    maxport: 0
+    defaultstack: ""
+    defaultcpulimit: 0
+    defaultmemorylimitmb: 0
+    codeservertimeout: 0
+    autoterminateminutes: 0
+server:
+    port: 8090
+temporal:
+    hostport: ""
+    taskqueue: ""

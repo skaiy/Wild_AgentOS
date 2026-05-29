@@ -1,0 +1,14 @@
+.terminal {
+  background: #1e1e1e;
+  border-radius: 8px;
+  padding: 8px;
+  overflow: hidden;
+}
+
+.terminal :global(.xterm) {
+  height: 100%;
+}
+
+.terminal :global(.xterm-viewport) {
+  border-radius: 4px;
+}

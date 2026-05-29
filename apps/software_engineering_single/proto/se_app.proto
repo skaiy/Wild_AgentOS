@@ -1,0 +1,318 @@
+syntax = "proto3";
+package seapp;
+option go_package = "github.com/agent-os/se-app/proto/seapp";
+
+service SeKernelService {
+    rpc ExecuteStage(ExecuteStageRequest) returns (ExecuteStageResponse);
+    rpc ValidateContract(ValidateContractRequest) returns (ValidateContractResponse);
+    rpc FlattenToFrontend(FlattenRequest) returns (FlattenResponse);
+    rpc SubmitHumanApproval(SubmitApprovalRequest) returns (SubmitApprovalResponse);
+    rpc ChatStream(ChatStreamRequest) returns (stream ChatStreamChunk);
+    
+    // 新增: 实时流式执行 API
+    rpc ExecuteTaskStream(ExecuteTaskStreamRequest) returns (stream ExecutionEvent);
+    
+    // 新增: 执行详情查询 API
+    rpc GetExecutionDetails(GetExecutionDetailsRequest) returns (ExecutionDetails);
+    
+    // 新增: 实时状态查询 API
+    rpc GetRealtimeStatus(GetRealtimeStatusRequest) returns (RealtimeStatus);
+}
+
+message ExecuteStageRequest {
+    string stage_id = 1;
+    string stage_type = 2;
+    string prompt = 3;
+    string project_dir = 4;
+    string task_iri = 5;
+    string llm_api_key = 6;
+    string llm_base_url = 7;
+    string llm_model = 8;
+}
+
+message ExecuteStageResponse {
+    string status = 1;
+    string summary = 2;
+    bytes output_json = 3;
+    string output_iri = 4;
+    repeated string artifacts = 5;
+    repeated string errors = 6;
+}
+
+message ValidateContractRequest {
+    string output_iri = 1;
+    string schema_name = 2;
+    bytes output_json = 3;
+}
+
+message ValidateContractResponse {
+    bool valid = 1;
+    repeated string violations = 2;
+}
+
+message FlattenRequest {
+    string iri = 1;
+    string frame_type = 2;
+}
+
+message FlattenResponse {
+    string frontend_json = 1;
+}
+
+message SubmitApprovalRequest {
+    string request_id = 1;
+    string workflow_id = 2;
+    string stage_id = 3;
+    bool approved = 4;
+    string comments = 5;
+    string reviewer = 6;
+}
+
+message SubmitApprovalResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message ChatStreamRequest {
+    string prompt = 1;
+    string task_iri = 2;
+    string llm_api_key = 3;
+    string llm_base_url = 4;
+    string llm_model = 5;
+}
+
+message ChatStreamChunk {
+    string content = 1;
+    bool done = 2;
+    string status = 3;
+}
+
+// ============================================
+// 新增: 实时流式执行 API
+// ============================================
+
+message ExecuteTaskStreamRequest {
+    string prompt = 1;
+    string task_iri = 2;
+    string llm_api_key = 3;
+    string llm_base_url = 4;
+    string llm_model = 5;
+    bool include_thought = 6;
+    bool include_tool_calls = 7;
+}
+
+message ExecutionEvent {
+    string event_id = 1;
+    string task_iri = 2;
+    int64 timestamp = 3;
+    oneof event {
+        PhaseChangeEvent phase_change = 10;
+        AgentStatusEvent agent_status = 11;
+        LlmContentEvent llm_content = 12;
+        ToolCallEvent tool_call = 13;
+        ToolResultEvent tool_result = 14;
+        ThoughtEvent thought = 15;
+        TokenUsageEvent token_usage = 16;
+        ErrorEvent error = 17;
+        CompletionEvent completion = 18;
+    }
+}
+
+message PhaseChangeEvent {
+    string from_phase = 1;
+    string to_phase = 2;
+    string agent_role = 3;
+    string reason = 4;
+}
+
+message AgentStatusEvent {
+    string agent_id = 1;
+    string role = 2;
+    string status = 3;
+    int32 turn = 4;
+    int32 iteration = 5;
+}
+
+message LlmContentEvent {
+    string agent_id = 1;
+    string role = 2;
+    string content_delta = 3;
+    bool is_reasoning = 4;
+    int32 token_count = 5;
+}
+
+message ToolCallEvent {
+    string call_id = 1;
+    string tool_name = 2;
+    string arguments_json = 3;
+    string agent_id = 4;
+    int32 sequence = 5;
+}
+
+message ToolResultEvent {
+    string call_id = 1;
+    string tool_name = 2;
+    string result = 3;
+    bool success = 4;
+    int32 result_size_bytes = 5;
+    int32 duration_ms = 6;
+}
+
+message ThoughtEvent {
+    string agent_id = 1;
+    string thought = 2;
+    string action = 3;
+    repeated string emphasis = 4;
+}
+
+message TokenUsageEvent {
+    int32 prompt_tokens = 1;
+    int32 completion_tokens = 2;
+    int32 total_tokens = 3;
+    string model = 4;
+    int32 turn = 5;
+}
+
+message ErrorEvent {
+    string error_type = 1;
+    string message = 2;
+    string agent_id = 3;
+    bool recoverable = 4;
+}
+
+message CompletionEvent {
+    string status = 1;
+    string summary = 2;
+    int32 total_turns = 3;
+    int32 total_tool_calls = 4;
+    int32 total_tokens = 5;
+    string output_json = 6;
+}
+
+// ============================================
+// 新增: 执行详情查询 API
+// ============================================
+
+message GetExecutionDetailsRequest {
+    string task_iri = 1;
+    bool include_messages = 2;
+    bool include_tool_calls = 3;
+    bool include_thoughts = 4;
+}
+
+message ExecutionDetails {
+    string task_iri = 1;
+    string status = 2;
+    string current_phase = 3;
+    PlanDetails plan = 4;
+    repeated ExecutionStep steps = 5;
+    repeated AgentSessionSummary agent_sessions = 6;
+    ExecutionStats stats = 7;
+    string created_at = 8;
+    string updated_at = 9;
+    int64 duration_ms = 10;
+}
+
+message PlanDetails {
+    string plan_id = 1;
+    string description = 2;
+    repeated PlanStepInfo steps = 3;
+    string task_complexity = 4;
+    repeated string success_metrics = 5;
+}
+
+message PlanStepInfo {
+    string step_id = 1;
+    string role = 2;
+    string objective = 3;
+    string status = 4;
+    repeated string dependencies = 5;
+    string expected_output = 6;
+}
+
+message ExecutionStep {
+    string step_id = 1;
+    string agent_id = 2;
+    string agent_role = 3;
+    string phase = 4;
+    int64 started_at = 5;
+    int64 completed_at = 6;
+    string status = 7;
+    string summary = 8;
+    repeated ToolCallRecord tool_calls = 9;
+    int32 token_count = 10;
+}
+
+message ToolCallRecord {
+    string call_id = 1;
+    string tool_name = 2;
+    string arguments_json = 3;
+    string result_preview = 4;
+    bool success = 5;
+    int32 duration_ms = 6;
+}
+
+message AgentSessionSummary {
+    string agent_id = 1;
+    string role = 2;
+    int32 message_count = 3;
+    int32 tool_call_count = 4;
+    int32 token_count = 5;
+    string summary = 6;
+}
+
+message ExecutionStats {
+    int32 total_turns = 1;
+    int32 total_tool_calls = 2;
+    int32 total_tokens = 3;
+    int32 prompt_tokens = 4;
+    int32 completion_tokens = 5;
+    int32 error_count = 6;
+    int32 retry_count = 7;
+}
+
+// ============================================
+// 新增: 实时状态查询 API
+// ============================================
+
+message GetRealtimeStatusRequest {
+    string task_iri = 1;
+}
+
+message RealtimeStatus {
+    string task_iri = 1;
+    string status = 2;
+    string current_phase = 3;
+    CurrentAgentInfo current_agent = 4;
+    CurrentActionInfo current_action = 5;
+    ExecutionProgress progress = 6;
+    repeated PhaseHistoryEntry phase_history = 7;
+}
+
+message CurrentAgentInfo {
+    string id = 1;
+    string role = 2;
+    string status = 3;
+    int32 turn = 4;
+}
+
+message CurrentActionInfo {
+    string type = 1;
+    string tool_name = 2;
+    string started_at = 3;
+}
+
+message ExecutionProgress {
+    int32 completed_steps = 1;
+    int32 total_steps = 2;
+    int32 percentage = 3;
+    int64 estimated_remaining_ms = 4;
+}
+
+message PhaseHistoryEntry {
+    string phase = 1;
+    string agent_id = 2;
+    int64 started_at = 3;
+    int64 completed_at = 4;
+    string status = 5;
+}
