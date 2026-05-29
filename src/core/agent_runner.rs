@@ -9,7 +9,7 @@ use crate::config::settings::AgentSettings;
 use crate::core::agent_instance::{AgentInstance, AgentRole, AgentStatus};
 use crate::core::system_prompt::{SystemPromptBuilder, SystemPromptRegion};
 use crate::gateway::unified_gateway::{ChatMessage, UnifiedGateway};
-use crate::jsonld::{generate_iri, validate_jsonld_node, JsonLdContext, JsonLdNode, GLOBAL_CONTEXT};
+use crate::jsonld::{generate_iri, validate_jsonld_node, JsonLdContext, JsonLdNode};
 use crate::memory::l0_store::L0Store;
 use crate::memory::l1_session::L1Session;
 use crate::memory::l2_blackboard::Blackboard;

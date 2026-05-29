@@ -7,6 +7,7 @@ use tonic::{Request, Response, Status};
 use tokio_stream::{Stream, StreamExt};
 use tokio::sync::{mpsc, RwLock};
 
+use crate::batch::manager::BatchAgentManager;
 use crate::core::sa::SupervisorAgent;
 use crate::core::agent_runner::AgentRunner;
 use crate::core::event_bus::EventBus;
@@ -24,7 +25,7 @@ use crate::memory::memory_manager::MemoryManager;
 use crate::memory::prefetch_engine::PrefetchEngine;
 use crate::memory::scheduler::MemoryScheduler;
 use crate::memory::unified_graph::UnifiedGraphStore;
-use crate::perception::proactive_engine::ProactiveEngine;
+use crate::skill_graph::graph_store::SkillGraphStore;
 use crate::templates::template_engine::TemplateEngine;
 use crate::tools::skill_registry::SkillRegistry;
 use crate::config::settings::Settings;
@@ -53,6 +54,8 @@ pub struct AgentOSService {
     prefetch: Arc<PrefetchEngine>,
     unified_graph: Arc<UnifiedGraphStore>,
     execution_states: Arc<RwLock<HashMap<String, ExecutionState>>>,
+    /// Batch Agent 管理器，post-new 异步初始化
+    batch_manager: tokio::sync::Mutex<Option<BatchAgentManager>>,
 }
 
 impl AgentOSService {
@@ -208,22 +211,65 @@ impl AgentOSService {
             },
         );
 
-        Ok(Self {
+        // ── BatchAgent 管理器（同步注册，异步 start） ──
+        let batch_mgr = {
+            let skill_graph = Arc::new(
+                SkillGraphStore::new()
+                    .with_blackboard(blackboard.clone())
+                    .with_l0_store(l0.clone()),
+            );
+            let mut mgr = BatchAgentManager::new()
+                .with_event_bus(event_bus.clone())
+                .with_graph_store(skill_graph);
+
+            let agent_settings = &settings.batch_agents.agents;
+            if !agent_settings.is_empty() {
+                let results = mgr.register_maintenance_agents(agent_settings);
+                let ok = results.iter().filter(|r| r.is_ok()).count();
+                let err = results.len() - ok;
+                tracing::info!(
+                    "BatchAgent 注册完成: {} OK, {} 失败, 共 {} 个配置",
+                    ok, err, results.len()
+                );
+                for r in results.iter().filter_map(|r| r.as_ref().err()) {
+                    tracing::warn!("BatchAgent 注册失败: {:?}", r);
+                }
+            }
+            mgr
+        };
+
+        let s = Self {
             settings,
             gateway,
             l0,
-            blackboard,
+            blackboard: blackboard.clone(),
             projection,
             memory_manager,
             skills,
             templates,
-            event_bus,
+            event_bus: event_bus.clone(),
             checkpoints,
             scheduler,
             prefetch,
             unified_graph,
             execution_states: Arc::new(RwLock::new(HashMap::new())),
-        })
+            batch_manager: tokio::sync::Mutex::new(Some(batch_mgr)),
+        };
+
+        Ok(s)
+    }
+
+    /// 异步启动 BatchAgent 系统。在 gRPC serve 之前调用。
+    pub async fn init_batch_system(&self) {
+        let mut guard = self.batch_manager.lock().await;
+        if let Some(ref mut mgr) = *guard {
+            match mgr.start(None).await {
+                Ok(()) => tracing::info!("BatchAgent 系统已启动"),
+                Err(e) => tracing::warn!("BatchAgent 启动部分失败: {:?}", e),
+            }
+        } else {
+            tracing::info!("BatchAgent 已初始化完毕或已禁用");
+        }
     }
 
     fn create_sa(&self, settings: &Settings) -> SupervisorAgent {

@@ -4,11 +4,12 @@
 
 pub mod context;
 pub mod framing;
+pub mod registry;
 pub mod type_router;
 pub mod types;
 pub mod utils;
 
-pub use context::{JsonLdContext, GLOBAL_CONTEXT};
+pub use context::JsonLdContext;
 pub use framing::{
     apply_frame, embed_node, estimate_tokens, filter_properties, fit_to_budget,
     EmbedDirective, FrameTemplate, AA_DECISION_FRAME, CA_REVIEW_FRAME, DA_INPUT_FRAME,

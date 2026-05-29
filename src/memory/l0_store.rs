@@ -7,8 +7,10 @@ use serde::{Deserialize, Serialize};
 use sled::Db;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use tracing::{debug, info};
 
+use crate::jsonld::registry::{EntityLocation, IriRegistry, StorageLayer};
 use crate::CoreError;
 
 /// MESI 缓存一致性状态枚举
@@ -94,6 +96,8 @@ pub struct L0Store {
     #[allow(dead_code)]
     config: L0Config,
     entry_count: u64,
+    /// 可选的 IRI 注册表引用（注入后自动注册 @id）
+    iri_registry: Option<Arc<IriRegistry>>,
 }
 
 impl L0Store {
@@ -131,6 +135,7 @@ impl L0Store {
                 ..Default::default()
             },
             entry_count: entry_count as u64,
+            iri_registry: None,
         })
     }
 
@@ -751,6 +756,11 @@ impl L0Store {
         Ok(results)
     }
 
+    /// 注入 IRI 注册表，后续写入节点自动注册 @id
+    pub fn set_iri_registry(&mut self, registry: Arc<IriRegistry>) {
+        self.iri_registry = Some(registry);
+    }
+
     pub fn store_jsonld_node(&self, node: &serde_json::Value) -> Result<String, CoreError> {
         let node_obj = node.as_object()
             .ok_or_else(|| CoreError::StorageError {
@@ -784,6 +794,9 @@ impl L0Store {
             })?;
 
         let content_hash = compute_content_hash(&content);
+
+        // 确定命名空间和类型（用于后续 IRI 注册）
+        let primary_type = jsonld_types.first().cloned();
 
         let existing_entry = self.retrieve_without_update(iri)?;
         
@@ -845,6 +858,25 @@ impl L0Store {
         };
 
         self.store_entry(&entry)?;
+
+        // 如果有 IRI 注册表，自动注册新写入的 @id
+        if let Some(ref registry) = self.iri_registry {
+            let ns = primary_type.as_ref()
+                .map(|t| t.to_lowercase())
+                .unwrap_or_else(|| "node".to_string());
+            let named_graph = entry.named_graph.clone()
+                .unwrap_or_else(|| format!("graph:{}", ns));
+            let location = EntityLocation {
+                iri: iri.to_string(),
+                namespace: ns,
+                named_graph: Some(named_graph),
+                storage_layer: StorageLayer::L0Permanent,
+                entity_type: primary_type.clone(),
+                created_at: Utc::now(),
+                metadata: Default::default(),
+            };
+            registry.register(iri, location);
+        }
 
         Ok(iri.to_string())
     }

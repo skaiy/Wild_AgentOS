@@ -526,6 +526,22 @@ pub struct BatchAgentSettings {
     pub inject_user_reminders: bool,
     #[serde(default = "default_true")]
     pub inject_context_summary: bool,
+
+    // Maintenance Agent specific options
+    #[serde(default)]
+    pub min_confidence_auto_apply: Option<f64>,
+    #[serde(default)]
+    pub batch_size: Option<usize>,
+    #[serde(default)]
+    pub max_candidates: Option<usize>,
+    #[serde(default)]
+    pub lookback_hours: Option<u64>,
+    #[serde(default)]
+    pub llm_analysis_threshold: Option<f64>,
+    #[serde(default)]
+    pub max_items_per_run: Option<usize>,
+    #[serde(default)]
+    pub max_suggestions_per_run: Option<usize>,
 }
 
 impl Default for BatchAgentSettings {
@@ -552,6 +568,13 @@ impl Default for BatchAgentSettings {
             emit_on: vec![],
             inject_user_reminders: true,
             inject_context_summary: true,
+            min_confidence_auto_apply: None,
+            batch_size: None,
+            max_candidates: None,
+            lookback_hours: None,
+            llm_analysis_threshold: None,
+            max_items_per_run: None,
+            max_suggestions_per_run: None,
         }
     }
 }

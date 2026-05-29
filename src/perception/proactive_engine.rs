@@ -481,8 +481,15 @@ fn parse_iso8601_duration(s: &str) -> Option<chrono::Duration> {
 mod tests {
     use super::*;
 
-    fn test_l0() -> Arc<L0Store> {
-        Arc::new(L0Store::new("/tmp/test_proactive_engine_l0").unwrap())
+    /// 每个测试使用独立的 temp dir，避免 sled 数据库污染
+    fn with_l0<F, R>(f: F) -> R
+    where
+        F: FnOnce(Arc<L0Store>) -> R,
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(L0Store::new(dir.path().to_str().unwrap()).unwrap());
+        f(store)
+        // dir 在此 drop，自动清理
     }
 
     fn test_event_bus() -> Arc<EventBus> {
@@ -491,52 +498,61 @@ mod tests {
 
     #[test]
     fn test_task_start_analysis() {
-        let mut engine = ProactiveEngine::new(test_l0(), test_event_bus());
-        let analysis = engine.on_task_start("Write a hello world program", "iri://task/1").unwrap();
-        assert_eq!(analysis.complexity, "simple");
-        assert_eq!(analysis.estimated_steps, 1);
+        with_l0(|l0| {
+            let mut engine = ProactiveEngine::new(l0, test_event_bus());
+            let analysis = engine.on_task_start("Write a hello world program", "iri://task/1").unwrap();
+            assert_eq!(analysis.complexity, "simple");
+            assert_eq!(analysis.estimated_steps, 1);
+        });
     }
 
     #[test]
     fn test_check_completed_pass() {
-        let engine = ProactiveEngine::new(test_l0(), test_event_bus());
-        let result = engine.on_check_completed(&json!({"verdict": "pass"}), "iri://task/1");
-        assert!(result.is_none());
+        with_l0(|l0| {
+            let engine = ProactiveEngine::new(l0, test_event_bus());
+            let result = engine.on_check_completed(&json!({"verdict": "pass"}), "iri://task/1");
+            assert!(result.is_none());
+        });
     }
 
     #[test]
     fn test_check_completed_fail() {
-        let engine = ProactiveEngine::new(test_l0(), test_event_bus());
-        let result = engine.on_check_completed(&json!({"verdict": "fail"}), "iri://task/1");
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().severity, "high");
+        with_l0(|l0| {
+            let engine = ProactiveEngine::new(l0, test_event_bus());
+            let result = engine.on_check_completed(&json!({"verdict": "fail"}), "iri://task/1");
+            assert!(result.is_some());
+            assert_eq!(result.unwrap().severity, "high");
+        });
     }
 
     #[test]
     fn test_custom_config() {
-        let config = PerceptionConfig {
-            simple_input_threshold: 100,
-            medium_input_threshold: 500,
-            ..Default::default()
-        };
-        let mut engine = ProactiveEngine::with_config(config, test_l0(), test_event_bus());
-        let analysis = engine.on_task_start("A medium length task description", "iri://task/1").unwrap();
-        assert_eq!(analysis.complexity, "simple");
+        with_l0(|l0| {
+            let config = PerceptionConfig {
+                simple_input_threshold: 100,
+                medium_input_threshold: 500,
+                ..Default::default()
+            };
+            let mut engine = ProactiveEngine::with_config(config, l0, test_event_bus());
+            let analysis = engine.on_task_start("A medium length task description", "iri://task/1").unwrap();
+            assert_eq!(analysis.complexity, "simple");
+        });
     }
 
     #[test]
     fn test_cache_eviction() {
-        let config = PerceptionConfig {
-            cache_max_entries: 2,
-            cache_ttl_seconds: 300,
-            ..Default::default()
-        };
-        let config_clone = config.clone();
-        let mut engine = ProactiveEngine::with_config(config, test_l0(), test_event_bus());
-        engine.on_task_start("task1", "iri://task/1").unwrap();
-        engine.on_task_start("task2", "iri://task/2").unwrap();
-        engine.on_task_start("task3", "iri://task/3").unwrap();
-        assert!(engine.cache.len() <= config_clone.cache_max_entries + 1);
+        with_l0(|l0| {
+            let config = PerceptionConfig {
+                cache_max_entries: 2,
+                cache_ttl_seconds: 300,
+                ..Default::default()
+            };
+            let mut engine = ProactiveEngine::with_config(config, l0, test_event_bus());
+            engine.on_task_start("task1", "iri://task/1").unwrap();
+            engine.on_task_start("task2", "iri://task/2").unwrap();
+            engine.on_task_start("task3", "iri://task/3").unwrap();
+            assert!(engine.cache.len() <= 3);
+        });
     }
 }
 

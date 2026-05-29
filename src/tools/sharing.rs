@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::tools::sharing_audit::SharingAuditLog;
 use crate::CoreError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -255,6 +256,7 @@ impl ShareResponse {
 pub struct SharingProtocol {
     active_shares: RwLock<HashMap<String, SharedReference>>,
     share_index: RwLock<HashMap<String, HashSet<String>>>,
+    audit_log: Option<Arc<SharingAuditLog>>,
 }
 
 impl SharingProtocol {
@@ -262,7 +264,14 @@ impl SharingProtocol {
         Self {
             active_shares: RwLock::new(HashMap::new()),
             share_index: RwLock::new(HashMap::new()),
+            audit_log: None,
         }
+    }
+
+    /// 注入审计日志（可选）
+    pub fn with_audit_log(mut self, audit_log: Arc<SharingAuditLog>) -> Self {
+        self.audit_log = Some(audit_log);
+        self
     }
 
     pub fn create_share(
@@ -304,6 +313,20 @@ impl SharingProtocol {
                 .insert(share_id.clone());
 
             shares.insert(share_id, ref_.clone());
+
+            // 非阻塞写入审计日志
+            if let Some(ref audit) = self.audit_log {
+                audit.log_share_created(
+                    &ref_.share_id,
+                    source_agent_iri,
+                    target_agent_iri,
+                    node_iri,
+                    share_type.as_str(),
+                    permission.as_str(),
+                    ttl_seconds,
+                );
+            }
+
             references.push(ref_);
         }
 
@@ -324,6 +347,10 @@ impl SharingProtocol {
                 
                 if !ref_.permission.allows_read() {
                     return None;
+                }
+
+                if let Some(ref audit) = self.audit_log {
+                    audit.log_share_resolved(share_id, agent_iri);
                 }
                 
                 return Some(ref_.clone());
@@ -356,6 +383,9 @@ impl SharingProtocol {
             let mut index = self.share_index.write();
             if let Some(share_ids) = index.get_mut(&ref_.target_agent_iri) {
                 share_ids.remove(share_id);
+            }
+            if let Some(ref audit) = self.audit_log {
+                audit.log_share_revoked(share_id);
             }
             true
         } else {

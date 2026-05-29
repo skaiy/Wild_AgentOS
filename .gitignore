@@ -10,6 +10,12 @@ PR-res/
 # application data
 data/
 
+# logs
+logs/
+
+# test data
+.trae*/
+
 # Rust backup files
 **/*.rs.bk
 

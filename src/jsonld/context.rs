@@ -1,11 +1,27 @@
 //! JSON-LD Context 定义
 //!
 //! 提供全局统一的 @context 定义，包含系统命名空间和字段映射
+//!
+//! # 设计说明
+//!
+//! ## 单 @context 源
+//!
+//! context.json 是权威的 @context 定义来源，编译期嵌入二进制。
+//! `context_value()` 提供懒加载的 `Arc<Value>` 访问。
+//! 除 context.json 外不维护任何独立的上下文 HashMap。
+//!
+//! ## map_field_to_iri() = 轻量级 Expansion
+//!
+//! 这是一个有意简化的 JSON-LD key 展开——从 context_value() 中读取字段→IRI 映射，
+//! O(1) 查表而非完整 JSON-LD 1.1 Expansion 算法的 O(n) 递归树遍历。
+//!
+//! ## 不加载远程 @context
+//!
+//! 封闭系统中 @context 编译期已知，不引入远程加载的延迟和失败模式。
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use once_cell::sync::Lazy;
 use serde_json::Value;
 
 pub const NS_AGENT: &str = "agent";
@@ -77,6 +93,12 @@ impl JsonLdContext {
         self.mappings.insert(field, iri);
     }
 
+    /// 构建统一的 @context 对象
+    ///
+    /// 从 context.json 加载基础定义（类型映射 + 字段映射 + 领域命名空间），
+    /// 再追加编程方式注入的命名空间前缀作为安全兜底。
+    ///
+    /// 结果会被 OnceLock 缓存，此后 O(1) 访问。
     fn build_unified_context() -> Arc<Value> {
         let raw: Value = serde_json::from_str(include_str!("context.json"))
             .expect("context.json 解析失败");
@@ -87,19 +109,22 @@ impl JsonLdContext {
             .cloned()
             .unwrap_or_default();
 
+        // context.json 已包含这些命名空间定义（作为基础字段），
+        // 此处通过入名常量再注入一次确保不会被误删的 context.json 字段破坏。
+        // 值相同（由 const URI_* 常量保证），重复插入不产生副作用。
         for (prefix, uri) in [
-            (NS_AGENT, URI_AGENT),
-            (NS_TASK, URI_TASK),
-            (NS_SKILL, URI_SKILL),
-            (NS_MEM, URI_MEM),
-            (NS_SEC, URI_SEC),
-            (NS_MON, URI_MON),
-            (NS_TMPL, URI_TMPL),
-            (NS_EXP, URI_EXP),
-            (NS_ADV, URI_ADV),
-            (NS_NODE, URI_NODE),
+            ("agent", URI_AGENT),
+            ("task", URI_TASK),
+            ("skill", URI_SKILL),
+            ("mem", URI_MEM),
+            ("sec", URI_SEC),
+            ("mon", URI_MON),
+            ("tmpl", URI_TMPL),
+            ("exp", URI_EXP),
+            ("adv", URI_ADV),
+            ("node", URI_NODE),
         ] {
-            context_map.insert(prefix.to_string(), Value::String(uri.to_string()));
+            context_map.entry(prefix.to_string()).or_insert(Value::String(uri.to_string()));
         }
 
         Arc::new(Value::Object(context_map))
@@ -111,6 +136,7 @@ impl JsonLdContext {
             .clone()
     }
 
+    /// 向 JSON 值注入 @context（如果没有的话）
     pub fn inject(value: &mut Value) {
         if let Some(obj) = value.as_object_mut() {
             if !obj.contains_key("@context") {
@@ -120,119 +146,43 @@ impl JsonLdContext {
     }
 }
 
-pub static GLOBAL_CONTEXT: Lazy<HashMap<String, serde_json::Value>> = Lazy::new(|| {
-    let mut context = HashMap::new();
-
-    context.insert(NS_AGENT.to_string(), serde_json::Value::String(URI_AGENT.to_string()));
-    context.insert(NS_TASK.to_string(), serde_json::Value::String(URI_TASK.to_string()));
-    context.insert(NS_SKILL.to_string(), serde_json::Value::String(URI_SKILL.to_string()));
-    context.insert(NS_MEM.to_string(), serde_json::Value::String(URI_MEM.to_string()));
-    context.insert(NS_SEC.to_string(), serde_json::Value::String(URI_SEC.to_string()));
-    context.insert(NS_MON.to_string(), serde_json::Value::String(URI_MON.to_string()));
-    context.insert(NS_TMPL.to_string(), serde_json::Value::String(URI_TMPL.to_string()));
-    context.insert(NS_EXP.to_string(), serde_json::Value::String(URI_EXP.to_string()));
-    context.insert(NS_ADV.to_string(), serde_json::Value::String(URI_ADV.to_string()));
-    context.insert(NS_NODE.to_string(), serde_json::Value::String(URI_NODE.to_string()));
-
-    let mut task_mappings = HashMap::new();
-    task_mappings.insert("@id".to_string(), "task:id".to_string());
-    task_mappings.insert("@type".to_string(), "task:type".to_string());
-    task_mappings.insert("summary".to_string(), "task:summary".to_string());
-    task_mappings.insert("status".to_string(), "task:status".to_string());
-    task_mappings.insert("confidence".to_string(), "task:confidence".to_string());
-    task_mappings.insert("created_at".to_string(), "task:createdAt".to_string());
-    task_mappings.insert("updated_at".to_string(), "task:updatedAt".to_string());
-    task_mappings.insert("priority".to_string(), "task:priority".to_string());
-    task_mappings.insert("assignee".to_string(), "task:assignee".to_string());
-    task_mappings.insert("what".to_string(), "task:what".to_string());
-    task_mappings.insert("why".to_string(), "task:why".to_string());
-    task_mappings.insert("who".to_string(), "task:who".to_string());
-    task_mappings.insert("when".to_string(), "task:when".to_string());
-    task_mappings.insert("where".to_string(), "task:where".to_string());
-    task_mappings.insert("how".to_string(), "task:how".to_string());
-    task_mappings.insert("how_much".to_string(), "task:howMuch".to_string());
-    task_mappings.insert("success_criteria".to_string(), "task:successCriteria".to_string());
-    task_mappings.insert("description".to_string(), "task:description".to_string());
-    task_mappings.insert("deadline".to_string(), "task:deadline".to_string());
-    task_mappings.insert("data_sources".to_string(), "task:dataSources".to_string());
-    task_mappings.insert("execution_environment".to_string(), "task:executionEnvironment".to_string());
-    task_mappings.insert("plan_iri".to_string(), "task:planIRI".to_string());
-    task_mappings.insert("preferred_skills".to_string(), "task:preferredSkills".to_string());
-    task_mappings.insert("forbidden_tools".to_string(), "task:forbiddenTools".to_string());
-    task_mappings.insert("required_steps".to_string(), "task:requiredSteps".to_string());
-    task_mappings.insert("token_budget".to_string(), "task:tokenBudget".to_string());
-    task_mappings.insert("max_pdca_cycles".to_string(), "task:maxPDCACycles".to_string());
-    task_mappings.insert("actual_cost".to_string(), "task:actualCost".to_string());
-    task_mappings.insert("requestor".to_string(), "task:requestor".to_string());
-    task_mappings.insert("required_role".to_string(), "task:requiredRole".to_string());
-    task_mappings.insert("access_level".to_string(), "task:accessLevel".to_string());
-
-    for (key, value) in task_mappings {
-        context.insert(key, serde_json::Value::String(value));
+/// 将字段名映射为完整 IRI
+///
+/// # 有意设计：轻量级 Expansion
+///
+/// 这不是 JSON-LD 1.1 标准的 Expansion 算法（递归树遍历 + 值展开），
+/// 而是从 context.json 读取字段→IRI 映射的 flat lookup。
+/// 对于封闭系统（@context 编译期已知）这提供了等价的语义，
+/// 但成本从 O(n) 递归变为 O(1) 查表。
+///
+/// 不在 context.json 中定义的字段回退到 `node:{field}`。
+pub fn map_field_to_iri(field: &str) -> String {
+    if field == "@id" || field == "@type" {
+        return field.to_string();
     }
 
-    context
-});
-
-pub fn map_field_to_iri(field: &str) -> String {
-    let field_mappings: HashMap<&str, &str> = [
-        ("id", "task:id"),
-        ("type", "task:type"),
-        ("summary", "task:summary"),
-        ("status", "task:status"),
-        ("confidence", "task:confidence"),
-        ("created_at", "task:createdAt"),
-        ("updated_at", "task:updatedAt"),
-        ("priority", "task:priority"),
-        ("assignee", "task:assignee"),
-        ("what", "task:what"),
-        ("why", "task:why"),
-        ("who", "task:who"),
-        ("when", "task:when"),
-        ("where", "task:where"),
-        ("how", "task:how"),
-        ("how_much", "task:howMuch"),
-        ("success_criteria", "task:successCriteria"),
-        ("description", "task:description"),
-        ("deadline", "task:deadline"),
-        ("data_sources", "task:dataSources"),
-        ("execution_environment", "task:executionEnvironment"),
-        ("plan_iri", "task:planIRI"),
-        ("preferred_skills", "task:preferredSkills"),
-        ("forbidden_tools", "task:forbiddenTools"),
-        ("required_steps", "task:requiredSteps"),
-        ("token_budget", "task:tokenBudget"),
-        ("max_pdca_cycles", "task:maxPDCACycles"),
-        ("actual_cost", "task:actualCost"),
-        ("requestor", "task:requestor"),
-        ("required_role", "task:requiredRole"),
-        ("access_level", "task:accessLevel"),
-        ("agent_id", "agent:id"),
-        ("agent_role", "agent:role"),
-        ("agent_status", "agent:status"),
-        ("skill_name", "skill:name"),
-        ("skill_version", "skill:version"),
-        ("memory_key", "mem:key"),
-        ("memory_value", "mem:value"),
-    ].iter().cloned().collect();
-
-    field_mappings
-        .get(field)
-        .map(|s| s.to_string())
+    let ctx = JsonLdContext::context_value();
+    ctx.get(field)
+        .and_then(|v| match v {
+            Value::String(s) => Some(s.clone()),
+            Value::Object(obj) => obj.get("@id").and_then(|id| id.as_str().map(String::from)),
+            _ => None,
+        })
         .unwrap_or_else(|| format!("node:{}", field))
 }
 
+/// 创建 Skill 专用的 @context（追加 skill_name / skill_version）
 pub fn create_context_for_skill(skill_name: &str, skill_version: &str) -> HashMap<String, serde_json::Value> {
-    let mut context = GLOBAL_CONTEXT.clone();
+    let ctx = JsonLdContext::context_value();
+    let mut context: HashMap<String, Value> = ctx
+        .as_object()
+        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default();
+    let name_iri = map_field_to_iri("skill_name");
+    let version_iri = map_field_to_iri("skill_version");
 
-    context.insert(
-        "skill_name".to_string(),
-        serde_json::Value::String(format!("skill:{}", skill_name)),
-    );
-    context.insert(
-        "skill_version".to_string(),
-        serde_json::Value::String(format!("skill:{}", skill_version)),
-    );
+    context.insert("skill_name".to_string(), Value::String(name_iri));
+    context.insert("skill_version".to_string(), Value::String(version_iri));
 
     context
 }
@@ -267,18 +217,22 @@ mod tests {
     }
 
     #[test]
-    fn test_global_context() {
-        let ctx = &*GLOBAL_CONTEXT;
-        assert!(ctx.contains_key("agent"));
-        assert!(ctx.contains_key("task"));
-        assert!(ctx.contains_key("skill"));
-        assert_eq!(ctx.get("agent"), Some(&serde_json::Value::String(URI_AGENT.to_string())));
+    fn test_context_value_contains_namespaces() {
+        let ctx = JsonLdContext::context_value();
+        assert!(ctx.get("agent").is_some());
+        assert!(ctx.get("task").is_some());
+        assert!(ctx.get("skill").is_some());
     }
 
     #[test]
     fn test_map_field_to_iri() {
-        assert_eq!(map_field_to_iri("summary"), "task:summary");
-        assert_eq!(map_field_to_iri("status"), "task:status");
+        assert_eq!(map_field_to_iri("summary"), "pdca:summary");
+        assert_eq!(map_field_to_iri("status"), "pdca:status");
+        assert_eq!(map_field_to_iri("confidence"), "pdca:confidence");
+        assert_eq!(map_field_to_iri("created_at"), "pdca:createdAt");
+        assert_eq!(map_field_to_iri("what"), "pdca:what");
+        assert_eq!(map_field_to_iri("plan_iri"), "pdca:planIRI");
+        assert_eq!(map_field_to_iri("@id"), "@id");
         assert_eq!(map_field_to_iri("unknown_field"), "node:unknown_field");
     }
 
@@ -287,5 +241,19 @@ mod tests {
         let ctx = create_context_for_skill("file_read", "1.0.0");
         assert!(ctx.contains_key("skill_name"));
         assert!(ctx.contains_key("skill_version"));
+        assert!(ctx.contains_key("summary"));
+        assert!(ctx.contains_key("status"));
+    }
+
+    #[test]
+    fn test_inject_context() {
+        let mut node = serde_json::json!({
+            "@id": "iri://task/123",
+            "summary": "test"
+        });
+        JsonLdContext::inject(&mut node);
+        assert!(node.get("@context").is_some());
+        JsonLdContext::inject(&mut node);
+        assert!(node.get("@context").is_some());
     }
 }

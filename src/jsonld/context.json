@@ -3,7 +3,18 @@
     "@vocab": "https://pdca-agent.org/vocab#",
     "xsd": "http://www.w3.org/2001/XMLSchema#",
     "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-    
+
+    "agent": "https://pdca-agent.org/ontology/agent#",
+    "task": "https://pdca-agent.org/ontology/task#",
+    "skill": "https://pdca-agent.org/ontology/skill#",
+    "mem": "https://pdca-agent.org/ontology/memory#",
+    "sec": "https://pdca-agent.org/ontology/security#",
+    "mon": "https://pdca-agent.org/ontology/monitoring#",
+    "tmpl": "https://pdca-agent.org/ontology/template#",
+    "exp": "https://pdca-agent.org/ontology/experience#",
+    "adv": "https://pdca-agent.org/ontology/advisory#",
+    "node": "https://pdca-agent.org/ontology/node#",
+
     "Task": "pdca:Task",
     "Agent": "pdca:Agent",
     "PlanNode": "pdca:PlanNode",
@@ -11,7 +22,7 @@
     "CheckResult": "pdca:CheckResult",
     "Decision": "pdca:Decision",
     "EmphasisContent": "pdca:EmphasisContent",
-    
+
     "task_iri": {
       "@id": "pdca:taskIri",
       "@type": "@id"
@@ -94,6 +105,135 @@
     },
     "tags": {
       "@id": "pdca:hasTag",
+      "@type": "xsd:string"
+    },
+
+    "created_at": {
+      "@id": "pdca:createdAt",
+      "@type": "xsd:dateTime"
+    },
+    "updated_at": {
+      "@id": "pdca:updatedAt",
+      "@type": "xsd:dateTime"
+    },
+    "priority": {
+      "@id": "pdca:priority",
+      "@type": "xsd:string"
+    },
+    "assignee": {
+      "@id": "pdca:assignee",
+      "@type": "@id"
+    },
+    "what": {
+      "@id": "pdca:what",
+      "@type": "xsd:string"
+    },
+    "why": {
+      "@id": "pdca:why",
+      "@type": "xsd:string"
+    },
+    "who": {
+      "@id": "pdca:who",
+      "@type": "xsd:string"
+    },
+    "when": {
+      "@id": "pdca:when",
+      "@type": "xsd:string"
+    },
+    "where": {
+      "@id": "pdca:where",
+      "@type": "xsd:string"
+    },
+    "how": {
+      "@id": "pdca:how",
+      "@type": "xsd:string"
+    },
+    "how_much": {
+      "@id": "pdca:howMuch",
+      "@type": "xsd:string"
+    },
+    "success_criteria": {
+      "@id": "pdca:successCriteria",
+      "@type": "xsd:string"
+    },
+    "description": {
+      "@id": "pdca:description",
+      "@type": "xsd:string"
+    },
+    "deadline": {
+      "@id": "pdca:deadline",
+      "@type": "xsd:dateTime"
+    },
+    "data_sources": {
+      "@id": "pdca:dataSources",
+      "@type": "@id"
+    },
+    "execution_environment": {
+      "@id": "pdca:executionEnvironment",
+      "@type": "xsd:string"
+    },
+    "plan_iri": {
+      "@id": "pdca:planIRI",
+      "@type": "@id"
+    },
+    "preferred_skills": {
+      "@id": "pdca:preferredSkills",
+      "@type": "@id"
+    },
+    "forbidden_tools": {
+      "@id": "pdca:forbiddenTools",
+      "@type": "xsd:string"
+    },
+    "required_steps": {
+      "@id": "pdca:requiredSteps",
+      "@type": "xsd:string"
+    },
+    "token_budget": {
+      "@id": "pdca:tokenBudget",
+      "@type": "xsd:integer"
+    },
+    "max_pdca_cycles": {
+      "@id": "pdca:maxPDCACycles",
+      "@type": "xsd:integer"
+    },
+    "actual_cost": {
+      "@id": "pdca:actualCost",
+      "@type": "xsd:integer"
+    },
+    "requestor": {
+      "@id": "pdca:requestor",
+      "@type": "@id"
+    },
+    "required_role": {
+      "@id": "pdca:requiredRole",
+      "@type": "xsd:string"
+    },
+    "access_level": {
+      "@id": "pdca:accessLevel",
+      "@type": "xsd:string"
+    },
+    "agent_status": {
+      "@id": "pdca:agentStatus",
+      "@type": "xsd:string"
+    },
+    "agent_role": {
+      "@id": "pdca:agentRole",
+      "@type": "xsd:string"
+    },
+    "skill_name": {
+      "@id": "pdca:skillName",
+      "@type": "xsd:string"
+    },
+    "skill_version": {
+      "@id": "pdca:skillVersion",
+      "@type": "xsd:string"
+    },
+    "memory_key": {
+      "@id": "pdca:memoryKey",
+      "@type": "xsd:string"
+    },
+    "memory_value": {
+      "@id": "pdca:memoryValue",
       "@type": "xsd:string"
     }
   }

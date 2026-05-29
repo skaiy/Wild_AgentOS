@@ -77,12 +77,18 @@ pub fn extract_namespace_from_iri(iri: &str) -> Option<String> {
     parse_iri(iri).map(|(namespace, _)| namespace)
 }
 
+/// 所有已知的 IRI 命名空间（应与代码中 format!("iri://{}/...", ns) 保持一致）
+pub const KNOWN_NAMESPACES: &[&str] = &[
+    "agent", "approval", "archive", "chat", "checkpoint", "concept",
+    "emphasis", "entity", "experience", "fragment", "item", "knowledge",
+    "mcp", "mem", "memory", "moc", "node", "plan", "project", "rag",
+    "schema", "sec", "session", "share", "skill", "skills", "skill-types",
+    "stage", "statement", "stream", "system", "task", "template", "test",
+    "tmpl", "exp", "adv", "tool-result", "whitelist",
+];
+
 pub fn is_valid_namespace(namespace: &str) -> bool {
-    let valid_namespaces = [
-        "agent", "task", "skill", "mem", "sec", "mon",
-        "tmpl", "exp", "adv", "node", "system"
-    ];
-    valid_namespaces.contains(&namespace)
+    KNOWN_NAMESPACES.contains(&namespace)
 }
 
 pub fn normalize_iri(iri: &str) -> String {
@@ -240,6 +246,9 @@ mod tests {
         assert!(is_valid_namespace("task"));
         assert!(is_valid_namespace("agent"));
         assert!(is_valid_namespace("skill"));
+        assert!(is_valid_namespace("entity"), "扩展后的命名空间应被认可");
+        assert!(is_valid_namespace("share"), "扩展后的命名空间应被认可");
+        assert!(is_valid_namespace("knowledge"), "扩展后的命名空间应被认可");
         assert!(!is_valid_namespace("invalid_namespace"));
     }
 

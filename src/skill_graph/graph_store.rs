@@ -529,6 +529,134 @@ impl SkillGraphStore {
         suggestions
     }
 
+    /// Bulk read skills by a list of IRIs.
+    /// Returns only the skills that exist, in the same order as the input.
+    /// Missing IRIs are silently skipped.
+    pub fn bulk_read_skills(&self, iris: &[&str]) -> Vec<SkillGraphNode> {
+        let skills = self.skills.read();
+        iris.iter()
+            .filter_map(|iri| skills.get(*iri).cloned())
+            .collect()
+    }
+
+    /// Create a composite skill from a set of component skill IRIs.
+    /// Composition links are created both on the composite and on each component.
+    pub fn create_composite_skill(
+        &self,
+        target_iri: &str,
+        name: &str,
+        description: &str,
+        component_iris: &[String],
+        reason: &str,
+    ) -> Result<SkillGraphNode, CoreError> {
+        let mut links: Vec<SkillLink> = component_iris
+            .iter()
+            .map(|comp_iri| SkillLink {
+                link_type: SkillLinkType::Composition,
+                target_iri: comp_iri.to_string(),
+                strength: LinkStrength::Required,
+                description: format!("Composite part: {}", reason),
+            })
+            .collect();
+
+        for comp_iri in component_iris {
+            let existing = self.skills.read().get(comp_iri).cloned();
+            if let Some(mut comp) = existing {
+                let already_linked = comp.links.iter().any(|l| {
+                    l.link_type == SkillLinkType::Composition && l.target_iri == target_iri
+                });
+                if !already_linked {
+                    comp.links.push(SkillLink {
+                        link_type: SkillLinkType::Composition,
+                        target_iri: target_iri.to_string(),
+                        strength: LinkStrength::Recommended,
+                        description: "Is a composite skill".to_string(),
+                    });
+                    self.index.update_skill(&comp);
+                    self.skills.write().insert(comp_iri.clone(), comp);
+                }
+            }
+        }
+
+        let comp_tags: Vec<String> = {
+            let snap: Vec<_> = component_iris
+                .iter()
+                .filter_map(|iri| self.skills.read().get(iri).cloned())
+                .collect();
+            snap.iter().flat_map(|s| s.tags.clone()).collect()
+        };
+
+        let composite = SkillGraphNode {
+            skill_iri: target_iri.to_string(),
+            name: name.to_string(),
+            description: description.to_string(),
+            version: "1.0.0".to_string(),
+            node_type: SkillNodeType::Composite,
+            maturity: "experimental".to_string(),
+            tags: {
+                let mut t: Vec<String> = comp_tags;
+                t.sort();
+                t.dedup();
+                t
+            },
+            w2h: Skill5W2H::default(),
+            links,
+            graph_meta: SkillGraphMeta::new(),
+            content: None,
+            attached_to: None,
+            security_info: None,
+            mcp_server_id: None,
+            storage_tier: StorageTier::L0Permanent,
+        };
+
+        self.register_skill(composite.clone())?;
+        Ok(composite)
+    }
+
+    /// Mark a skill as deprecated. It stays in the store for reference but is
+    /// removed from the search index.
+    pub fn deprecate_skill(&self, skill_iri: &str) -> Result<(), CoreError> {
+        let mut skills = self.skills.write();
+        if let Some(skill) = skills.get_mut(skill_iri) {
+            skill.maturity = "deprecated".to_string();
+            let updated = skills.get(skill_iri).cloned();
+            drop(skills);
+            if let Some(skill) = updated {
+                self.index.remove_skill(skill_iri);
+                self.skills.write().insert(skill_iri.to_string(), skill);
+            }
+            info!("技能已标记为弃用: {}", skill_iri);
+            Ok(())
+        } else {
+            Err(CoreError::SkillNotFound {
+                iri: format!("Skill not found: {}", skill_iri),
+            })
+        }
+    }
+
+    /// Batch add multiple links. Returns count of successfully added links.
+    pub fn batch_add_links(
+        &self,
+        links: &[(
+            String,
+            String,
+            SkillLinkType,
+            LinkStrength,
+            String,
+        )],
+    ) -> usize {
+        let mut success_count = 0usize;
+        for (source, target, link_type, strength, description) in links {
+            match self.add_link(source, target, *link_type, *strength, description) {
+                Ok(()) => success_count += 1,
+                Err(e) => {
+                    warn!("批量添加链接失败 ({} -> {}): {:?}", source, target, e);
+                }
+            }
+        }
+        success_count
+    }
+
     pub fn index_stats(&self) -> crate::skill_graph::index::IndexStats {
         self.index.stats()
     }

@@ -27,6 +27,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent_os_service = AgentOSService::new(settings)
         .map_err(|e| Box::<dyn std::error::Error>::from(e))?;
 
+    // 异步初始化 BatchAgent 系统（注册 agent、启动触发器）
+    agent_os_service.init_batch_system().await;
+
     tracing::info!("Agent OS gRPC server starting on {}", addr);
 
     tonic::transport::Server::builder()

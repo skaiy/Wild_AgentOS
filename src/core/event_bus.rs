@@ -86,6 +86,19 @@ pub enum EventType {
     BatchDecisionDetected,
     BatchContextInjected,
 
+    // ===== Batch Agent Maintenance events =====
+    BatchSkillMergeSuggested,
+    BatchSkillMergeApplied,
+    BatchFragmentRefined,
+    BatchEntityResolved,
+    BatchEntityMergeConflict,
+    BatchFailurePatternDetected,
+    BatchHealthReportGenerated,
+    BatchMemoryCompacted,
+    BatchLinkRecommended,
+    BatchLinkApplied,
+    BatchTemplateAnalysisReady,
+
     // Custom
     Custom(String),
 }
@@ -136,6 +149,17 @@ impl EventType {
             EventType::BatchIntentDetected => "BATCH_INTENT_DETECTED",
             EventType::BatchDecisionDetected => "BATCH_DECISION_DETECTED",
             EventType::BatchContextInjected => "BATCH_CONTEXT_INJECTED",
+            EventType::BatchSkillMergeSuggested => "BATCH_SKILL_MERGE_SUGGESTED",
+            EventType::BatchSkillMergeApplied => "BATCH_SKILL_MERGE_APPLIED",
+            EventType::BatchFragmentRefined => "BATCH_FRAGMENT_REFINED",
+            EventType::BatchEntityResolved => "BATCH_ENTITY_RESOLVED",
+            EventType::BatchEntityMergeConflict => "BATCH_ENTITY_MERGE_CONFLICT",
+            EventType::BatchFailurePatternDetected => "BATCH_FAILURE_PATTERN_DETECTED",
+            EventType::BatchHealthReportGenerated => "BATCH_HEALTH_REPORT_GENERATED",
+            EventType::BatchMemoryCompacted => "BATCH_MEMORY_COMPACTED",
+            EventType::BatchLinkRecommended => "BATCH_LINK_RECOMMENDED",
+            EventType::BatchLinkApplied => "BATCH_LINK_APPLIED",
+            EventType::BatchTemplateAnalysisReady => "BATCH_TEMPLATE_ANALYSIS_READY",
             EventType::Custom(s) => s.as_str(),
         }
     }
@@ -185,6 +209,17 @@ impl EventType {
             "BATCH_INTENT_DETECTED" => EventType::BatchIntentDetected,
             "BATCH_DECISION_DETECTED" => EventType::BatchDecisionDetected,
             "BATCH_CONTEXT_INJECTED" => EventType::BatchContextInjected,
+            "BATCH_SKILL_MERGE_SUGGESTED" => EventType::BatchSkillMergeSuggested,
+            "BATCH_SKILL_MERGE_APPLIED" => EventType::BatchSkillMergeApplied,
+            "BATCH_FRAGMENT_REFINED" => EventType::BatchFragmentRefined,
+            "BATCH_ENTITY_RESOLVED" => EventType::BatchEntityResolved,
+            "BATCH_ENTITY_MERGE_CONFLICT" => EventType::BatchEntityMergeConflict,
+            "BATCH_FAILURE_PATTERN_DETECTED" => EventType::BatchFailurePatternDetected,
+            "BATCH_HEALTH_REPORT_GENERATED" => EventType::BatchHealthReportGenerated,
+            "BATCH_MEMORY_COMPACTED" => EventType::BatchMemoryCompacted,
+            "BATCH_LINK_RECOMMENDED" => EventType::BatchLinkRecommended,
+            "BATCH_LINK_APPLIED" => EventType::BatchLinkApplied,
+            "BATCH_TEMPLATE_ANALYSIS_READY" => EventType::BatchTemplateAnalysisReady,
             other => EventType::Custom(other.to_string()),
         }
     }

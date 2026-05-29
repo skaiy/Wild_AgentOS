@@ -10,14 +10,17 @@ use uuid::Uuid;
 
 use crate::batch::emitter::BatchEventEmitter;
 use crate::batch::error::BatchError;
+use crate::batch::handlers;
 use crate::batch::trigger::TriggerSystem;
 use crate::batch::types::{
     BatchAgentConfig, BatchAgentStatus, BatchMetrics, ExtractionResult,
 };
 use crate::batch::window::WindowConfig;
 use crate::batch::window::SlidingWindow;
+use crate::config::settings::BatchAgentSettings;
 use crate::core::event_bus::EventBus;
 use crate::core::CoreError;
+use crate::skill_graph::graph_store::SkillGraphStore;
 
 /// Holds the runtime state for a single Batch Agent instance.
 pub struct BatchAgentInstance {
@@ -33,6 +36,7 @@ pub struct BatchAgentManager {
     agents: HashMap<String, BatchAgentInstance>,
     event_bus: Option<Arc<EventBus>>,
     emitter: Option<BatchEventEmitter>,
+    graph_store: Option<Arc<SkillGraphStore>>,
     running: bool,
 }
 
@@ -42,6 +46,7 @@ impl BatchAgentManager {
             agents: HashMap::new(),
             event_bus: None,
             emitter: None,
+            graph_store: None,
             running: false,
         }
     }
@@ -50,6 +55,11 @@ impl BatchAgentManager {
         let emitter = BatchEventEmitter::new(event_bus.clone());
         self.event_bus = Some(event_bus);
         self.emitter = Some(emitter);
+        self
+    }
+
+    pub fn with_graph_store(mut self, graph_store: Arc<SkillGraphStore>) -> Self {
+        self.graph_store = Some(graph_store);
         self
     }
 
@@ -232,6 +242,107 @@ impl BatchAgentManager {
 
     pub fn emitter(&self) -> Option<&BatchEventEmitter> {
         self.emitter.as_ref()
+    }
+
+    /// Register the 8 standard maintenance agents from settings.
+    pub fn register_maintenance_agents(
+        &mut self,
+        settings: &[BatchAgentSettings],
+    ) -> Vec<Result<(), BatchError>> {
+        let mut results = Vec::new();
+        for s in settings {
+            if !s.enabled {
+                continue;
+            }
+            let window_type = s.window_type.as_deref().unwrap_or("manual");
+            let config = BatchAgentConfig {
+                name: s.name.clone(),
+                description: s.description.clone(),
+                enabled: true,
+                window_type: match window_type.to_lowercase().as_str() {
+                    "manual" => crate::batch::types::WindowType::Manual,
+                    "hybrid" => crate::batch::types::WindowType::Hybrid {
+                        max_messages: s.window_max_messages.unwrap_or(5),
+                        max_seconds: s.window_max_seconds.unwrap_or(3600),
+                    },
+                    _ => crate::batch::types::WindowType::MessageCount(
+                        s.window_max_messages.unwrap_or(5),
+                    ),
+                },
+                triggers: s.triggers.iter().map(|t| {
+                    let trigger_type = match t.trigger_type.to_lowercase().as_str() {
+                        s if s.starts_with("cron") => crate::batch::types::TriggerType::CronSchedule(
+                            t.params.get("schedule").cloned().unwrap_or_default(),
+                        ),
+                        "intent_shift" | "intent" => crate::batch::types::TriggerType::IntentShift,
+                        s if s.starts_with("message") => crate::batch::types::TriggerType::MessageThreshold(
+                            t.params.get("threshold").and_then(|v| v.parse().ok()).unwrap_or(5),
+                        ),
+                        s if s.starts_with("custom") => crate::batch::types::TriggerType::CustomEvent(
+                            t.params.get("event").cloned().unwrap_or_default(),
+                        ),
+                        _ => crate::batch::types::TriggerType::WindowFull,
+                    };
+                    crate::batch::types::TriggerConfig {
+                        trigger_type,
+                        params: t.params.clone(),
+                    }
+                }).collect(),
+                prompt_source: crate::batch::types::PromptSource::HybridWithTemplate,
+                prompt_template_path: s.prompt_template_path.clone(),
+                prompt_template_name: s.prompt_template_name.clone()
+                    .or_else(|| Some(s.name.clone())),
+                prompt_params: std::collections::HashMap::new(),
+                business_domain: s.business_domain.clone(),
+                entity_types: crate::batch::vocabulary::EntityTypeConfig {
+                    vocabulary: s.entity_types.clone(),
+                    custom: vec![],
+                },
+                relation_types: crate::batch::vocabulary::RelationTypeConfig {
+                    vocabulary: s.relation_types.clone(),
+                    custom: vec![],
+                },
+                intent_types: crate::batch::vocabulary::IntentTypeConfig {
+                    vocabulary: s.intent_types.clone(),
+                    custom: vec![],
+                },
+                model: s.model.clone(),
+                temperature: s.temperature,
+                max_retries: s.max_retries.unwrap_or(3),
+                timeout_seconds: s.timeout_seconds.unwrap_or(120),
+                emit_on: s.emit_on.iter().map(|e| match e.to_lowercase().as_str() {
+                    "new_relation" => crate::batch::types::EmitCondition::NewRelation,
+                    "intent_detected" => crate::batch::types::EmitCondition::IntentDetected(vec![]),
+                    "confidence_above" => crate::batch::types::EmitCondition::ConfidenceAbove(0.8),
+                    _ => crate::batch::types::EmitCondition::Always,
+                }).collect(),
+                inject_user_reminders: s.inject_user_reminders,
+                inject_context_summary: s.inject_context_summary,
+                inject_related_entities: true,
+            };
+            results.push(self.register(config));
+        }
+        results
+    }
+
+    /// Run the post-extraction handler for a maintenance agent.
+    /// This should be called after `ExtractorPipeline` produces a result for a maintenance agent.
+    pub fn run_maintenance_handler(
+        &self,
+        agent_name: &str,
+        result: &ExtractionResult,
+    ) -> handlers::HandlerOutcome {
+        match self.graph_store {
+            Some(ref graph) => handlers::run_handler(agent_name, result, graph.as_ref()),
+            None => {
+                warn!("No SkillGraphStore available — maintenance handler skipped for {}", agent_name);
+                handlers::HandlerOutcome {
+                    handler_name: agent_name.to_string(),
+                    actions_taken: vec!["No graph store available".to_string()],
+                    ..Default::default()
+                }
+            }
+        }
     }
 }
 

@@ -11,6 +11,7 @@ pub mod persister;
 pub mod prompt;
 pub mod bridge;
 pub mod context;
+pub mod handlers;
 pub mod validator;
 
 pub use bridge::BatchEventBridge;
