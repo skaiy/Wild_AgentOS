@@ -6,7 +6,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tracing::info;
 
-use crate::memory::{l0_store, l2_blackboard, l3_projection};
+use crate::memory::{l0_store, l2_blackboard, l3_projection, EvictionConfig};
 use crate::core::event_bus::EventBus;
 use crate::core::validation::ValidationEngine;
 use crate::core::CheckpointManager;
@@ -73,6 +73,8 @@ pub struct CoreConfig {
     pub l0_storage_path: String,
     pub event_buffer_size: usize,
     pub enable_metrics: bool,
+    /// 全局 L1 淘汰策略配置 (None = 按 Agent Role 自动选择)
+    pub eviction_config: Option<EvictionConfig>,
 }
 
 impl Default for CoreConfig {
@@ -83,6 +85,7 @@ impl Default for CoreConfig {
             l0_storage_path: "./data/l0".to_string(),
             event_buffer_size: 1000,
             enable_metrics: true,
+            eviction_config: None,
         }
     }
 }
@@ -108,6 +111,7 @@ impl CoreConfig {
                 .ok()
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(true),
+            eviction_config: None,
         }
     }
 }

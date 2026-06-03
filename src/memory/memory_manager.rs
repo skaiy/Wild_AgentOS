@@ -87,7 +87,10 @@ impl MemoryManager {
 
     /// 创建新的 L1 session
     pub fn create_session(&mut self, agent_id: &str, agent_role: &str, task_iri: &str) -> L1Session {
-        let session = L1Session::new(agent_id, agent_role, task_iri);
+        let session = match self.config.eviction_config {
+            Some(cfg) => L1Session::with_config(agent_id, agent_role, task_iri, 2000, cfg),
+            None => L1Session::new(agent_id, agent_role, task_iri),
+        };
         self.l1_active_count.fetch_add(1, Ordering::Relaxed);
         debug!(
             session_id = %session.session_id(),
@@ -348,5 +351,47 @@ impl MemoryManager {
             "l2_bytes": self.l2.total_bytes(),
             "active_sessions": self.session_count(),
         })
+    }
+
+    // ========== Agent 态势感知委派 ==========
+
+    /// 注册 Agent 到作战地图
+    pub fn register_agent(&self, agent_id: &str, role: &str, task_iri: &str) {
+        self.l2.register_agent(agent_id, role, task_iri);
+    }
+
+    /// 更新 Agent 心跳
+    pub fn update_agent_heartbeat(&self, agent_id: &str) {
+        self.l2.update_agent_heartbeat(agent_id);
+    }
+
+    /// 更新 Agent 状态
+    pub fn update_agent_status(&self, agent_id: &str, status: crate::memory::AgentActivity, operation: Option<&str>) {
+        self.l2.update_agent_status(agent_id, status, operation);
+    }
+
+    /// 获取 Agent 状态
+    pub fn get_agent_status(&self, agent_id: &str) -> Option<crate::memory::AgentStatus> {
+        self.l2.get_agent_status(agent_id)
+    }
+
+    /// 列出活跃 Agent
+    pub fn list_active_agents(&self) -> Vec<crate::memory::AgentStatus> {
+        self.l2.list_active_agents()
+    }
+
+    /// 注销 Agent
+    pub fn unregister_agent(&self, agent_id: &str) {
+        self.l2.unregister_agent(agent_id);
+    }
+
+    /// 检测心跳超时的 Agent
+    pub fn detect_stale_agents(&self, max_idle_seconds: i64) -> Vec<String> {
+        self.l2.detect_stale_agents(max_idle_seconds)
+    }
+
+    /// 获取 Blackboard 引用
+    pub fn blackboard(&self) -> &Arc<Blackboard> {
+        &self.l2
     }
 }

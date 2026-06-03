@@ -175,8 +175,6 @@ impl TypeRouter {
                     "summary_only".to_string(),
                 ])
                 .with_events(vec![
-                    "DEADLINE_APPROACHING".to_string(),
-                    "BUDGET_EXCEEDED".to_string(),
                     "5W2H_CREATED".to_string(),
                     "5W2H_UPDATED".to_string(),
                 ])

@@ -811,19 +811,9 @@ impl AgentRunner {
                 .render_prompt(&role_lower, "skeleton", &vars, false, None)
         {
             let md = format!(
-                r#"# {} Agent.md
-
-{}
-
-## 可用工具
-{}
-
-{}
-"#,
+                "# {} Agent.md\n\n{}\n",
                 role_name,
                 rendered,
-                tools_list.join(", "),
-                format_constraint
             );
             debug!(role = %role_name, supports_reasoning = supports_reasoning, "=== agent.md (from template) ===\n{}", md);
             return md;
@@ -914,8 +904,8 @@ impl AgentRunner {
         };
 
         let md = format!(
-            "# {} Agent.md\n\n角色: {}\n任务: {}\n可用工具: {}\n工作方式: {}\n\n{}\n\n重要：完成你的职责后，直接输出最终结果，不要再调用工具。你的回复应包含完整的结论或结果。{}",
-            role_name, role_name, objective, tools_list.join(", "), role_prompt, context_section, format_constraint
+            "# {} Agent.md\n\n角色: {}\n任务: {}\n工作方式: {}\n\n{}\n\n重要：完成你的职责后，直接输出最终结果，不要再调用工具。你的回复应包含完整的结论或结果。",
+            role_name, role_name, objective, role_prompt, context_section
         );
         debug!(role = %role_name, "=== agent.md (fallback) ===\n{}", md);
         md
@@ -1176,6 +1166,10 @@ impl AgentRunner {
                 );
                 if let Some(sys_msg) = messages.first_mut() {
                     if sys_msg.role == "system" {
+                        // 替换而非追加：移除旧的 ToolGuard 块，防止每轮累积膨胀
+                        if let Some(pos) = sys_msg.content.find("\n\n[ToolGuard 约束指令]") {
+                            sys_msg.content.truncate(pos);
+                        }
                         sys_msg.content.push_str(&prompt);
                     }
                 }
@@ -1718,78 +1712,6 @@ impl AgentRunner {
                                         tool_call_id: Some(c.id.clone()),
                                         reasoning_content: None,
                                     });
-                                }
-                            }
-
-                            // Phase 1: Cross-file import discovery
-                            if name == "file_read"
-                                && result.get("error").is_none()
-                                && !recovery_mode_active
-                            {
-                                if let (Some(file_path), Some(lines)) = (
-                                    result.get("path").and_then(|v| v.as_str()),
-                                    result.get("lines").and_then(|v| v.as_array()),
-                                ) {
-                                    let content: String = lines
-                                        .iter()
-                                        .filter_map(|v| v.as_str())
-                                        .collect::<Vec<_>>()
-                                        .join("\n");
-                                    let discovered =
-                                        crate::tools::import_scanner::scan_imports(
-                                            file_path,
-                                            &content,
-                                        );
-                                    if !discovered.is_empty() {
-                                        info!(
-                                            "[import-scanner] {}: discovered {} local imports",
-                                            file_path,
-                                            discovered.len()
-                                        );
-                                        for import in &discovered {
-                                            let import_args =
-                                                serde_json::json!({"path": import.resolved_path});
-                                            let handler = {
-                                                let executor = self
-                                                    .tool_executor
-                                                    .read()
-                                                    .unwrap();
-                                                executor.get_handler("file_read")
-                                            };
-                                            if let Some(f) = handler {
-                                                let import_result = f(import_args)
-                                                    .await
-                                                    .unwrap_or_else(|e| {
-                                                        serde_json::json!({"error": e})
-                                                    });
-                                                let import_raw = serde_json::to_string(
-                                                    &import_result,
-                                                )
-                                                .unwrap_or_default();
-                                                let import_routed = self
-                                                    .route_tool_result(
-                                                        &import_raw,
-                                                        "file_read",
-                                                        &c.id,
-                                                    )
-                                                    .await;
-                                                messages.push(ChatMessage {
-                                                    role: "tool".to_string(),
-                                                    content: import_routed,
-                                                    name: None,
-                                                    tool_calls: None,
-                                                    tool_call_id: Some(format!(
-                                                        "{}-auto-{}",
-                                                        c.id,
-                                                        import
-                                                            .resolved_path
-                                                            .replace('/', "_")
-                                                    )),
-                                                    reasoning_content: None,
-                                                });
-                                            }
-                                        }
-                                    }
                                 }
                             }
                         }

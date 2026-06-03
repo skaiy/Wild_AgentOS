@@ -146,6 +146,16 @@ impl UnifiedGateway {
         tools: Option<Vec<Value>>,
         tool_choice: Option<&str>,
     ) -> Result<ChatCompletionResponse, CoreError> {
+        // Pre-validate messages: check for empty content that might cause 400 errors
+        for (i, msg) in messages.iter().enumerate() {
+            if msg.content.trim().is_empty() && msg.role != "assistant" {
+                warn!(
+                    msg_idx = i, role = %msg.role,
+                    "Message has empty content — this may cause 400 errors from the LLM API"
+                );
+            }
+        }
+
         let url = format!("{}/v1/chat/completions", self.base_url);
         let mut body = serde_json::json!({
             "model": model,
@@ -218,9 +228,17 @@ impl UnifiedGateway {
                         }
                     } else {
                         let text = resp.text().await.unwrap_or_default();
-                        warn!(status = %status, body = %text, "LLM API error");
+                        // Embed a preview of the request body into the error message
+                        // for debugging 4xx errors directly from the TUI / result display.
+                        let req_body_str = serde_json::to_string_pretty(&req_body)
+                            .unwrap_or_default();
+                        let req_preview: String = req_body_str
+                            .chars()
+                            .take(8000)
+                            .collect();
+                        warn!(status = %status, body = %text, req_preview = %req_preview, "LLM API error");
                         last_error = Some(CoreError::Internal {
-                            message: format!("LLM API error ({}): {}", status, text),
+                            message: format!("LLM API error ({}): {}\nrequest_preview(8k)={}", status, text, req_preview),
                         });
                         if status.is_client_error() {
                             break;

@@ -572,12 +572,7 @@ impl App {
             self.l2_count = self.l2_bb.total_bytes();
             {
                 let cs = self.proj.cache_stats();
-                self.l3_count = if cs.valid_views > 0 {
-                    cs.total_size_bytes as u64 / (1024 * 1024)
-                } else {
-                    // No materialized projections yet — show configured frame count
-                    self.proj.list_frames().len() as u64
-                };
+            self.l3_count = self.proj.list_frames().len() as u64;
             }
             self.l1_count = self.mm.try_lock()
                 .map(|g| g.l1_session_count())
@@ -1351,6 +1346,11 @@ impl App {
         let sc = if self.is_processing { Color::Yellow } else { Color::Green };
         let dot = if self.is_processing { "\u{25CF}" } else { "\u{25CB}" };
 
+        // Fixed prefix width: dot + Ready + separators + Model + Phase
+        let prefix_w = 1 + 1 + 7 + 1 + 8 + self.model_name.width() + 2 + 8 + 6 + 2 + 12;
+        let max_path_w = (area.width as usize).saturating_sub(prefix_w);
+        let workspace_display = width_truncate(&self.workspace_path, max_path_w);
+
         f.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(dot, Style::default().fg(sc).add_modifier(Modifier::BOLD)),
@@ -1364,7 +1364,7 @@ impl App {
                 Span::styled(format!("{:<6}", self.current_phase), Style::default().fg(pc).add_modifier(Modifier::BOLD)),
                 Span::styled(" |", Style::default().fg(Color::DarkGray)),
                 Span::raw(" Workspace: "),
-                Span::styled(&self.workspace_path, Style::default().fg(Color::Green)),
+                Span::styled(workspace_display, Style::default().fg(Color::Green)),
             ]))
             .style(Style::default().bg(Color::Rgb(30, 30, 40))),
             area,
@@ -1566,63 +1566,47 @@ impl App {
     }
 
     fn render_session_panel(&self, f: &mut Frame, area: Rect) {
+        let cw = (area.width.saturating_sub(2)).max(1) as usize;
         let sid = self.current_task_iri.as_deref().unwrap_or("N/A");
-        // Truncate long IRIs for display
-        let sid_display = if sid.len() > 48 {
-            format!("...{}", &sid[sid.len()-44..])
-        } else {
-            sid.to_string()
-        };
+
+        let content_h = (area.height.saturating_sub(2)).max(1) as usize;
+        let mut lines: Vec<Line<'static>> = Vec::with_capacity(content_h);
+        lines.push(Line::from(vec![Span::styled(width_truncate("Session ID", cw), Style::default().fg(Color::DarkGray))]));
+        lines.push(Line::from(vec![Span::styled(width_truncate(sid, cw), Style::default().fg(Color::Cyan))]));
+        lines.push(Line::from(vec![Span::styled(
+            width_truncate(&format!("Turns: {}  Tools: {}", self.session_turn_count, self.session_tool_call_count), cw),
+            Style::default().fg(Color::White),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            width_truncate(&format!("L1: {}", self.mem_ratio(self.l1_count, self.max_l1_mb)), cw),
+            Style::default().fg(Color::Yellow),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            width_truncate(&format!("L2: {}", self.fmt_l2(self.l2_count, self.max_l2_mb)), cw),
+            Style::default().fg(Color::Yellow),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            width_truncate(&format!("L3: {}", self.mem_ratio(self.l3_count, self.max_l3_mb)), cw),
+            Style::default().fg(Color::Yellow),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            width_truncate(&format!("Tokens: {} (P:{} C:{})",
+                fmt_k(self.total_tokens), fmt_k(self.prompt_tok), fmt_k(self.completion_tok)), cw),
+            Style::default().fg(Color::White),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            width_truncate(&format!("Ratio: {:.0}% / {:.0}%",
+                if self.total_tokens > 0 { self.prompt_tok as f64 / self.total_tokens as f64 * 100.0 } else { 0.0 },
+                if self.total_tokens > 0 { self.completion_tok as f64 / self.total_tokens as f64 * 100.0 } else { 0.0 }), cw),
+            Style::default().fg(Color::White),
+        )]));
+        // 填充空行到整个 content area，防止 ratatui buffer 残留旧内容
+        while lines.len() < content_h {
+            lines.push(Line::from(""));
+        }
 
         f.render_widget(
-            Paragraph::new(Text::from(vec![
-                Line::from(vec![
-                    Span::styled("Session ID", Style::default().fg(Color::DarkGray)),
-                ]),
-                Line::from(vec![
-                    Span::styled(sid_display, Style::default().fg(Color::Cyan)),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("Turns: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(self.session_turn_count.to_string(), Style::default().fg(Color::White)),
-                    Span::raw("  "),
-                    Span::styled("Tools: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(self.session_tool_call_count.to_string(), Style::default().fg(Color::White)),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("L1: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(self.mem_ratio(self.l1_count, self.max_l1_mb), Style::default().fg(Color::Yellow)),
-                ]),
-                Line::from(vec![
-                    Span::styled("L2: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(self.fmt_l2(self.l2_count, self.max_l2_mb), Style::default().fg(Color::Yellow)),
-                ]),
-                Line::from(vec![
-                    Span::styled("L3: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(self.mem_ratio(self.l3_count, self.max_l3_mb), Style::default().fg(Color::Yellow)),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("Tokens: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(fmt_k(self.total_tokens), Style::default().fg(Color::White)),
-                    Span::raw(" ("),
-                    Span::styled("P:".to_string(), Style::default().fg(Color::DarkGray)),
-                    Span::styled(fmt_k(self.prompt_tok), Style::default().fg(Color::Cyan)),
-                    Span::raw(" "),
-                    Span::styled("C:".to_string(), Style::default().fg(Color::DarkGray)),
-                    Span::styled(fmt_k(self.completion_tok), Style::default().fg(Color::Green)),
-                    Span::raw(")"),
-                ]),
-                Line::from(vec![
-                    Span::styled("Ratio: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{:.0}% / {:.0}%",
-                        if self.total_tokens > 0 { self.prompt_tok as f64 / self.total_tokens as f64 * 100.0 } else { 0.0 },
-                        if self.total_tokens > 0 { self.completion_tok as f64 / self.total_tokens as f64 * 100.0 } else { 0.0 },
-                    ), Style::default().fg(Color::White)),
-                ]),
-            ]))
+            Paragraph::new(Text::from(lines))
             .block(Block::default().borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray))
                 .title(" Stats ")
@@ -1632,14 +1616,17 @@ impl App {
     }
 
     fn render_events_panel(&self, f: &mut Frame, area: Rect) {
+        let cw = (area.width.saturating_sub(4)).max(4) as usize;
         let max = area.height.saturating_sub(2) as usize;
         let items: Vec<ListItem> = self.status_events.iter().rev().take(max).map(|ev| {
             let (ic, clr) = event_icon(&ev.event_type);
+            let type_w = 10.min(cw / 2);
+            let payload_w = cw.saturating_sub(type_w + 2);
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{} ", ic), Style::default().fg(clr)),
-                Span::styled(&ev.event_type, Style::default().fg(Color::Yellow)),
+                Span::styled(width_truncate(&ev.event_type, type_w), Style::default().fg(Color::Yellow)),
                 Span::raw(" "),
-                Span::styled(width_truncate(&ev.payload, 50), Style::default().fg(Color::DarkGray)),
+                Span::styled(width_truncate(&ev.payload, payload_w), Style::default().fg(Color::DarkGray)),
             ]))
         }).collect();
 

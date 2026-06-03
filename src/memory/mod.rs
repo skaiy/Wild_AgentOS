@@ -11,8 +11,8 @@ pub mod prefetch_engine;
 pub mod scheduler;
 
 pub use l0_store::{L0Store, MesiState};
-pub use l1_session::L1Session;
-pub use l2_blackboard::Blackboard;
+pub use l1_session::{cosine_similarity, EvictionConfig, L1Session, L1Turn};
+pub use l2_blackboard::{AgentActivity, AgentStatus, Blackboard, LockType, ResourceLock, TaskTreeNode};
 pub use l3_projection::ProjectionEngine;
 pub use memory_bus::MemoryBus;
 pub use memory_manager::MemoryManager;

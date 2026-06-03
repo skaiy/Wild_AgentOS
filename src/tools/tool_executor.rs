@@ -1259,19 +1259,49 @@ async fn execute_bash(input: Value) -> Result<Value, String> {
     {
         let params: BashInput = serde_json::from_value(input).map_err(|e| format!("Invalid input: {}", e))?;
         use std::process::Command;
+        use std::sync::{Arc, Mutex};
+        use std::thread;
         let timeout_ms = params.timeout.unwrap_or(60_000);
 
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(&params.command)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        #[cfg(unix)]
+        let spawn_child = |cmd: &str| -> Result<std::process::Child, String> {
+            let mut c = Command::new("sh");
+            c.arg("-c")
+                .arg(cmd)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            #[cfg(unix)]
+            {
+                c.process_group(0);
+            }
+            c.spawn().map_err(|e| format!("Spawn error: {}", e))
+        };
+
+        let spawn_readers = |child: &mut std::process::Child|
+            -> (Arc<Mutex<String>>, Arc<Mutex<String>>)
         {
-            cmd.process_group(0);
-        }
-        let mut child = cmd.spawn()
-            .map_err(|e| format!("Spawn error: {}", e))?;
+            let out_buf = Arc::new(Mutex::new(String::new()));
+            let err_buf = Arc::new(Mutex::new(String::new()));
+            if let Some(stdout) = child.stdout.take() {
+                let buf = out_buf.clone();
+                thread::spawn(move || {
+                    if let Ok(output) = std::io::read_to_string(stdout) {
+                        *buf.lock().unwrap() = output;
+                    }
+                });
+            }
+            if let Some(stderr) = child.stderr.take() {
+                let buf = err_buf.clone();
+                thread::spawn(move || {
+                    if let Ok(output) = std::io::read_to_string(stderr) {
+                        *buf.lock().unwrap() = output;
+                    }
+                });
+            }
+            (out_buf, err_buf)
+        };
+
+        let mut child = spawn_child(&params.command)?;
+        let (mut stdout_buf, mut stderr_buf) = spawn_readers(&mut child);
 
         let mut start = std::time::Instant::now();
         let mut max_dur = std::time::Duration::from_millis(timeout_ms);
@@ -1279,8 +1309,10 @@ async fn execute_bash(input: Value) -> Result<Value, String> {
         let result = loop {
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    let stdout = read_with_timeout(child.stdout.take(), 5000);
-                    let stderr = read_with_timeout(child.stderr.take(), 5000);
+                    // brief pause for reader threads to finish
+                    thread::sleep(std::time::Duration::from_millis(50));
+                    let stdout = stdout_buf.lock().unwrap().clone();
+                    let stderr = stderr_buf.lock().unwrap().clone();
                     let code = status.code().unwrap_or(-1);
                     break json!({
                         "command": params.command, "exit_code": code,
@@ -1297,17 +1329,10 @@ async fn execute_bash(input: Value) -> Result<Value, String> {
                             );
                             let _ = child.kill();
                             kill_process_group(&child);
-                            let mut cmd = Command::new("sh");
-                            cmd.arg("-c")
-                                .arg(&params.command)
-                                .stdout(std::process::Stdio::piped())
-                                .stderr(std::process::Stdio::piped());
-                            #[cfg(unix)]
-                            {
-                                cmd.process_group(0);
-                            }
-                            child = cmd.spawn()
-                                .map_err(|e| format!("Spawn error on retry: {}", e))?;
+                            child = spawn_child(&params.command)?;
+                            let (o, e) = spawn_readers(&mut child);
+                            stdout_buf = o;
+                            stderr_buf = e;
                             max_dur = std::time::Duration::from_millis(timeout_ms * 2);
                             start = std::time::Instant::now();
                             attempts = 1;
@@ -1315,8 +1340,8 @@ async fn execute_bash(input: Value) -> Result<Value, String> {
                         }
                         let _ = child.kill();
                         kill_process_group(&child);
-                        let stdout = read_with_timeout(child.stdout.take(), 2000);
-                        let stderr = read_with_timeout(child.stderr.take(), 2000);
+                        let stdout = stdout_buf.lock().unwrap().clone();
+                        let stderr = stderr_buf.lock().unwrap().clone();
                         break json!({
                             "command": params.command, "timed_out": true,
                             "stdout": stdout, "stderr": stderr,

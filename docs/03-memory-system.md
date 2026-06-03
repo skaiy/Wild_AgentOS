@@ -216,7 +216,134 @@ graph TB
     SA["SA"] -->|监控| AUDIT
 ```
 
-### 3.2.4 L3 Projection — 投影引擎
+### 3.2.4 L2 作战地图增强
+
+**实现状态**: ✅ 完整 (v2.1.0)
+
+L2 Blackboard 扩展了作战地图（Battle Map）能力，使 Agent 能感知全局态势、协调资源、跟踪跨任务依赖。
+
+#### Agent 态势感知 (AgentTracker)
+
+Blackboard 新增 `agent_registry` 字段（`RwLock<HashMap<String, AgentStatus>>`），实时跟踪每个 Agent 的状态：
+
+```rust
+pub struct AgentStatus {
+    pub agent_id: String,
+    pub agent_role: String,       // Plan/Do/Check/Act/Supervisor
+    pub task_iri: String,
+    pub status: AgentActivity,    // Idle/Working/Blocked/Error
+    pub started_at: DateTime<Utc>,
+    pub last_heartbeat: DateTime<Utc>,
+    pub current_operation: Option<String>,  // 当前操作描述
+    pub resource_locks: Vec<ResourceLock>,  // 持有的资源锁
+}
+```
+
+**方法**:
+
+| 方法 | 功能 |
+|------|------|
+| `register_agent(id, role, task)` | 注册 Agent 到作战地图 |
+| `update_agent_status(id, activity, op)` | 更新 Agent 活动状态 |
+| `update_agent_heartbeat(id)` | 更新心跳时间戳 |
+| `get_agent_status(id)` | 查询单个 Agent 状态 |
+| `list_active_agents()` | 列出所有活跃 Agent |
+| `unregister_agent(id)` | 从作战地图移除 Agent |
+| `detect_stale_agents(max_idle_secs)` | 检测心跳超时的 Agent |
+
+**MemoryManager 委派**: `MemoryManager` 提供上述同名方法，通过 `self.l2` 委派到 Blackboard。
+
+#### 资源锁定 (ResourceLock)
+
+资源锁防止多 Agent 并发访问同一资源导致冲突：
+
+```rust
+pub enum LockType { Read, Write, Exclusive }
+pub struct ResourceLock {
+    pub resource_type: String,  // "file", "db", "api", "graph"
+    pub resource_id: String,
+    pub acquired_at: DateTime<Utc>,
+    pub acquired_by: String,     // agent_id
+    pub lock_type: LockType,
+}
+```
+
+**冲突规则**:
+- Exclusive 与所有锁类型互斥
+- Write 与其它 Write 互斥
+- Read 可共存（多个 Read 允许并发）
+- 同一 Agent 对自己持有的锁不冲突
+
+**方法**: `acquire_resource()`, `release_resource()`, `release_agent_resources()`, `list_resource_locks()`, `check_resource_available()`
+
+#### 跨任务依赖 (TaskDAG)
+
+`TaskTreeNode` 新增 `dependencies` / `dependents` 字段，支持跨任务依赖跟踪：
+
+```rust
+pub struct TaskTreeNode {
+    pub task_iri: String,
+    pub parent: Option<String>,
+    pub children: Vec<String>,
+    pub dependencies: Vec<String>,     // 跨任务依赖 (IRI 列表)
+    pub dependents: Vec<String>,       // 反向索引
+    pub status: String,
+    pub node_iris: Vec<String>,
+}
+```
+
+**方法**: `add_task_dependency()`, `remove_task_dependency()`, `get_task_dependencies()`, `get_task_dependents()`, `get_task_dag()`
+
+`get_task_dag()` 使用 Kahn 算法计算拓扑层级，返回 `Vec<Vec<String>>`，每层可并行执行：
+
+```
+Layer 0: [task_a]
+Layer 1: [task_b, task_c]   ← b 和 c 可并行
+Layer 2: [task_d]
+```
+
+#### blackboard:shared 协调区域 (SharedZone)
+
+多 Agent 通过 `blackboard:shared` 命名图交换协调消息和共享状态：
+
+**协调消息**:
+
+```rust
+pub struct CoordinationMessage {
+    pub from_agent: String,
+    pub msg_type: CoordinationMsgType,  // TaskAnnouncement | ProgressUpdate | ResourceRequest | ConflictWarning | SyncRequest
+    pub payload: serde_json::Value,
+    pub timestamp: DateTime<Utc>,
+}
+```
+
+**方法**: `publish_coordination()`, `read_coordination_messages()`, `read_coordination_messages_since(since)`
+
+每条消息写入独立 `iri://coordination/{uuid}` 节点，多 Agent 并行发布不冲突。
+
+**共享状态**:
+
+```rust
+pub fn publish_shared_state(&self, task_iri: &str, state: &Value) -> Result<(), CoreError>;
+pub fn get_shared_state(&self, task_iri: &str) -> Result<Option<Value>, CoreError>;
+```
+
+**Agent 快照同步**: `publish_agent_snapshot_to_shared(agent_id)` 将 Agent 状态快照发布到 `blackboard:shared`，使 SPARQL 可直接查询态势数据：
+
+```sparql
+-- 查询所有 Working 的 DA
+SELECT ?agent ?task ?operation WHERE {
+  GRAPH <blackboard:shared> {
+    ?agent a <http://agent-os.org/type/AgentSnapshot> ;
+           <http://agent-os.org/prop/agent_role> "Do" ;
+           <http://agent-os.org/prop/status> "Working" ;
+           <http://agent-os.org/prop/current_operation> ?operation ;
+           <http://agent-os.org/prop/task_iri> ?task .
+  }
+}
+```
+
+### 3.2.5 L3 Projection — 投影引擎
 
 **文件**: `src/memory/l3_projection.rs`  
 **实现状态**: ✅ 完整

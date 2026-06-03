@@ -1296,6 +1296,9 @@ impl SupervisorAgent {
                     let mut payloads = Vec::new();
                     if let Some(ref mut receiver) = self.event_receiver {
                         while let Ok(event) = receiver.try_recv() {
+                            if event.task_iri != task_iri {
+                                continue;
+                            }
                             if event.event_type == "USER_SUPPLEMENTARY_INPUT" {
                                 payloads.push(event.payload.clone());
                             }
@@ -1357,10 +1360,13 @@ impl SupervisorAgent {
 
                 if result.status == "failed" {
                     warn!(role = ?step.role, step_id = %step.step_id, "Agent failed, aborting plan");
+                    let error_detail = result.errors.first()
+                        .map(|e| format!("\n\n**Error details**: {}", e))
+                        .unwrap_or_default();
                     return Ok(TaskResult {
                         task_iri: task_iri.to_string(),
                         status: "failed".to_string(),
-                        summary: format!("Agent {:?} failed at step {}", step.role, step.step_id),
+                        summary: format!("Agent {:?} failed at step {}{}", step.role, step.step_id, error_detail),
                         output: None,
                         jsonld_output: None,
                         artifacts: Vec::new(),
@@ -1964,6 +1970,9 @@ impl SupervisorAgent {
         let mut pending_interventions: Vec<crate::perception::proactive_engine::InterventionPlan> = Vec::new();
         if let Some(ref mut receiver) = self.event_receiver {
             while let Ok(event) = receiver.try_recv() {
+                if event.task_iri != task_iri {
+                    continue;
+                }
                 match event.event_type.as_str() {
                     "USER_SUPPLEMENTARY_INPUT" => {
                         supp_payloads.push(event.payload.clone());
@@ -2247,9 +2256,22 @@ impl SupervisorAgent {
     ) -> Result<TaskResult, CoreError> {
         let cycle_id = self.start_cycle(user_input, task_iri).await?;
 
-        let five_w2h = self.extract_5w2h_from_input(user_input).await;
+        let mut five_w2h = self.extract_5w2h_from_input(user_input).await;
         let task_id = task_iri.strip_prefix("iri://task/").unwrap_or_else(|| task_iri.strip_prefix("iri://").unwrap_or(task_iri));
         let five_w2h_iri = format!("iri://task/{}/5w2h", task_id);
+
+        // 注入当前工作目录作为执行环境，使 LLM 知道在哪里创建文件
+        if five_w2h.where_.as_ref().and_then(|w| w.execution_environment.as_ref()).is_none() {
+            if let Ok(cwd) = std::env::current_dir() {
+                let cwd_str = cwd.to_string_lossy().to_string();
+                five_w2h = five_w2h.with_where(crate::core::five_w2h::WhereDetail {
+                    data_sources: vec![],
+                    execution_environment: Some(cwd_str),
+                    target_repository: None,
+                    target_branch: None,
+                });
+            }
+        }
         if let Ok(json_ld) = five_w2h.to_json_ld(task_iri) {
             let _ = self.runner.l0_store.store(&five_w2h_iri, &json_ld.to_string());
             let cfg = crate::CoreConfig::default();
@@ -2288,6 +2310,9 @@ impl SupervisorAgent {
         let mut pending_interventions: Vec<crate::perception::proactive_engine::InterventionPlan> = Vec::new();
         if let Some(ref mut receiver) = self.event_receiver {
             while let Ok(event) = receiver.try_recv() {
+                if event.task_iri != task_iri {
+                    continue;
+                }
                 match event.event_type.as_str() {
                     "INTERVENTION_REQUIRED" => {
                         if let Ok(plan) = serde_json::from_str::<crate::perception::proactive_engine::InterventionPlan>(&event.payload) {

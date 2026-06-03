@@ -32,6 +32,8 @@ pub struct TaskTreeNode {
     pub task_iri: String,
     pub parent: Option<String>,
     pub children: Vec<String>,
+    pub dependencies: Vec<String>,
+    pub dependents: Vec<String>,
     pub status: String,
     pub node_iris: Vec<String>,
 }
@@ -44,6 +46,10 @@ pub struct Blackboard {
     node_count: AtomicU64,
     total_bytes: AtomicU64,
     permission_matrix: PermissionMatrix,
+    // 作战地图: Agent 态势感知
+    agent_registry: RwLock<HashMap<String, AgentStatus>>,
+    // 作战地图: 资源锁表
+    resource_locks: RwLock<Vec<ResourceLock>>,
 }
 
 impl Blackboard {
@@ -58,6 +64,8 @@ impl Blackboard {
             node_count: AtomicU64::new(0),
             total_bytes: AtomicU64::new(0),
             permission_matrix: PermissionMatrix::new(),
+            agent_registry: RwLock::new(HashMap::new()),
+            resource_locks: RwLock::new(Vec::new()),
         })
     }
 
@@ -71,6 +79,8 @@ impl Blackboard {
             node_count: AtomicU64::new(0),
             total_bytes: AtomicU64::new(0),
             permission_matrix: PermissionMatrix::new(),
+            agent_registry: RwLock::new(HashMap::new()),
+            resource_locks: RwLock::new(Vec::new()),
         })
     }
 
@@ -148,6 +158,8 @@ impl Blackboard {
                 task_iri: task_iri.clone(),
                 parent: None,
                 children: Vec::new(),
+                dependencies: Vec::new(),
+                dependents: Vec::new(),
                 status: "running".to_string(),
                 node_iris: Vec::new(),
             });
@@ -371,6 +383,8 @@ impl Blackboard {
             task_iri: task_iri.to_string(),
             parent: parent.clone(),
             children: Vec::new(),
+            dependencies: Vec::new(),
+            dependents: Vec::new(),
             status: "running".to_string(),
             node_iris: Vec::new(),
         });
@@ -578,6 +592,8 @@ impl Blackboard {
                 task_iri: task_iri.clone(),
                 parent: None,
                 children: Vec::new(),
+                dependencies: Vec::new(),
+                dependents: Vec::new(),
                 status: "running".to_string(),
                 node_iris: Vec::new(),
             });
@@ -715,6 +731,8 @@ impl Blackboard {
                     task_iri: task_iri.clone(),
                     parent: None,
                     children: Vec::new(),
+                    dependencies: Vec::new(),
+                    dependents: Vec::new(),
                     status: "running".to_string(),
                     node_iris: Vec::new(),
                 });
@@ -821,6 +839,8 @@ impl Blackboard {
                     task_iri: task_iri.clone(),
                     parent: None,
                     children: Vec::new(),
+                    dependencies: Vec::new(),
+                    dependents: Vec::new(),
                     status: "running".to_string(),
                     node_iris: Vec::new(),
                 });
@@ -894,6 +914,376 @@ impl Blackboard {
     pub fn get_permission_matrix(&self) -> &PermissionMatrix {
         &self.permission_matrix
     }
+
+    // ========== Agent 态势感知 ==========
+
+    pub fn register_agent(&self, agent_id: &str, role: &str, task_iri: &str) {
+        let mut registry = self.agent_registry.write();
+        let now = chrono::Utc::now();
+        registry.insert(agent_id.to_string(), AgentStatus {
+            agent_id: agent_id.to_string(),
+            agent_role: role.to_string(),
+            task_iri: task_iri.to_string(),
+            status: AgentActivity::Idle,
+            started_at: now,
+            last_heartbeat: now,
+            current_operation: None,
+            resource_locks: Vec::new(),
+        });
+        debug!(agent_id = %agent_id, role = %role, "Agent registered in battle map");
+    }
+
+    pub fn update_agent_heartbeat(&self, agent_id: &str) {
+        let mut registry = self.agent_registry.write();
+        if let Some(status) = registry.get_mut(agent_id) {
+            status.last_heartbeat = chrono::Utc::now();
+        }
+    }
+
+    pub fn update_agent_status(&self, agent_id: &str, status: AgentActivity, operation: Option<&str>) {
+        let mut registry = self.agent_registry.write();
+        if let Some(s) = registry.get_mut(agent_id) {
+            s.status = status;
+            s.current_operation = operation.map(|o| o.to_string());
+            s.last_heartbeat = chrono::Utc::now();
+        }
+    }
+
+    pub fn get_agent_status(&self, agent_id: &str) -> Option<AgentStatus> {
+        self.agent_registry.read().get(agent_id).cloned()
+    }
+
+    pub fn list_active_agents(&self) -> Vec<AgentStatus> {
+        self.agent_registry.read().values().cloned().collect()
+    }
+
+    pub fn unregister_agent(&self, agent_id: &str) {
+        let mut registry = self.agent_registry.write();
+        if let Some(status) = registry.remove(agent_id) {
+            debug!(agent_id = %agent_id, task_iri = %status.task_iri, "Agent unregistered from battle map");
+        }
+    }
+
+    pub fn detect_stale_agents(&self, max_idle_seconds: i64) -> Vec<String> {
+        let now = chrono::Utc::now();
+        let mut stale = Vec::new();
+        let registry = self.agent_registry.read();
+        for (id, status) in registry.iter() {
+            let elapsed = (now - status.last_heartbeat).num_seconds();
+            if elapsed > max_idle_seconds {
+                stale.push(id.clone());
+            }
+        }
+        stale
+    }
+
+    // ========== 资源锁管理 ==========
+
+    pub fn acquire_resource(&self, lock: ResourceLock) -> Result<bool, CoreError> {
+        let mut locks = self.resource_locks.write();
+
+        // 检查冲突: 同一资源且锁类型互斥
+        let has_conflict = locks.iter().any(|existing| {
+            existing.resource_id == lock.resource_id
+                && existing.acquired_by != lock.acquired_by
+                && (lock.lock_type == LockType::Exclusive
+                    || existing.lock_type == LockType::Exclusive
+                    || (lock.lock_type == LockType::Write && existing.lock_type == LockType::Write))
+        });
+
+        if has_conflict {
+            return Ok(false);
+        }
+
+        locks.push(lock);
+        Ok(true)
+    }
+
+    pub fn release_resource(&self, agent_id: &str, resource_id: &str) {
+        let mut locks = self.resource_locks.write();
+        locks.retain(|l| !(l.acquired_by == agent_id && l.resource_id == resource_id));
+    }
+
+    pub fn release_agent_resources(&self, agent_id: &str) {
+        let mut locks = self.resource_locks.write();
+        locks.retain(|l| l.acquired_by != agent_id);
+    }
+
+    pub fn list_resource_locks(&self) -> Vec<ResourceLock> {
+        self.resource_locks.read().clone()
+    }
+
+    pub fn check_resource_available(&self, resource_id: &str, requested_lock: LockType) -> bool {
+        let locks = self.resource_locks.read();
+        !locks.iter().any(|existing| {
+            existing.resource_id == resource_id
+                && (requested_lock == LockType::Exclusive
+                    || existing.lock_type == LockType::Exclusive
+                    || (requested_lock == LockType::Write && existing.lock_type == LockType::Write))
+        })
+    }
+
+    // ========== 跨任务依赖 ==========
+
+    pub fn add_task_dependency(&self, task_iri: &str, depends_on: &str) {
+        let mut tree = self.task_tree.write();
+        if let Some(node) = tree.get_mut(task_iri) {
+            if !node.dependencies.contains(&depends_on.to_string()) {
+                node.dependencies.push(depends_on.to_string());
+            }
+        }
+        if let Some(dep_node) = tree.get_mut(depends_on) {
+            if !dep_node.dependents.contains(&task_iri.to_string()) {
+                dep_node.dependents.push(task_iri.to_string());
+            }
+        }
+    }
+
+    pub fn remove_task_dependency(&self, task_iri: &str, depends_on: &str) {
+        let mut tree = self.task_tree.write();
+        if let Some(node) = tree.get_mut(task_iri) {
+            node.dependencies.retain(|d| d != depends_on);
+        }
+        if let Some(dep_node) = tree.get_mut(depends_on) {
+            dep_node.dependents.retain(|d| d != task_iri);
+        }
+    }
+
+    pub fn get_task_dependencies(&self, task_iri: &str) -> Vec<String> {
+        self.task_tree.read().get(task_iri)
+            .map(|n| n.dependencies.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn get_task_dependents(&self, task_iri: &str) -> Vec<String> {
+        self.task_tree.read().get(task_iri)
+            .map(|n| n.dependents.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn get_task_dag(&self, task_iri: &str) -> Result<Vec<Vec<String>>, CoreError> {
+        let tree = self.task_tree.read();
+
+        // Build adjacency and collect all reachable nodes via dependencies
+        let mut reachable = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(task_iri.to_string());
+
+        while let Some(current) = queue.pop_front() {
+            if reachable.contains(&current) {
+                continue;
+            }
+            reachable.insert(current.clone());
+            if let Some(node) = tree.get(&current) {
+                for dep in &node.dependencies {
+                    queue.push_back(dep.clone());
+                }
+                for dep in &node.dependents {
+                    queue.push_back(dep.clone());
+                }
+                for child in &node.children {
+                    queue.push_back(child.clone());
+                }
+                if let Some(parent) = &node.parent {
+                    queue.push_back(parent.clone());
+                }
+            }
+        }
+
+        if reachable.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Kahn's algorithm: compute in-degree within the reachable subgraph
+        // Edge direction: dependency -> dependent means "dependency must finish before dependent"
+        let mut in_degree: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut adj: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+        for iri in &reachable {
+            in_degree.entry(iri.clone()).or_insert(0);
+            adj.entry(iri.clone()).or_default();
+        }
+
+        for iri in &reachable {
+            if let Some(node) = tree.get(iri) {
+                // Dependencies: edge from dep -> current (dep must finish before current)
+                for dep in &node.dependencies {
+                    if reachable.contains(dep) {
+                        adj.entry(dep.clone()).or_default().push(iri.clone());
+                        *in_degree.entry(iri.clone()).or_insert(0) += 1;
+                    }
+                }
+                // Parent-child: parent -> child
+                if let Some(parent) = &node.parent {
+                    if reachable.contains(parent) {
+                        adj.entry(parent.clone()).or_default().push(iri.clone());
+                        *in_degree.entry(iri.clone()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        let mut layers = Vec::new();
+        let mut current_layer: Vec<String> = in_degree.iter()
+            .filter(|(_, &deg)| deg == 0)
+            .map(|(iri, _)| iri.clone())
+            .collect();
+        current_layer.sort();
+
+        let mut remaining: std::collections::HashSet<String> = reachable.iter()
+            .filter(|iri| {
+                let deg = in_degree.get(*iri).copied().unwrap_or(0);
+                deg > 0
+            })
+            .cloned()
+            .collect();
+
+        // Track processed in-degree (mutable)
+        let mut current_in_degree = in_degree.clone();
+
+        while !current_layer.is_empty() {
+            layers.push(current_layer.clone());
+
+            let mut next_layer = Vec::new();
+            for node_iri in &current_layer {
+                if let Some(neighbors) = adj.get(node_iri) {
+                    for next in neighbors {
+                        if let Some(deg) = current_in_degree.get_mut(next) {
+                            *deg = deg.saturating_sub(1);
+                            if *deg == 0 {
+                                next_layer.push(next.clone());
+                                remaining.remove(next);
+                            }
+                        }
+                    }
+                }
+            }
+            next_layer.sort();
+            current_layer = next_layer;
+        }
+
+        Ok(layers)
+    }
+
+    // ========== blackboard:shared 协调区域 ==========
+
+    pub fn publish_coordination(&self, msg: &CoordinationMessage) -> Result<(), CoreError> {
+        let iri = format!("iri://coordination/{}", uuid::Uuid::new_v4().hyphenated());
+        let json_ld = serde_json::json!({
+            "@id": &iri,
+            "@type": "CoordinationMessage",
+            "from_agent": msg.from_agent,
+            "msg_type": format!("{:?}", msg.msg_type),
+            "payload": msg.payload,
+            "timestamp": msg.timestamp.to_rfc3339(),
+        });
+        let config = CoreConfig { max_node_size: 65536, ..CoreConfig::default() };
+        self.write_node_to_graph(&iri, &json_ld.to_string(), "blackboard:shared", &config)
+    }
+
+    pub fn read_coordination_messages(&self) -> Result<Vec<CoordinationMessage>, CoreError> {
+        self.read_coordination_messages_since(&chrono::DateTime::UNIX_EPOCH)
+    }
+
+    pub fn read_coordination_messages_since(&self, since: &chrono::DateTime<chrono::Utc>) -> Result<Vec<CoordinationMessage>, CoreError> {
+        let subjects = self.query(
+            "SELECT DISTINCT ?s WHERE { GRAPH <blackboard:shared> { ?s a ?type } } LIMIT 50"
+        ).unwrap_or_default();
+
+        let mut msgs = Vec::new();
+        for r in &subjects {
+            if let Some(s_val) = r.get("?s").and_then(|v| v.as_str()) {
+                let iri = s_val.trim_start_matches('<').trim_end_matches('>');
+                if iri.starts_with("iri://coordination/") {
+                    if let Ok(Some(node)) = self.read_node(iri) {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&node.json_ld) {
+                            let from_agent = parsed.get("from_agent").and_then(|v| v.as_str()).unwrap_or("unknown");
+                            let msg_type_str = parsed.get("msg_type").and_then(|v| v.as_str()).unwrap_or("TaskAnnouncement");
+                            let payload = parsed.get("payload").cloned().unwrap_or(serde_json::Value::Null);
+                            let ts = parsed.get("timestamp").and_then(|v| v.as_str()).and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                .map(|dt| dt.into()).unwrap_or_else(chrono::Utc::now);
+                            if ts < *since {
+                                continue;
+                            }
+                            let msg = CoordinationMessage {
+                                from_agent: from_agent.to_string(),
+                                msg_type: Self::parse_coordination_msg_type(msg_type_str),
+                                payload,
+                                timestamp: ts,
+                            };
+                            msgs.push(msg);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(msgs)
+    }
+
+    fn parse_coordination_msg_type(s: &str) -> CoordinationMsgType {
+        match s {
+            "TaskAnnouncement" => CoordinationMsgType::TaskAnnouncement,
+            "ProgressUpdate" => CoordinationMsgType::ProgressUpdate,
+            "ResourceRequest" => CoordinationMsgType::ResourceRequest,
+            "ConflictWarning" => CoordinationMsgType::ConflictWarning,
+            "SyncRequest" => CoordinationMsgType::SyncRequest,
+            _ => CoordinationMsgType::TaskAnnouncement,
+        }
+    }
+
+
+
+
+    pub fn publish_agent_snapshot_to_shared(&self, agent_id: &str) -> Result<(), CoreError> {
+        let status = match self.get_agent_status(agent_id) {
+            Some(s) => s,
+            None => return Err(CoreError::NodeNotFound { iri: agent_id.to_string() }),
+        };
+        let iri = format!("iri://snapshot/{}/{}", agent_id, uuid::Uuid::new_v4().hyphenated());
+        let snapshot = serde_json::json!({
+            "@id": &iri,
+            "@type": "AgentSnapshot",
+            "agent_id": status.agent_id,
+            "agent_role": status.agent_role,
+            "task_iri": status.task_iri,
+            "status": status.status.to_string(),
+            "started_at": status.started_at.to_rfc3339(),
+            "last_heartbeat": status.last_heartbeat.to_rfc3339(),
+            "current_operation": status.current_operation,
+            "resource_count": status.resource_locks.len(),
+        });
+        let config = CoreConfig { max_node_size: 65536, ..CoreConfig::default() };
+        self.write_node_to_graph(&iri, &snapshot.to_string(), "blackboard:shared", &config)
+    }
+
+    pub fn publish_shared_state(&self, task_iri: &str, state: &serde_json::Value) -> Result<(), CoreError> {
+        let iri = format!("iri://shared/state/{}", task_iri.trim_start_matches("iri://task/"));
+        let payload = serde_json::json!({
+            "@id": &iri,
+            "@type": "SharedState",
+            "task_iri": task_iri,
+            "state": state,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+        });
+        let config = CoreConfig { max_node_size: 65536, ..CoreConfig::default() };
+        self.write_node_to_graph(&iri, &payload.to_string(), "blackboard:shared", &config)
+    }
+
+    pub fn get_shared_state(&self, task_iri: &str) -> Result<Option<serde_json::Value>, CoreError> {
+        let iri = format!("iri://shared/state/{}", task_iri.trim_start_matches("iri://task/"));
+        match self.read_node(&iri) {
+            Ok(Some(node)) => {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&node.json_ld) {
+                    Ok(parsed.get("state").cloned())
+                } else {
+                    Ok(None)
+                }
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 fn extract_task_iri(node_iri: &str) -> Option<String> {
@@ -929,6 +1319,82 @@ fn extract_jsonld_types(parsed: &serde_json::Value) -> Vec<String> {
     } else {
         Vec::new()
     }
+}
+
+// ========== 作战地图类型定义 ==========
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AgentActivity {
+    Idle,
+    Working,
+    Blocked,
+    Error,
+}
+
+impl std::fmt::Display for AgentActivity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentActivity::Idle => write!(f, "Idle"),
+            AgentActivity::Working => write!(f, "Working"),
+            AgentActivity::Blocked => write!(f, "Blocked"),
+            AgentActivity::Error => write!(f, "Error"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AgentStatus {
+    pub agent_id: String,
+    pub agent_role: String,
+    pub task_iri: String,
+    pub status: AgentActivity,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub last_heartbeat: chrono::DateTime<chrono::Utc>,
+    pub current_operation: Option<String>,
+    pub resource_locks: Vec<ResourceLock>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum LockType {
+    Read,
+    Write,
+    Exclusive,
+}
+
+impl std::fmt::Display for LockType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LockType::Read => write!(f, "Read"),
+            LockType::Write => write!(f, "Write"),
+            LockType::Exclusive => write!(f, "Exclusive"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResourceLock {
+    pub resource_type: String,
+    pub resource_id: String,
+    pub acquired_at: chrono::DateTime<chrono::Utc>,
+    pub acquired_by: String,
+    pub lock_type: LockType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CoordinationMsgType {
+    TaskAnnouncement,
+    ProgressUpdate,
+    ResourceRequest,
+    ConflictWarning,
+    SyncRequest,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CoordinationMessage {
+    pub from_agent: String,
+    pub msg_type: CoordinationMsgType,
+    pub payload: serde_json::Value,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1332,5 +1798,340 @@ mod tests {
         
         let node_after = bb.read_node("iri://test/node_1").unwrap();
         assert!(node_after.is_none(), "Node should be deleted from cache");
+    }
+
+    // ========== Agent 态势感知测试 ==========
+
+    #[test]
+    fn test_agent_register_and_status() {
+        let bb = Blackboard::new().unwrap();
+        bb.register_agent("agent_1", "DA", "iri://task/test");
+        let status = bb.get_agent_status("agent_1").expect("Agent should be registered");
+        assert_eq!(status.agent_id, "agent_1");
+        assert_eq!(status.agent_role, "DA");
+        assert_eq!(status.task_iri, "iri://task/test");
+        assert_eq!(status.status, AgentActivity::Idle);
+    }
+
+    #[test]
+    fn test_agent_update_status() {
+        let bb = Blackboard::new().unwrap();
+        bb.register_agent("agent_1", "DA", "iri://task/test");
+        bb.update_agent_status("agent_1", AgentActivity::Working, Some("crunching numbers"));
+        let status = bb.get_agent_status("agent_1").unwrap();
+        assert_eq!(status.status, AgentActivity::Working);
+        assert_eq!(status.current_operation, Some("crunching numbers".to_string()));
+    }
+
+    #[test]
+    fn test_agent_heartbeat_updates_timestamp() {
+        let bb = Blackboard::new().unwrap();
+        bb.register_agent("agent_1", "DA", "iri://task/test");
+        let status_before = bb.get_agent_status("agent_1").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        bb.update_agent_heartbeat("agent_1");
+        let status_after = bb.get_agent_status("agent_1").unwrap();
+        assert!(status_after.last_heartbeat > status_before.last_heartbeat);
+    }
+
+    #[test]
+    fn test_agent_unregister() {
+        let bb = Blackboard::new().unwrap();
+        bb.register_agent("agent_1", "DA", "iri://task/test");
+        assert!(bb.get_agent_status("agent_1").is_some());
+        bb.unregister_agent("agent_1");
+        assert!(bb.get_agent_status("agent_1").is_none());
+    }
+
+    #[test]
+    fn test_list_active_agents() {
+        let bb = Blackboard::new().unwrap();
+        bb.register_agent("agent_1", "DA", "iri://task/a");
+        bb.register_agent("agent_2", "CA", "iri://task/b");
+        let agents = bb.list_active_agents();
+        assert_eq!(agents.len(), 2);
+    }
+
+    #[test]
+    fn test_detect_stale_agents() {
+        let bb = Blackboard::new().unwrap();
+        bb.register_agent("agent_1", "DA", "iri://task/test");
+        // heartbeat just happened, should not be stale
+        let stale = bb.detect_stale_agents(3600);
+        assert!(stale.is_empty(), "Fresh agent should not be stale");
+    }
+
+    // ========== 资源锁测试 ==========
+
+    #[test]
+    fn test_acquire_and_release_lock() {
+        let bb = Blackboard::new().unwrap();
+        let lock = ResourceLock {
+            resource_type: "file".to_string(),
+            resource_id: "file:///data/test.csv".to_string(),
+            acquired_at: chrono::Utc::now(),
+            acquired_by: "agent_1".to_string(),
+            lock_type: LockType::Write,
+        };
+        assert!(bb.acquire_resource(lock).unwrap());
+        assert_eq!(bb.list_resource_locks().len(), 1);
+        bb.release_resource("agent_1", "file:///data/test.csv");
+        assert_eq!(bb.list_resource_locks().len(), 0);
+    }
+
+    #[test]
+    fn test_write_lock_conflict() {
+        let bb = Blackboard::new().unwrap();
+        let lock1 = ResourceLock {
+            resource_type: "file".to_string(),
+            resource_id: "file:///data/test.csv".to_string(),
+            acquired_at: chrono::Utc::now(),
+            acquired_by: "agent_1".to_string(),
+            lock_type: LockType::Write,
+        };
+        assert!(bb.acquire_resource(lock1).unwrap());
+        let lock2 = ResourceLock {
+            resource_type: "file".to_string(),
+            resource_id: "file:///data/test.csv".to_string(),
+            acquired_at: chrono::Utc::now(),
+            acquired_by: "agent_2".to_string(),
+            lock_type: LockType::Write,
+        };
+        assert!(!bb.acquire_resource(lock2).unwrap(), "Two Write locks on same resource should conflict");
+    }
+
+    #[test]
+    fn test_read_lock_no_conflict() {
+        let bb = Blackboard::new().unwrap();
+        let lock1 = ResourceLock {
+            resource_type: "file".to_string(),
+            resource_id: "file:///data/test.csv".to_string(),
+            acquired_at: chrono::Utc::now(),
+            acquired_by: "agent_1".to_string(),
+            lock_type: LockType::Read,
+        };
+        assert!(bb.acquire_resource(lock1).unwrap());
+        let lock2 = ResourceLock {
+            resource_type: "file".to_string(),
+            resource_id: "file:///data/test.csv".to_string(),
+            acquired_at: chrono::Utc::now(),
+            acquired_by: "agent_2".to_string(),
+            lock_type: LockType::Read,
+        };
+        assert!(bb.acquire_resource(lock2).unwrap(), "Two Read locks should coexist");
+    }
+
+    #[test]
+    fn test_exclusive_lock_blocks_all() {
+        let bb = Blackboard::new().unwrap();
+        let lock1 = ResourceLock {
+            resource_type: "db".to_string(),
+            resource_id: "db://crm".to_string(),
+            acquired_at: chrono::Utc::now(),
+            acquired_by: "agent_1".to_string(),
+            lock_type: LockType::Exclusive,
+        };
+        assert!(bb.acquire_resource(lock1).unwrap());
+        // Read lock should also be blocked by Exclusive
+        let lock2 = ResourceLock {
+            resource_type: "db".to_string(),
+            resource_id: "db://crm".to_string(),
+            acquired_at: chrono::Utc::now(),
+            acquired_by: "agent_2".to_string(),
+            lock_type: LockType::Read,
+        };
+        assert!(!bb.acquire_resource(lock2).unwrap(), "Exclusive lock should block Read");
+    }
+
+    #[test]
+    fn test_release_agent_resources() {
+        let bb = Blackboard::new().unwrap();
+        bb.acquire_resource(ResourceLock {
+            resource_type: "file".to_string(), resource_id: "f1".to_string(),
+            acquired_at: chrono::Utc::now(), acquired_by: "agent_1".to_string(),
+            lock_type: LockType::Read,
+        }).unwrap();
+        bb.acquire_resource(ResourceLock {
+            resource_type: "file".to_string(), resource_id: "f2".to_string(),
+            acquired_at: chrono::Utc::now(), acquired_by: "agent_1".to_string(),
+            lock_type: LockType::Read,
+        }).unwrap();
+        assert_eq!(bb.list_resource_locks().len(), 2);
+        bb.release_agent_resources("agent_1");
+        assert_eq!(bb.list_resource_locks().len(), 0);
+    }
+
+    #[test]
+    fn test_check_resource_available() {
+        let bb = Blackboard::new().unwrap();
+        assert!(bb.check_resource_available("file:///data/test.csv", LockType::Write));
+        bb.acquire_resource(ResourceLock {
+            resource_type: "file".to_string(), resource_id: "file:///data/test.csv".to_string(),
+            acquired_at: chrono::Utc::now(), acquired_by: "agent_1".to_string(),
+            lock_type: LockType::Write,
+        }).unwrap();
+        assert!(!bb.check_resource_available("file:///data/test.csv", LockType::Write));
+        assert!(bb.check_resource_available("file:///data/other.csv", LockType::Write));
+    }
+
+    // ========== 跨任务依赖测试 ==========
+
+    #[test]
+    fn test_task_dependency_tracking() {
+        let bb = Blackboard::new().unwrap();
+        bb.register_task("iri://task/parent", None);
+        bb.register_task("iri://task/child", Some("iri://task/parent".to_string()));
+        bb.add_task_dependency("iri://task/child", "iri://task/parent");
+
+        let deps = bb.get_task_dependencies("iri://task/child");
+        assert_eq!(deps, vec!["iri://task/parent"]);
+
+        let dependents = bb.get_task_dependents("iri://task/parent");
+        assert_eq!(dependents, vec!["iri://task/child"]);
+    }
+
+    #[test]
+    fn test_remove_task_dependency() {
+        let bb = Blackboard::new().unwrap();
+        bb.register_task("iri://task/a", None);
+        bb.register_task("iri://task/b", None);
+        bb.add_task_dependency("iri://task/b", "iri://task/a");
+        assert_eq!(bb.get_task_dependencies("iri://task/b").len(), 1);
+        bb.remove_task_dependency("iri://task/b", "iri://task/a");
+        assert!(bb.get_task_dependencies("iri://task/b").is_empty());
+    }
+
+    #[test]
+    fn test_task_dependency_no_duplicates() {
+        let bb = Blackboard::new().unwrap();
+        bb.register_task("iri://task/a", None);
+        bb.register_task("iri://task/b", None);
+        bb.add_task_dependency("iri://task/b", "iri://task/a");
+        bb.add_task_dependency("iri://task/b", "iri://task/a");
+        assert_eq!(bb.get_task_dependencies("iri://task/b").len(), 1);
+    }
+
+    // ========== 协调消息测试 ==========
+
+    #[test]
+    fn test_publish_and_read_coordination() {
+        let bb = Blackboard::new().unwrap();
+        let msg = CoordinationMessage {
+            from_agent: "agent_1".to_string(),
+            msg_type: CoordinationMsgType::TaskAnnouncement,
+            payload: serde_json::json!({"task": "analyze"}),
+            timestamp: chrono::Utc::now(),
+        };
+        bb.publish_coordination(&msg).unwrap();
+
+        let msgs = bb.read_coordination_messages().unwrap();
+        assert!(!msgs.is_empty(), "Should have at least one coordination message, got {} messages", msgs.len());
+        assert_eq!(msgs[0].from_agent, "agent_1");
+        assert_eq!(msgs[0].msg_type, CoordinationMsgType::TaskAnnouncement);
+    }
+
+    #[test]
+    fn test_publish_agent_snapshot() {
+        let bb = Blackboard::new().unwrap();
+        bb.register_agent("agent_x", "DA", "iri://task/snap");
+        bb.update_agent_status("agent_x", AgentActivity::Working, Some("testing snapshot"));
+        bb.publish_agent_snapshot_to_shared("agent_x").unwrap();
+        let results = bb.query_graph("blackboard:shared", "?s ?p ?o").unwrap();
+        assert!(!results.is_empty(), "blackboard:shared should have snapshot data");
+    }
+
+    // ========== DAG 拓扑层级测试 ==========
+
+    #[test]
+    fn test_get_task_dag_simple_chain() {
+        let bb = Blackboard::new().unwrap();
+        bb.register_task("iri://task/a", None);
+        bb.register_task("iri://task/b", None);
+        bb.register_task("iri://task/c", None);
+        bb.add_task_dependency("iri://task/b", "iri://task/a");
+        bb.add_task_dependency("iri://task/c", "iri://task/b");
+        let dag = bb.get_task_dag("iri://task/a").unwrap();
+        // 3 layers: [a], [b], [c]
+        assert_eq!(dag.len(), 3, "Expected 3 layers, got {:?}", dag);
+        assert_eq!(dag[0], vec!["iri://task/a"]);
+        assert_eq!(dag[1], vec!["iri://task/b"]);
+        assert_eq!(dag[2], vec!["iri://task/c"]);
+    }
+
+    #[test]
+    fn test_get_task_dag_fan_out() {
+        let bb = Blackboard::new().unwrap();
+        bb.register_task("iri://task/a", None);
+        bb.register_task("iri://task/b", None);
+        bb.register_task("iri://task/c", None);
+        bb.add_task_dependency("iri://task/b", "iri://task/a");
+        bb.add_task_dependency("iri://task/c", "iri://task/a");
+        let dag = bb.get_task_dag("iri://task/a").unwrap();
+        // 2 layers: [a], [b, c] (b and c can run in parallel after a)
+        assert_eq!(dag.len(), 2, "Expected 2 layers, got {:?}", dag);
+        assert_eq!(dag[0], vec!["iri://task/a"]);
+        assert_eq!(dag[1], vec!["iri://task/b", "iri://task/c"]);
+    }
+
+    #[test]
+    fn test_get_task_dag_diamond() {
+        let bb = Blackboard::new().unwrap();
+        bb.register_task("iri://task/a", None);
+        bb.register_task("iri://task/b", None);
+        bb.register_task("iri://task/c", None);
+        bb.register_task("iri://task/d", None);
+        bb.add_task_dependency("iri://task/b", "iri://task/a");
+        bb.add_task_dependency("iri://task/c", "iri://task/a");
+        bb.add_task_dependency("iri://task/d", "iri://task/b");
+        bb.add_task_dependency("iri://task/d", "iri://task/c");
+        let dag = bb.get_task_dag("iri://task/a").unwrap();
+        // 3 layers: [a], [b, c], [d]
+        assert_eq!(dag.len(), 3, "Expected 3 layers, got {:?}", dag);
+        assert_eq!(dag[0], vec!["iri://task/a"]);
+        assert_eq!(dag[1], vec!["iri://task/b", "iri://task/c"]);
+        assert_eq!(dag[2], vec!["iri://task/d"]);
+    }
+
+    // ========== 共享状态测试 ==========
+
+    #[test]
+    fn test_publish_and_read_shared_state() {
+        let bb = Blackboard::new().unwrap();
+        let state = serde_json::json!({"progress": 0.5, "phase": "analysis"});
+        bb.publish_shared_state("iri://task/xyz", &state).unwrap();
+        let read_back = bb.get_shared_state("iri://task/xyz").unwrap();
+        assert!(read_back.is_some(), "Should have shared state");
+        let val = read_back.unwrap();
+        assert_eq!(val.get("progress").and_then(|v| v.as_f64()), Some(0.5));
+        assert_eq!(val.get("phase").and_then(|v| v.as_str()), Some("analysis"));
+    }
+
+    #[test]
+    fn test_get_shared_state_nonexistent() {
+        let bb = Blackboard::new().unwrap();
+        let result = bb.get_shared_state("iri://task/nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_read_coordination_messages_since() {
+        let bb = Blackboard::new().unwrap();
+        let past = chrono::Utc::now() - chrono::Duration::hours(1);
+        let msg = CoordinationMessage {
+            from_agent: "agent_filter".to_string(),
+            msg_type: CoordinationMsgType::ProgressUpdate,
+            payload: serde_json::json!({"step": 2}),
+            timestamp: chrono::Utc::now(),
+        };
+        bb.publish_coordination(&msg).unwrap();
+
+        // Filter with past timestamp should include the message
+        let msgs = bb.read_coordination_messages_since(&past).unwrap();
+        assert!(!msgs.is_empty(), "Should find messages after past timestamp");
+
+        // Filter with future timestamp should exclude the message
+        let future = chrono::Utc::now() + chrono::Duration::hours(1);
+        let msgs_future = bb.read_coordination_messages_since(&future).unwrap();
+        assert!(msgs_future.is_empty(), "Should not find messages after future timestamp");
     }
 }

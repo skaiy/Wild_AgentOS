@@ -616,6 +616,9 @@ mod validators {
     use super::ValidationOutcome;
 
     pub fn file_length_check(result: &Value) -> ValidationOutcome {
+        if result.get("entries").is_some() {
+            return ValidationOutcome::Pass;
+        }
         let content = result["content"].as_str().unwrap_or("");
         if content.is_empty() {
             if result.get("error").is_some() {
