@@ -313,7 +313,6 @@ curl http://localhost:8080/api/v1/projects \
 - **Design Detail** → [`docs/DESIGN_DETAIL.md`](docs/DESIGN_DETAIL.md) · [`docs/DESIGN_DETAIL.zh.md`](docs/DESIGN_DETAIL.zh.md) (中文)
 - **Core Design Philosophy** → [`docs/CORE_DESIGN_PHILOSOPHY.md`](docs/CORE_DESIGN_PHILOSOPHY.md) · [`docs/CORE_DESIGN_PHILOSOPHY.zh.md`](docs/CORE_DESIGN_PHILOSOPHY.zh.md) (中文)
 - **gRPC Proto** → [`proto/pdca_core.proto`](proto/pdca_core.proto)
-- **Specs** → [`spec/`](spec/)
 
 ---
 
