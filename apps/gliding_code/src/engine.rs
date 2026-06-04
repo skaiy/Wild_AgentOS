@@ -294,7 +294,10 @@ impl CodeCliEngine {
         let ctx = TaskContext::new(task_iri, user_input, self.config.max_iterations)
             .with_original_task(user_input);
         let ctx = if let Some(msgs) = resumed_messages {
-            ctx.with_resumed_messages(msgs)
+            // 从历史消息推算 turn/tool 计数
+            let turn_count = msgs.iter().filter(|m| m.role == "assistant").count() as u32;
+            let tool_count = msgs.iter().filter(|m| m.role == "tool" || m.tool_call_id.is_some()).count() as u32;
+            ctx.with_resumed_messages(msgs, turn_count, tool_count)
         } else {
             ctx
         };

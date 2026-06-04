@@ -1101,24 +1101,34 @@ impl AgentRunner {
                 tool_call_id: None,
                 reasoning_content: None,
             },
-            ChatMessage {
-                role: "user".to_string(),
-                content: context_msg,
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning_content: None,
-            },
         ];
 
-        // Resume 模式：从 checkpoint 恢复历史消息
+        // Resume 模式：从 checkpoint 恢复历史消息，放在 system 之后、新 user 消息之前
+        // 这样 LLM 先看到历史上下文，再看到继续指令
         if let Some(ref resumed) = ctx.resumed_messages {
-            // 保留 system 消息，追加恢复的历史消息（跳过原 system）
+            // 跳过原 system 消息（已用新的替换），追加其余历史
             for msg in resumed.iter().skip(1) {
                 messages.push(msg.clone());
             }
             info!("[resume] 从 checkpoint 恢复 {} 条历史消息", resumed.len().saturating_sub(1));
         }
+
+        // 新的 user 消息放在历史之后，作为继续指令
+        messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: if ctx.resumed_messages.is_some() {
+                format!(
+                    "[继续执行] 请从上次中断处继续完成任务。\n\n当前任务: {}",
+                    ctx.objective
+                )
+            } else {
+                context_msg
+            },
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+        });
 
         let tools = self
             .tool_executor
@@ -1134,9 +1144,9 @@ impl AgentRunner {
             supports_reasoning
         );
 
-        let mut tc = 0u32;
+        let mut tc = ctx.resumed_tool_count;
         let mut errs = Vec::new();
-        let mut turn = 0u32;
+        let mut turn = ctx.resumed_turn_count;
         let mut consecutive_failures = 0u32;
         let mut recovery_mode_active = false;
         let mut guard_pending_pre_injections: Vec<String> = Vec::new();
@@ -1161,7 +1171,12 @@ impl AgentRunner {
             &format!("start_{}", agent.role),
             "[]",
             &serde_json::to_string(&messages).unwrap_or_default(),
-            &serde_json::json!({"turn": 0, "tc": 0}).to_string(),
+            &serde_json::json!({
+                "turn": ctx.resumed_turn_count,
+                "tc": ctx.resumed_tool_count,
+                "prompt_tokens": self.total_prompt_tokens.load(Ordering::Relaxed),
+                "completion_tokens": self.total_completion_tokens.load(Ordering::Relaxed),
+            }).to_string(),
             &[agent.role.to_string()],
         ) {
             warn!("[checkpoint] 初始保存失败: {}", e);
@@ -1180,7 +1195,12 @@ impl AgentRunner {
                     &format!("max_turns_{}", agent.role),
                     "[]",
                     &serde_json::to_string(&messages).unwrap_or_default(),
-                    &serde_json::json!({"turn": turn, "tc": tc}).to_string(),
+                    &serde_json::json!({
+                        "turn": turn,
+                        "tc": tc,
+                        "prompt_tokens": self.total_prompt_tokens.load(Ordering::Relaxed),
+                        "completion_tokens": self.total_completion_tokens.load(Ordering::Relaxed),
+                    }).to_string(),
                     &[agent.role.to_string()],
                 ) {
                     warn!("[checkpoint] max_turns 保存失败: {}", e);
@@ -1196,7 +1216,12 @@ impl AgentRunner {
                     &format!("turn_{}_{}", agent.role, turn),
                     "[]",
                     &serde_json::to_string(&messages).unwrap_or_default(),
-                    &serde_json::json!({"turn": turn, "tc": tc}).to_string(),
+                    &serde_json::json!({
+                        "turn": turn,
+                        "tc": tc,
+                        "prompt_tokens": self.total_prompt_tokens.load(Ordering::Relaxed),
+                        "completion_tokens": self.total_completion_tokens.load(Ordering::Relaxed),
+                    }).to_string(),
                     &[agent.role.to_string()],
                 ) {
                     warn!("[checkpoint] 周期保存失败 (turn={}): {}", turn, e);
@@ -1674,7 +1699,12 @@ impl AgentRunner {
                         &format!("finish_{}", agent.role),
                         &nodes_str,
                         &serde_json::to_string(&messages).unwrap_or_default(),
-                        &serde_json::json!({"turn": turn, "tc": tc}).to_string(),
+                        &serde_json::json!({
+                            "turn": turn,
+                            "tc": tc,
+                            "prompt_tokens": self.total_prompt_tokens.load(Ordering::Relaxed),
+                            "completion_tokens": self.total_completion_tokens.load(Ordering::Relaxed),
+                        }).to_string(),
                         &[agent.role.to_string()],
                     ) {
                         warn!("[checkpoint] finish 保存失败: {}", e);

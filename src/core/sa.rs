@@ -495,6 +495,25 @@ impl SupervisorAgent {
         }
     }
 
+    /// 构建 resume 模式的执行计划：标准 PDCA 序列
+    /// execute_plan 会根据 resumed_messages 跳过已完成的阶段
+    fn build_resume_plan(&self) -> ExecutionPlan {
+        let agent_sequence = vec![AgentRole::Plan, AgentRole::Do, AgentRole::Check, AgentRole::Act];
+        let steps = self.generate_default_steps(&agent_sequence);
+        ExecutionPlan {
+            plan_id: format!("plan_resume_{}", uuid::Uuid::new_v4().hyphenated()),
+            agent_sequence,
+            parallel_groups: vec![],
+            task_complexity: TaskComplexity::Standard,
+            description: "Resume: continue from checkpoint".to_string(),
+            steps,
+            context_requirements: HashMap::new(),
+            success_metrics: vec!["任务完成".to_string()],
+            max_recursion_depth: 0,
+            sub_tasks: vec![],
+        }
+    }
+
     fn generate_default_steps(&self, agent_sequence: &[AgentRole]) -> Vec<PlanStep> {
         agent_sequence
             .iter()
@@ -1215,6 +1234,25 @@ impl SupervisorAgent {
 
         let mut last_result: Option<TaskResult> = None;
         let mut prev_summary: Option<String> = None;
+
+        // Resume 模式：确定从哪个阶段开始
+        // checkpoint name 格式: "start_PA", "turn_DA_5", "finish_DA", "max_turns_CA" 等
+        // 如果有 resumed_messages，说明是 resume 模式
+        let resume_skip_phases: Vec<AgentRole> = if resumed_messages.is_some() {
+            // 默认跳过 PA（假设 PA 已完成），从 DA 开始
+            // 因为 checkpoint 通常在 DA 执行过程中创建
+            vec![AgentRole::Plan]
+        } else {
+            vec![]
+        };
+
+        // Resume 模式：从历史消息中提取最后一个 assistant 消息作为 prev_summary
+        let resume_prev_summary: Option<String> = resumed_messages.as_ref().and_then(|msgs| {
+            msgs.iter().rev()
+                .find(|m| m.role == "assistant")
+                .map(|m| m.content.clone())
+        });
+
         let task_level = match plan.task_complexity {
             TaskComplexity::Instant => "Instant",
             TaskComplexity::Simple => "Simple",
@@ -1226,6 +1264,16 @@ impl SupervisorAgent {
         };
 
         for (i, step) in plan.steps.iter().enumerate() {
+            // Resume 模式：跳过已完成的阶段
+            if resume_skip_phases.contains(&step.role) {
+                info!(role = ?step.role, "[resume] 跳过已完成的阶段");
+                // 使用从 checkpoint 提取的 PA 摘要作为 prev_summary
+                if prev_summary.is_none() {
+                    prev_summary = resume_prev_summary.clone().or_else(|| Some("从 checkpoint 恢复，前序阶段已完成。".to_string()));
+                }
+                continue;
+            }
+
             let cycle_hints = self.active_cycles
                 .values()
                 .find(|c| c.task_iri == task_iri)
@@ -1290,10 +1338,13 @@ impl SupervisorAgent {
 
             context = context.with_five_w2h(five_w2h_iri, five_w2h.clone());
 
-            // 只在第一个 step（PA 阶段）恢复历史消息
-            if i == 0 {
+            // 只在第一个执行的 step 恢复历史消息
+            if i == 0 || (resume_skip_phases.is_empty() && i == 0) {
                 if let Some(ref msgs) = resumed_messages {
-                    context = context.with_resumed_messages(msgs.clone());
+                    // 从 resumed_messages 推算 turn/tool 计数
+                    let turn_count = msgs.iter().filter(|m| m.role == "assistant").count() as u32;
+                    let tool_count = msgs.iter().filter(|m| m.role == "tool" || m.tool_call_id.is_some()).count() as u32;
+                    context = context.with_resumed_messages(msgs.clone(), turn_count, tool_count);
                 }
             }
 
@@ -2345,7 +2396,13 @@ impl SupervisorAgent {
             .map(|a| a.relevant_experience_hints)
             .unwrap_or_default();
 
-        let plan = self.analyze_task_with_llm(user_input, &five_w2h, &perception_hints).await;
+        let plan = if ctx.resumed_messages.is_some() {
+            // Resume 模式：跳过完整分析，创建从中断阶段继续的计划
+            // 默认 standard PDCA 序列，SA 会根据 checkpoint 跳过已完成阶段
+            self.build_resume_plan()
+        } else {
+            self.analyze_task_with_llm(user_input, &five_w2h, &perception_hints).await
+        };
 
         // Let the UI know what the SA decided
         let step_roles: Vec<String> = plan.steps.iter().map(|s| format!("{:?}", s.role)).collect();

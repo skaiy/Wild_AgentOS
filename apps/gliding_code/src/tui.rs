@@ -63,6 +63,8 @@ pub struct App {
     current_task_iri: Option<String>,
     /// 从 checkpoint 恢复的历史消息（用于 resume 模式）
     resumed_messages: Option<Vec<glidinghorse::gateway::unified_gateway::ChatMessage>>,
+    /// 标记当前会话是否为 resume 模式（防止事件重置计数）
+    is_resume_session: bool,
     session_turn_count: u32,
     session_tool_call_count: u32,
     is_processing: bool,
@@ -480,6 +482,7 @@ impl App {
             current_phase: "Idle".into(),
             current_task_iri: None,
             resumed_messages: None,
+            is_resume_session: false,
             session_turn_count: 0,
             session_tool_call_count: 0,
             is_processing: false,
@@ -534,6 +537,11 @@ impl App {
                 if let Ok(msgs) = serde_json::from_str::<Vec<ChatMessage>>(&cp.session_messages_json) {
                     // 保存恢复的历史消息用于传递给 AgentRunner
                     app.resumed_messages = Some(msgs.clone());
+                    app.is_resume_session = true;
+                    
+                    // 恢复 turn/tool 计数
+                    app.session_turn_count = msgs.iter().filter(|m| m.role == "assistant").count() as u32;
+                    app.session_tool_call_count = msgs.iter().filter(|m| m.role == "tool" || m.tool_call_id.is_some()).count() as u32;
                     
                     for msg in &msgs {
                         let role = match msg.role.as_str() {
@@ -550,6 +558,15 @@ impl App {
                             mermaid_blocks: extract_mermaid_blocks(&msg.content),
                         });
                     }
+                }
+
+                // 恢复 token 计数（从 agent_state_json）
+                if let Ok(state) = serde_json::from_str::<serde_json::Value>(&cp.agent_state_json) {
+                    let p = state.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let c = state.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    app.prompt_tok = p;
+                    app.completion_tok = c;
+                    app.total_tokens = p + c;
                 }
 
                 // Only show resume banner if we actually restored messages
@@ -952,9 +969,14 @@ impl App {
         self.current_task_iri = None;
         match result {
             Ok((_task_iri, tr)) => {
-                // Sync sidebar stats with TaskResult counts
-                self.session_turn_count = tr.turn_count;
-                self.session_tool_call_count = tr.tool_call_count;
+                // Resume 模式下不覆盖计数（事件已增量累加）
+                // 非 resume 模式下同步 TaskResult 计数
+                if !self.is_resume_session {
+                    self.session_turn_count = tr.turn_count;
+                    self.session_tool_call_count = tr.tool_call_count;
+                }
+                // 任务完成后清除 resume 标志
+                self.is_resume_session = false;
                 let (icon, role) = match tr.status.as_str() {
                     "success" => ("\u{2705}", MessageRole::Assistant),
                     "partial" => ("\u{26A0}\u{FE0F}", MessageRole::Assistant),
@@ -1037,8 +1059,12 @@ impl App {
             // Stats tracking from execution events
             match ev.event_type.as_str() {
                 "TASK_START" | "CYCLE_STARTED" => {
-                    self.session_turn_count = 0;
-                    self.session_tool_call_count = 0;
+                    // Resume 模式下不重置计数（已从 checkpoint 恢复）
+                    // 使用 is_resume_session 标志判断
+                    if !self.is_resume_session {
+                        self.session_turn_count = 0;
+                        self.session_tool_call_count = 0;
+                    }
                 }
                 "THOUGHT" => self.session_turn_count += 1,
                 "TOOL_CALL" => self.session_tool_call_count += 1,
