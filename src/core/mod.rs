@@ -1,5 +1,6 @@
 pub mod agent_runner;
 pub mod agent_instance;
+pub mod constitution;
 pub mod biz_agent;
 pub mod sa;
 pub mod syscall_gate;

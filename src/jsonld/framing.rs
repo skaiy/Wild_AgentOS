@@ -150,7 +150,7 @@ pub fn embed_node(node: &Value, directive: &EmbedDirective, max_depth: usize, cu
         EmbedDirective::Link => {
             if let Some(obj) = node.as_object() {
                 let has_nested_structure = obj.values().any(|v| {
-                    v.is_object() || (v.is_array() && !v.as_array().unwrap().is_empty())
+                    v.is_object() || (v.is_array() && !v.as_array().expect("checked is_array above").is_empty())
                 });
                 
                 if !has_nested_structure {
@@ -319,7 +319,7 @@ pub fn fit_to_budget(node: &Value, budget: usize, frame: &FrameTemplate) -> Valu
     
     let mut adjusted_frame = frame.clone();
     
-    if adjusted_frame.max_depth.is_none() || adjusted_frame.max_depth.unwrap() > 2 {
+    if adjusted_frame.max_depth.is_none() || adjusted_frame.max_depth.expect("Some when is_none is false") > 2 {
         adjusted_frame.max_depth = Some(2);
     }
     

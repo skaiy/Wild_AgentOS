@@ -450,7 +450,7 @@ impl EventBus {
         let event_id = format!("evt_{}", uuid::Uuid::new_v4().hyphenated());
         
         let type_mask = {
-            let mut mask = self.type_mask.lock().unwrap();
+            let mut mask = self.type_mask.lock().expect("type_mask Mutex poisoned");
             mask.get_or_create_mask(event_type)
         };
         
@@ -494,13 +494,13 @@ impl EventBus {
     
     /// Register a type for bitmap routing
     pub fn register_type(&self, type_name: &str) -> u64 {
-        let mut mask = self.type_mask.lock().unwrap();
+        let mut mask = self.type_mask.lock().expect("type_mask Mutex poisoned");
         mask.get_or_create_mask(type_name)
     }
     
     /// Get combined mask for multiple types
     pub fn get_combined_mask(&self, types: &[String]) -> u64 {
-        let mask = self.type_mask.lock().unwrap();
+        let mask = self.type_mask.lock().expect("type_mask Mutex poisoned");
         mask.combine_masks(types)
     }
     
@@ -516,7 +516,7 @@ impl EventBus {
     
     /// Get registered type count
     pub fn type_count(&self) -> usize {
-        self.type_mask.lock().unwrap().type_count()
+        self.type_mask.lock().expect("type_mask Mutex poisoned").type_count()
     }
 
     pub fn try_recv(&self) -> Result<Event, broadcast::error::TryRecvError> {

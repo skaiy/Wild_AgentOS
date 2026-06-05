@@ -385,7 +385,7 @@ impl ConflictDetectionEngine {
         cycle_skills: &mut Vec<String>,
     ) -> bool {
         if path.contains(&skill.skill_iri) {
-            let cycle_start = path.iter().position(|s| s == &skill.skill_iri).unwrap();
+            let cycle_start = path.iter().position(|s| s == &skill.skill_iri).expect("skill_iri confirmed in path by contains() check above");
             cycle_skills.extend(path[cycle_start..].iter().cloned());
             cycle_skills.push(skill.skill_iri.clone());
             return true;

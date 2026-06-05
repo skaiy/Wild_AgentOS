@@ -277,7 +277,7 @@ impl L1Session {
             self.evict_by_policy();
         }
 
-        self.turns.last().unwrap()
+        self.turns.last().expect("turn was just pushed above")
     }
 
     /// 归档完整 thought+content 到 L0 并返回归档 IRI。

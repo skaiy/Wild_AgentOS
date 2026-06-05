@@ -131,7 +131,7 @@ impl GraphifyEngine {
                                                 "{}_{}_{}", id, key, ai
                                             );
                                             let arr_item_label = Self::extract_label(
-                                                av.as_object().unwrap(),
+                                                av.as_object().expect("checked is_object above"),
                                                 &arr_item_id,
                                             );
                                             let arr_item_type =

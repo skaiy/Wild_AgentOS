@@ -84,6 +84,9 @@ pub struct App {
     total_tokens: u64,
     prompt_tok: u64,
     completion_tok: u64,
+    /// Checkpoint 恢复的 token 基数（resume 模式下使用）
+    resume_prompt_base: u64,
+    resume_completion_base: u64,
     /// Memory limits (MB) from config
     max_l1_mb: u64,
     max_l2_mb: u64,
@@ -501,6 +504,8 @@ impl App {
             total_tokens: 0,
             prompt_tok: 0,
             completion_tok: 0,
+            resume_prompt_base: 0,
+            resume_completion_base: 0,
             max_l1_mb,
             max_l2_mb,
             max_l3_mb,
@@ -567,6 +572,9 @@ impl App {
                     app.prompt_tok = p;
                     app.completion_tok = c;
                     app.total_tokens = p + c;
+                    // 保存基数，用于后续 tick 累加新执行的增量
+                    app.resume_prompt_base = p;
+                    app.resume_completion_base = c;
                 }
 
                 // Only show resume banner if we actually restored messages
@@ -661,10 +669,19 @@ impl App {
             self.l1_count = self.mm.try_lock()
                 .map(|g| g.l1_session_count())
                 .unwrap_or(self.l1_count);
-            self.total_tokens = self.prompt_tokens.load(std::sync::atomic::Ordering::Relaxed)
-                + self.completion_tokens.load(std::sync::atomic::Ordering::Relaxed);
-            self.prompt_tok = self.prompt_tokens.load(std::sync::atomic::Ordering::Relaxed);
-            self.completion_tok = self.completion_tokens.load(std::sync::atomic::Ordering::Relaxed);
+            // Resume 模式：token 计数 = checkpoint 基数 + 新执行的增量
+            let current_prompt = self.prompt_tokens.load(std::sync::atomic::Ordering::Relaxed);
+            let current_completion = self.completion_tokens.load(std::sync::atomic::Ordering::Relaxed);
+            if self.is_resume_session {
+                // 基数（从 checkpoint 恢复）+ 新 AgentRunner 的增量
+                self.prompt_tok = self.resume_prompt_base + current_prompt;
+                self.completion_tok = self.resume_completion_base + current_completion;
+                self.total_tokens = self.prompt_tok + self.completion_tok;
+            } else {
+                self.total_tokens = current_prompt + current_completion;
+                self.prompt_tok = current_prompt;
+                self.completion_tok = current_completion;
+            }
             let _ = terminal.draw(|f| self.ui(f));
             if self.should_quit { break; }
 

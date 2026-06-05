@@ -99,7 +99,9 @@ pub fn execute_rag_index(input: &Value) -> Result<Value, String> {
 
     let file_name = iri.replace([':', '/', '#'], "_");
     let file_path = index_dir.join(format!("{}.json", file_name));
-    std::fs::write(&file_path, serde_json::to_string_pretty(&doc).unwrap())
+    let json_str = serde_json::to_string_pretty(&doc)
+        .map_err(|e| format!("序列化索引文档失败: {}", e))?;
+    std::fs::write(&file_path, json_str)
         .map_err(|e| format!("写入索引文件失败: {}", e))?;
 
     Ok(json!({

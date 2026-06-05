@@ -165,7 +165,18 @@ impl JsonLdValidator {
         let mut errors = Vec::new();
         let warnings = base_result.warnings;
 
-        let value: serde_json::Value = serde_json::from_str(json_ld).unwrap();
+        let value: serde_json::Value = match serde_json::from_str(json_ld) {
+            Ok(v) => v,
+            Err(e) => {
+                errors.push(format!("JSON parse error: {}", e));
+                return ValidationResult {
+                    valid: false,
+                    errors,
+                    warnings,
+                    normalized: None,
+                };
+            }
+        };
 
         let compiled = match jsonschema::JSONSchema::options().compile(schema) {
             Ok(c) => c,

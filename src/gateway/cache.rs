@@ -65,7 +65,7 @@ impl ResponseCache {
     pub fn get(&self, key: &str) -> Option<Value> {
         let mut entries = self.entries.write();
         if let Some(pos) = entries.iter().position(|e| e.key == key) {
-            let mut entry = entries.remove(pos).unwrap();
+            let mut entry = entries.remove(pos).expect("pos confirmed by position() above");
             // Check TTL
             if entry.created.elapsed() > self.ttl {
                 self.misses.fetch_add(1, Ordering::Relaxed);

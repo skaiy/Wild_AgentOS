@@ -112,7 +112,7 @@ fn compute_sha256(content: &str) -> String {
     let hash = <sha2::Sha256 as sha2::Digest>::digest(content.as_bytes());
     let mut hex = String::with_capacity(64);
     for byte in hash {
-        write!(&mut hex, "{:02x}", byte).unwrap();
+        write!(&mut hex, "{:02x}", byte).expect("write! to String is infallible");
     }
     hex
 }

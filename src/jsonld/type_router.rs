@@ -247,10 +247,10 @@ impl TypeRouter {
         }
 
         if matched_routes.len() == 1 {
-            return matched_routes.into_iter().next().unwrap();
+            return matched_routes.into_iter().next().expect("confirmed len == 1 above");
         }
 
-        let first_route = matched_routes.first().unwrap();
+        let first_route = matched_routes.first().expect("reached only when len > 0");
         let mut merged = TypeRoute::new(first_route.node_type.clone());
 
         let mut templates_set: HashSet<String> = HashSet::new();

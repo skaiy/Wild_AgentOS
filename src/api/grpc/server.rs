@@ -79,11 +79,12 @@ impl AgentOSService {
         );
         let projection = Arc::new(ProjectionEngine::new(blackboard.clone(), settings.memory.l3.max_size));
         let skills = Arc::new(SkillRegistry::new());
+        let templates_path = settings.agents.template_path
+            .as_deref()
+            .unwrap_or("src/templates/templates");
         let templates = Arc::new(
-            TemplateEngine::new(std::path::Path::new(
-                settings.agents.template_path.as_deref().unwrap_or("src/templates/templates")
-            ))
-            .unwrap_or_else(|_| TemplateEngine::new(std::path::Path::new("/nonexistent")).unwrap())
+            TemplateEngine::new(std::path::Path::new(templates_path))
+                .map_err(|e| format!("模板引擎初始化失败 (路径={}): {}", templates_path, e))?
         );
         let event_bus = Arc::new(EventBus::new(settings.agents.event_bus_capacity));
 
@@ -290,7 +291,7 @@ impl AgentOSService {
 
         {
             let ug_store = self.unified_graph.store();
-            let mut executor = runner.tool_executor.write().unwrap();
+            let mut executor = runner.tool_executor.write().expect("tool_executor RwLock poisoned");
             executor.set_unified_kg_store(ug_store);
         }
 
@@ -550,7 +551,7 @@ impl seapp::se_kernel_service_server::SeKernelService for AgentOSService {
 
         tokio::spawn(async move {
             let mut sa = {
-                let service = AgentOSService::new(settings_clone).unwrap();
+                let service = AgentOSService::new(settings_clone).expect("AgentOSService::new failed");
                 service.create_sa(&sa_settings)
             };
 

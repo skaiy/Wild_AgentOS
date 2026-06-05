@@ -229,7 +229,7 @@ impl ToolGuard {
                 validator: "file_length_check".to_string(),
                 params: [(
                     "min_ratio".to_string(),
-                    Value::Number(serde_json::Number::from_f64(0.95).unwrap()),
+                    Value::Number(serde_json::Number::from_f64(0.95).expect("0.95 is a valid f64")),
                 )]
                 .into(),
                 fix_instruction: "文件读取不完整。请继续读取剩余部分（使用 offset/limit 分段读取），系统会自动累积已读行数。"
@@ -866,6 +866,75 @@ mod validators {
             }
         }
         ValidationOutcome::Pass
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Methodology Gate Integration
+// ════════════════════════════════════════════════════════════════════════
+
+use crate::methodology::gate::{ActivatedMethodology, AntiPatternGateResult};
+
+impl ToolGuard {
+    /// Format red flags from active methodologies as pre-injection rules.
+    ///
+    /// Returns a list of instruction strings suitable for system prompt injection.
+    pub fn format_methodology_red_flags(
+        &self,
+        red_flags: &[(&ActivatedMethodology, &crate::methodology::RedFlagEntry)],
+    ) -> Vec<String> {
+        red_flags
+            .iter()
+            .map(|(activated, flag)| {
+                let tag = match flag.severity {
+                    crate::methodology::RedFlagSeverity::Critical => "🔴 红线",
+                    crate::methodology::RedFlagSeverity::Warning => "🟡 警告",
+                    crate::methodology::RedFlagSeverity::Info => "🔵 提示",
+                };
+                format!(
+                    "[Methodology-{}] {}: {}",
+                    activated.methodology_id, tag, flag.pattern
+                )
+            })
+            .collect()
+    }
+
+    /// Format rationalization checks from active methodologies as pre-injection rules.
+    pub fn format_methodology_rationalizations(
+        &self,
+        rationalizations: &[(&ActivatedMethodology, &crate::methodology::RedFlagEntry, &str)],
+    ) -> Vec<String> {
+        rationalizations
+            .iter()
+            .map(|(activated, flag, check)| {
+                format!(
+                    "[Methodology-{}] ⚠️ 『{}』→ 自检: {}",
+                    activated.methodology_id, flag.pattern, check
+                )
+            })
+            .collect()
+    }
+
+    /// Format anti-pattern gate warnings as pre-injection rules.
+    pub fn format_anti_pattern_gates(
+        &self,
+        anti_patterns: &[AntiPatternGateResult],
+    ) -> Vec<String> {
+        anti_patterns
+            .iter()
+            .map(|ap| ap.message.clone())
+            .collect()
+    }
+
+    /// Format persuasion directives as pre-injection rules.
+    pub fn format_methodology_persuasion(
+        &self,
+        directives: &[String],
+    ) -> Vec<String> {
+        directives
+            .iter()
+            .map(|d| format!("[Methodology-Persuasion] {}", d))
+            .collect()
     }
 }
 

@@ -15,7 +15,7 @@ impl LogBuffer {
     }
 
     pub fn drain(&self) -> Vec<String> {
-        let mut buf = self.buffer.lock().unwrap();
+        let mut buf = self.buffer.lock().expect("LogBuffer Mutex poisoned");
         buf.drain(..).collect()
     }
 }
@@ -42,7 +42,7 @@ pub struct LogBufferWriter {
 impl Write for LogBufferWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let s = String::from_utf8_lossy(buf).to_string();
-        let mut buffer = self.buffer.lock().unwrap();
+        let mut buffer = self.buffer.lock().expect("LogBuffer Mutex poisoned");
         for line in s.split_inclusive('\n') {
             let trimmed = line.trim_end_matches('\n');
             if !trimmed.is_empty() {

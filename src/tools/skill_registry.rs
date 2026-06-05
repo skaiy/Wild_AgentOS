@@ -529,7 +529,7 @@ impl SkillRegistry {
             return schema.clone();
         }
 
-        let obj = schema.as_object().unwrap();
+        let obj = schema.as_object().expect("checked is_object above");
 
         if obj.contains_key("type") && obj.get("type").and_then(|t| t.as_str()).is_some() {
             return schema.clone();
@@ -556,7 +556,7 @@ impl SkillRegistry {
             return props.clone();
         }
 
-        let obj = props.as_object().unwrap();
+        let obj = props.as_object().expect("checked is_object above");
         let mut result = serde_json::Map::new();
 
         for (key, value) in obj {
@@ -573,7 +573,7 @@ impl SkillRegistry {
             return prop.clone();
         }
 
-        let obj = prop.as_object().unwrap();
+        let obj = prop.as_object().expect("checked is_object above");
         let mut result = serde_json::Map::new();
 
         if let Some(type_val) = obj.get("skill:type").or_else(|| obj.get("type")) {

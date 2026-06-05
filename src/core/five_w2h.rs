@@ -218,8 +218,11 @@ impl Task5W2H {
             }
         });
 
+        let map = result.as_object_mut()
+            .expect("json!({}) always creates an object");
+
         if let Some(ref who) = self.who {
-            result.as_object_mut().unwrap().insert(
+            map.insert(
                 "task:who".to_string(),
                 json!({
                     "task:requestor": who.requestor,
@@ -232,7 +235,7 @@ impl Task5W2H {
         }
 
         if let Some(ref when) = self.when {
-            result.as_object_mut().unwrap().insert(
+            map.insert(
                 "task:when".to_string(),
                 json!({
                     "task:deadline": when.deadline.map(|dt| dt.to_rfc3339()),
@@ -245,7 +248,7 @@ impl Task5W2H {
         }
 
         if let Some(ref where_) = self.where_ {
-            result.as_object_mut().unwrap().insert(
+            map.insert(
                 "task:where".to_string(),
                 json!({
                     "task:dataSources": where_.data_sources,
@@ -257,7 +260,7 @@ impl Task5W2H {
         }
 
         if let Some(ref how) = self.how {
-            result.as_object_mut().unwrap().insert(
+            map.insert(
                 "task:how".to_string(),
                 json!({
                     "task:planIri": how.plan_iri,
@@ -277,7 +280,9 @@ impl Task5W2H {
                 "task:expectedQuality": how_much.expected_quality
             });
             if let Some(ref cost) = how_much.actual_cost {
-                hm.as_object_mut().unwrap().insert(
+                hm.as_object_mut()
+                    .expect("json!({}) always creates an object")
+                    .insert(
                     "task:actualCost".to_string(),
                     json!({
                         "task:tokensUsed": cost.tokens_used,
@@ -286,13 +291,10 @@ impl Task5W2H {
                     }),
                 );
             }
-            result
-                .as_object_mut()
-                .unwrap()
-                .insert("task:howMuch".to_string(), hm);
+            map.insert("task:howMuch".to_string(), hm);
         }
 
-        result.as_object_mut().unwrap().insert(
+        map.insert(
             "task:frozen".to_string(),
             json!(self.frozen),
         );
@@ -305,7 +307,7 @@ impl Task5W2H {
                 "task:filledAt": meta.filled_at
             }));
         }
-        result.as_object_mut().unwrap().insert(
+        map.insert(
             "task:dimensionMeta".to_string(),
             Value::Object(meta_map),
         );

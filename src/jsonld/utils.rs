@@ -103,7 +103,7 @@ pub fn create_node_id(namespace: &str) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or(std::time::Duration::ZERO)
         .as_nanos();
     generate_iri(namespace, &format!("{}", timestamp))
 }

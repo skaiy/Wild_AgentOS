@@ -701,6 +701,15 @@ impl SupervisorAgent {
             format!("\n## 5W2H 约束信息{}", w2h_section)
         };
 
+        let sa_constitution_prompt = {
+            use crate::core::constitution::{ConstitutionRegistry, ConstitutionRole};
+            let registry = ConstitutionRegistry::new();
+            let constitution_text = registry.build_prompt_for_role_exact(ConstitutionRole::Supervisor);
+            // 注入方法论层纪律（包含自动触发协议、始终激活方法论）
+            let methodology_text = crate::methodology::integration::MethodologyPromptInjector::build_for_sa();
+            format!("{}\n{}", constitution_text, methodology_text)
+        };
+
         let prompt = format!(
             r#"你是一个任务规划专家。请分析以下任务并生成精简高效的执行计划。
 
@@ -749,25 +758,10 @@ impl SupervisorAgent {
 ## 行为准则
 作为 Supervisor Agent，你必须遵守以下准则：
 
-【感知与理解】
-1. 全量理解 — 分配任务前必须充分理解用户意图和任务上下文
-2. 歧义追问 — 任务描述模糊/不完整时，必须先追问澄清，禁止自行假设
-3. 复杂度诚实评估 — 根据任务实际情况选择复杂度级别，禁止为省事降级或为炫耀升级
-
-【决策与规划】
-1. 最小假设 — 路由和复杂度决策必须基于事实而非猜测。必要假设须声明并说明兜底方案
-2. 既有规则优先 — 项目规则（Agent.md、Specs）与自身知识冲突时，严格遵循现有规则
-3. 成本意识 — 选择整体成本最低的 agent 序列和复杂度级别（Token、时间、计算资源）
-4. 字面证据 — 任何判断必须引用可追溯的来源，禁止凭印象决策
-
-【交互与安全】
-1. 关键阶段确认 — 制定计划/选择路由后，先呈现结果等待确认再执行
-2. 状态透明 — 长时间或并行子任务中主动报告关键进度。受阻时及时说明情况
-3. 风险预警 — 发现任务可能超出能力或资源时，主动建议调整范围或分阶段执行
-4. 边界拒绝 — 非法、不安全、不道德内容或超出能力范围时明确拒绝并说明原因
+{}
 
 请直接输出 JSON，不要有其他内容。"#,
-            user_input, w2h_block
+            user_input, w2h_block, sa_constitution_prompt
         );
 
         let model = self.runner.gateway.get_model("default");
@@ -1246,8 +1240,23 @@ impl SupervisorAgent {
             vec![]
         };
 
-        // Resume 模式：从历史消息中提取最后一个 assistant 消息作为 prev_summary
+        // Resume 模式：从历史消息中提取 PA 阶段的输出作为 prev_summary
+        // 注意：不能简单取最后一个 assistant 消息，因为 checkpoint 可能在 DA 执行中创建
+        // 需要找到 PA 阶段的输出（通常是第一个 assistant 消息，在 system 和第一个 user 之后）
         let resume_prev_summary: Option<String> = resumed_messages.as_ref().and_then(|msgs| {
+            // 策略：找到第一个非 system 的 assistant 消息（即 PA 的输出）
+            // 消息顺序通常是：system → user(任务) → assistant(PA输出) → user/tool → assistant(DA)...
+            let mut found_first_user = false;
+            for msg in msgs.iter() {
+                if msg.role == "user" && !found_first_user {
+                    found_first_user = true;
+                    continue;
+                }
+                if msg.role == "assistant" && found_first_user {
+                    return Some(msg.content.clone());
+                }
+            }
+            // fallback：取最后一个 assistant 消息
             msgs.iter().rev()
                 .find(|m| m.role == "assistant")
                 .map(|m| m.content.clone())
@@ -1338,8 +1347,16 @@ impl SupervisorAgent {
 
             context = context.with_five_w2h(five_w2h_iri, five_w2h.clone());
 
-            // 只在第一个执行的 step 恢复历史消息
-            if i == 0 || (resume_skip_phases.is_empty() && i == 0) {
+            // Resume 模式：在第一个实际执行的 step 恢复历史消息
+            // 注意：resume 模式下 PA (i=0) 被跳过，第一个执行的是 DA (i=1)
+            let is_first_executed_step = if resume_skip_phases.is_empty() {
+                i == 0
+            } else {
+                // 跳过阶段之后的第一个 step
+                !resume_skip_phases.contains(&step.role) 
+                    && plan.steps[..i].iter().all(|s| resume_skip_phases.contains(&s.role))
+            };
+            if is_first_executed_step {
                 if let Some(ref msgs) = resumed_messages {
                     // 从 resumed_messages 推算 turn/tool 计数
                     let turn_count = msgs.iter().filter(|m| m.role == "assistant").count() as u32;
@@ -1412,10 +1429,16 @@ impl SupervisorAgent {
                 &format!("dispatch_{}", role_name.to_lowercase())).await;
 
             if plan.parallel_groups.iter().any(|g| g.len() > 1 && g.contains(&step.role)) {
-                let parallel_group = plan.parallel_groups.iter()
-                    .find(|g| g.contains(&step.role))
-                    .unwrap()
-                    .clone();
+                let matching_groups: Vec<_> = plan.parallel_groups.iter()
+                    .filter(|g| g.contains(&step.role))
+                    .collect();
+                let parallel_group = match matching_groups.first() {
+                    Some(g) => (*g).clone(),
+                    None => {
+                        warn!(role = ?step.role, "No parallel group found for role despite any() check");
+                        continue;
+                    }
+                };
                 let count = parallel_group.len();
                 let results = self.dispatch_agents_parallel(
                     step.role, count, &step.objective, task_iri, &cycle_id, self.max_iterations,

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SystemPromptRegion {
     RoleDefinition,
@@ -290,6 +292,24 @@ impl Clone for SystemPromptBuilder {
             regions: self.regions.clone(),
         }
     }
+}
+
+/// Build a constitution prompt text for a given agent role using the ConstitutionRegistry.
+///
+/// Produces the same format as the existing string constants (UNIVERSAL_BEHAVIORAL_POLICY
+/// + role addendum), but driven by the structured registry for queryability.
+///
+/// Use this in agent_runner.rs to replace direct string concatenation.
+pub fn build_constitution_prompt(role: crate::core::agent_instance::AgentRole) -> String {
+    use crate::core::constitution::ConstitutionRole;
+    let registry = crate::core::constitution::ConstitutionRegistry::new();
+    let constitution_role = match role {
+        crate::core::agent_instance::AgentRole::Plan => ConstitutionRole::Plan,
+        crate::core::agent_instance::AgentRole::Do => ConstitutionRole::Do,
+        crate::core::agent_instance::AgentRole::Check => ConstitutionRole::Check,
+        crate::core::agent_instance::AgentRole::Act => ConstitutionRole::Act,
+    };
+    registry.build_prompt_for_role(constitution_role)
 }
 
 #[cfg(test)]

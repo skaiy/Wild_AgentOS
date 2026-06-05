@@ -99,10 +99,10 @@ fn extract_title(content: &str, file_ext: &str) -> Option<String> {
 fn html_to_text(html: &str) -> String {
     let mut text = html.to_string();
     
-    let script_re = regex::Regex::new(r"<script[^>]*>[\s\S]*?</script>").unwrap();
-    let style_re = regex::Regex::new(r"<style[^>]*>[\s\S]*?</style>").unwrap();
-    let tag_re = regex::Regex::new(r"<[^>]+>").unwrap();
-    let ws_re = regex::Regex::new(r"\s+").unwrap();
+    let script_re = regex::Regex::new(r"<script[^>]*>[\s\S]*?</script>").expect("valid regex literal");
+    let style_re = regex::Regex::new(r"<style[^>]*>[\s\S]*?</style>").expect("valid regex literal");
+    let tag_re = regex::Regex::new(r"<[^>]+>").expect("valid regex literal");
+    let ws_re = regex::Regex::new(r"\s+").expect("valid regex literal");
     
     text = script_re.replace_all(&text, "").to_string();
     text = style_re.replace_all(&text, "").to_string();
@@ -169,7 +169,9 @@ fn index_chunk(content: &str, iri: &str, chunk_index: usize, tags: &[String], so
     
     let file_name = chunk_iri.replace([':', '/', '#'], "_");
     let file_path = Path::new(RAG_INDEX_DIR).join(format!("{}.json", file_name));
-    std::fs::write(&file_path, serde_json::to_string_pretty(&doc).unwrap())
+    let json_str = serde_json::to_string_pretty(&doc)
+        .map_err(|e| format!("序列化 chunk 文档失败: {}", e))?;
+    std::fs::write(&file_path, json_str)
         .map_err(|e| format!("写入索引文件失败: {}", e))?;
     
     Ok(chunk_iri)
@@ -619,7 +621,9 @@ pub async fn execute_knowledge_update(input: Value) -> Result<Value, String> {
             
             doc["updated_at"] = json!(Utc::now().to_rfc3339());
             
-            std::fs::write(entry.path(), serde_json::to_string_pretty(&doc).unwrap())
+            let json_str = serde_json::to_string_pretty(&doc)
+                .map_err(|e| format!("序列化更新文档失败: {}", e))?;
+            std::fs::write(entry.path(), json_str)
                 .map_err(|e| format!("写入索引文件失败: {}", e))?;
             
             updated_count += 1;

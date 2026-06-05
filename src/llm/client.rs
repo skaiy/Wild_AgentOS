@@ -107,10 +107,10 @@ impl LLMClient {
 
         // Parse content JSON for structured thought/content/summary
         let mut parsed = response_parser::parse_response(content).unwrap_or_else(|_| {
-            let fallback = response_parser::parse_response("{}").unwrap();
+            let fallback = response_parser::parse_response("{}").expect("{} is valid JSON");
             if let Ok(val) = serde_json::from_str::<Value>(content) {
                 if val.get("content").is_some() || val.get("thought").is_some() {
-                    return response_parser::parse_response(content).unwrap();
+                    return response_parser::parse_response(content).expect("parse_response already validated above");
                 }
             }
             fallback

@@ -13,6 +13,8 @@ pub mod jsonld;
 pub mod skill_graph;
 pub mod worker;
 pub mod batch;
+pub mod methodology;
+pub mod root_cause;
 
 pub use core::{
     AgentRunner, AgentInstance, SupervisorAgent,

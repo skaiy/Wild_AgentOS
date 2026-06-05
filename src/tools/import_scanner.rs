@@ -72,7 +72,7 @@ fn scan_rust_imports(content: &str, parent: &Path) -> Vec<DiscoveredImport> {
     let mut results = Vec::new();
 
     // `mod foo;` / `pub mod foo;` / `pub(crate) mod foo;`
-    let mod_re = Regex::new(r#"(?m)^\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+(\w+)\s*;"#).unwrap();
+    let mod_re = Regex::new(r#"(?m)^\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+(\w+)\s*;"#).expect("valid regex literal");
     for cap in mod_re.captures_iter(content) {
         let name = cap[1].to_string();
         // Try `name.rs` first, then `name/mod.rs`
@@ -92,7 +92,7 @@ fn scan_rust_imports(content: &str, parent: &Path) -> Vec<DiscoveredImport> {
     }
 
     // `use crate::<path>` → resolve relative to workspace src/
-    let use_crate_re = Regex::new(r#"(?m)^\s*use\s+crate::(\w+(?:::\w+)*)\s*;"#).unwrap();
+    let use_crate_re = Regex::new(r#"(?m)^\s*use\s+crate::(\w+(?:::\w+)*)\s*;"#).expect("valid regex literal");
     for cap in use_crate_re.captures_iter(content) {
         let path_str = cap[1].to_string();
         if let Some(p) = resolve_rust_module_path(&path_str, true) {
@@ -108,7 +108,7 @@ fn scan_rust_imports(content: &str, parent: &Path) -> Vec<DiscoveredImport> {
 
     // `use super::<path>` → resolve relative to parent
     let use_super_re =
-        Regex::new(r#"(?m)^\s*use\s+(super::)+(\w+(?:::\w+)*)\s*;"#).unwrap();
+        Regex::new(r#"(?m)^\s*use\s+(super::)+(\w+(?:::\w+)*)\s*;"#).expect("valid regex literal");
     for cap in use_super_re.captures_iter(content) {
         let supers = &cap[1]; // e.g. "super::" or "super::super::"
         let path_str = &cap[2];
@@ -193,7 +193,7 @@ fn scan_js_imports(content: &str, parent: &Path) -> Vec<DiscoveredImport> {
     let import_re = Regex::new(
         r#"import\s+(?:\{[^}]*\}\s+from\s+|[\w*{},]+\s+from\s+)?['"](\.[^'"]+)['"]"#,
     )
-    .unwrap();
+    .expect("valid regex literal");
     for cap in import_re.captures_iter(content) {
         let rel = &cap[1];
         if let Some(p) = resolve_js_path(parent, rel) {
@@ -208,7 +208,7 @@ fn scan_js_imports(content: &str, parent: &Path) -> Vec<DiscoveredImport> {
     }
 
     // require('...') / require("...")
-    let require_re = Regex::new(r#"(?m)require\s*\(\s*['"](\.[^'"]+)['"]\s*\)"#).unwrap();
+    let require_re = Regex::new(r#"(?m)require\s*\(\s*['"](\.[^'"]+)['"]\s*\)"#).expect("valid regex literal");
     for cap in require_re.captures_iter(content) {
         let rel = &cap[1];
         if let Some(p) = resolve_js_path(parent, rel) {
@@ -267,7 +267,7 @@ fn scan_python_imports(content: &str, parent: &Path) -> Vec<DiscoveredImport> {
 
     // `from .foo import bar` → relative
     let from_rel_re =
-        Regex::new(r#"(?m)^\s*from\s+\.(\w+(?:\.\w+)*)\s+import\s+"#).unwrap();
+        Regex::new(r#"(?m)^\s*from\s+\.(\w+(?:\.\w+)*)\s+import\s+"#).expect("valid regex literal");
     for cap in from_rel_re.captures_iter(content) {
         let module = &cap[1];
         let candidate = parent.join(format!("{}.py", module.replace('.', "/")));
@@ -281,7 +281,7 @@ fn scan_python_imports(content: &str, parent: &Path) -> Vec<DiscoveredImport> {
     }
 
     // `import foo` / `import foo.bar` (local only — check file exists)
-    let import_re = Regex::new(r#"(?m)^\s*import\s+(\w+(?:\.\w+)*)\s*$"#).unwrap();
+    let import_re = Regex::new(r#"(?m)^\s*import\s+(\w+(?:\.\w+)*)\s*$"#).expect("valid regex literal");
     for cap in import_re.captures_iter(content) {
         let module = &cap[1];
         let candidate = parent.join(format!("{}.py", module.replace('.', "/")));
@@ -322,7 +322,7 @@ fn scan_c_cpp_imports(content: &str, parent: &Path) -> Vec<DiscoveredImport> {
     let mut results = Vec::new();
 
     // `#include "file.h"` — local include
-    let include_local = Regex::new(r##"(?m)^\s*#include\s+"([^"]+)"##).unwrap();
+    let include_local = Regex::new(r##"(?m)^\s*#include\s+"([^"]+)"##).expect("valid regex literal");
     for cap in include_local.captures_iter(content) {
         let inc = &cap[1];
         let candidate = parent.join(inc);

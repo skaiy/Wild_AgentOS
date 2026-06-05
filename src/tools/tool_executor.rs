@@ -1485,7 +1485,7 @@ async fn execute_bash(input: Value) -> Result<Value, String> {
                 let buf = out_buf.clone();
                 thread::spawn(move || {
                     if let Ok(output) = std::io::read_to_string(stdout) {
-                        *buf.lock().unwrap() = output;
+                        *buf.lock().expect("out_buf Mutex poisoned") = output;
                     }
                 });
             }
@@ -1493,7 +1493,7 @@ async fn execute_bash(input: Value) -> Result<Value, String> {
                 let buf = err_buf.clone();
                 thread::spawn(move || {
                     if let Ok(output) = std::io::read_to_string(stderr) {
-                        *buf.lock().unwrap() = output;
+                        *buf.lock().expect("err_buf Mutex poisoned") = output;
                     }
                 });
             }
@@ -1511,8 +1511,8 @@ async fn execute_bash(input: Value) -> Result<Value, String> {
                 Ok(Some(status)) => {
                     // brief pause for reader threads to finish
                     thread::sleep(std::time::Duration::from_millis(50));
-                    let stdout = stdout_buf.lock().unwrap().clone();
-                    let stderr = stderr_buf.lock().unwrap().clone();
+                    let stdout = stdout_buf.lock().expect("stdout_buf Mutex poisoned").clone();
+                    let stderr = stderr_buf.lock().expect("stderr_buf Mutex poisoned").clone();
                     let code = status.code().unwrap_or(-1);
                     break json!({
                         "command": params.command, "exit_code": code,
@@ -1540,8 +1540,8 @@ async fn execute_bash(input: Value) -> Result<Value, String> {
                         }
                         let _ = child.kill();
                         kill_process_group(&child);
-                        let stdout = stdout_buf.lock().unwrap().clone();
-                        let stderr = stderr_buf.lock().unwrap().clone();
+                        let stdout = stdout_buf.lock().expect("stdout_buf Mutex poisoned").clone();
+                        let stderr = stderr_buf.lock().expect("stderr_buf Mutex poisoned").clone();
                         break json!({
                             "command": params.command, "timed_out": true,
                             "stdout": stdout, "stderr": stderr,
@@ -1670,8 +1670,12 @@ async fn execute_powershell(input: Value) -> Result<Value, String> {
     let result = loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let stdout = std::io::read_to_string(child.stdout.take().unwrap()).unwrap_or_default();
-                let stderr = std::io::read_to_string(child.stderr.take().unwrap()).unwrap_or_default();
+                let stdout = child.stdout.take()
+                    .map(|out| std::io::read_to_string(out).unwrap_or_default())
+                    .unwrap_or_default();
+                let stderr = child.stderr.take()
+                    .map(|err| std::io::read_to_string(err).unwrap_or_default())
+                    .unwrap_or_default();
                 let code = status.code().unwrap_or(-1);
                 break json!({
                     "command": params.command, "exit_code": code,

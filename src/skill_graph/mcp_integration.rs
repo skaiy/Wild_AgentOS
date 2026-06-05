@@ -237,7 +237,7 @@ impl MCPIntegration {
                 server_id
             ) });
         }
-        let server = server.unwrap();
+        let server = server.expect("server validated non-none above");
 
         let tools = self.registry.list_tools(Some(server_id)).await;
 

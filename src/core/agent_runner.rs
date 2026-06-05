@@ -8,11 +8,9 @@ use tracing::{debug, info, instrument, warn};
 use crate::config::settings::AgentSettings;
 use crate::core::agent_instance::{AgentInstance, AgentRole, AgentStatus};
 use crate::core::system_prompt::{
-    SystemPromptBuilder, SystemPromptRegion,
-    UNIVERSAL_BEHAVIORAL_POLICY,
-    PA_BEHAVIORAL_ADDENDUM, DA_BEHAVIORAL_ADDENDUM,
-    CA_BEHAVIORAL_ADDENDUM, AA_BEHAVIORAL_ADDENDUM,
+    SystemPromptBuilder, SystemPromptRegion, build_constitution_prompt,
 };
+use crate::methodology::integration::MethodologyPromptInjector;
 use crate::gateway::unified_gateway::{ChatMessage, UnifiedGateway};
 use crate::jsonld::{generate_iri, validate_jsonld_node, JsonLdContext, JsonLdNode};
 use crate::memory::l0_store::L0Store;
@@ -1016,15 +1014,13 @@ impl AgentRunner {
         // Region 1: 角色定义区
         prompt_builder.set_region(SystemPromptRegion::RoleDefinition, agent_md.clone());
 
-        // Region 2: 行为准则区（通用 + 角色专属）
+        // Region 2: 行为准则区（宪法层 + 方法论层）
         {
-            let role_addendum = match agent.role {
-                AgentRole::Plan => PA_BEHAVIORAL_ADDENDUM,
-                AgentRole::Do => DA_BEHAVIORAL_ADDENDUM,
-                AgentRole::Check => CA_BEHAVIORAL_ADDENDUM,
-                AgentRole::Act => AA_BEHAVIORAL_ADDENDUM,
-            };
-            let policy_text = format!("{}{}", UNIVERSAL_BEHAVIORAL_POLICY, role_addendum);
+            let mut policy_text = build_constitution_prompt(agent.role);
+            // 注入方法论纪律（PA/CA/AA 专属）
+            if let Some(methodology_addendum) = MethodologyPromptInjector::build_for_role(agent.role) {
+                policy_text.push_str(&methodology_addendum);
+            }
             prompt_builder.set_region(SystemPromptRegion::BehavioralPolicy, policy_text);
         }
 
@@ -1133,7 +1129,7 @@ impl AgentRunner {
         let tools = self
             .tool_executor
             .read()
-            .unwrap()
+            .expect("tool_executor RwLock poisoned")
             .tool_definitions_for_role(&agent.role.to_string());
 
         info!(
@@ -1287,7 +1283,7 @@ impl AgentRunner {
             let max_context_messages = 30;
             if messages.len() > max_context_messages {
                 let context_window_compressed = if let Some(ref cwm_lock) = self.context_window_manager {
-                    let cwm = cwm_lock.lock().unwrap();
+                    let cwm = cwm_lock.lock().expect("cwm_lock Mutex poisoned");
                     if cwm.should_compress(messages.len()) {
                         let (compressed, summary_text) = cwm.compress_messages(&messages);
                         if !summary_text.is_empty() {
@@ -1415,7 +1411,7 @@ impl AgentRunner {
                         let current_tools = self
                             .tool_executor
                             .read()
-                            .unwrap()
+                            .expect("tool_executor RwLock poisoned")
                             .tool_definitions_for_role(&agent.role.to_string());
                         if current_tools.is_empty() { None } else { Some(current_tools) }
                     },
@@ -2737,7 +2733,7 @@ impl AgentRunner {
         let tools = self
             .tool_executor
             .read()
-            .unwrap()
+            .expect("tool_executor RwLock poisoned")
             .tool_definitions_for_role(&agent.role.to_string());
 
         info!(
@@ -2782,7 +2778,7 @@ impl AgentRunner {
                         let current_tools = self
                             .tool_executor
                             .read()
-                            .unwrap()
+                            .expect("tool_executor RwLock poisoned")
                             .tool_definitions_for_role(&agent.role.to_string());
                         if current_tools.is_empty() { None } else { Some(current_tools) }
                     },

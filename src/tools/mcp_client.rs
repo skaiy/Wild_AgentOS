@@ -114,13 +114,19 @@ impl McpClient {
                     let tools: Vec<McpTool> = result.get("tools")
                         .and_then(|t| serde_json::from_value(t.clone()).ok())
                         .unwrap_or_default();
-                    let state = self.servers.get_mut(name).unwrap();
+                    let state = self.servers.get_mut(name)
+                        .ok_or_else(|| CoreError::Internal {
+                            message: format!("MCP 服务器在连接过程中被移除: {}", name),
+                        })?;
                     state.tools = tools.clone();
                     state.status = "connected".to_string();
                     info!(server = %name, tool_count = tools.len(), "MCP 服务器连接成功");
                     tools
                 } else {
-                    let state = self.servers.get_mut(name).unwrap();
+                    let state = self.servers.get_mut(name)
+                        .ok_or_else(|| CoreError::Internal {
+                            message: format!("MCP 服务器在连接过程中被移除: {}", name),
+                        })?;
                     state.status = "connected".to_string();
                     state.tools = Vec::new();
                     Vec::new()
@@ -143,7 +149,10 @@ impl McpClient {
                         })),
                     },
                 ];
-                let state = self.servers.get_mut(name).unwrap();
+                let state = self.servers.get_mut(name)
+                    .ok_or_else(|| CoreError::Internal {
+                        message: format!("MCP 服务器在连接过程中被移除: {}", name),
+                    })?;
                 state.tools = tools.clone();
                 state.status = "connected_fallback".to_string();
                 state.error = Some(e.to_string());

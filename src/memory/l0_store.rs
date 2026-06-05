@@ -513,7 +513,7 @@ impl L0Store {
             }
         }
 
-        results.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap());
+        results.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
         Ok(results)
     }
 
@@ -629,7 +629,7 @@ impl L0Store {
             }
         }
 
-        results.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap());
+        results.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
         Ok(results)
     }
 
