@@ -333,7 +333,7 @@ git commit -am '添加我的功能'
 git push origin feat/my-feature
 ```
 
-所有贡献者应遵守我们的[行为准则](docs/CODE_OF_CONDUCT.md)。
+所有贡献者应遵守我们的[行为准则](docs/CODE_OF_CONDUCT.zh.md)。
 
 ---
 
