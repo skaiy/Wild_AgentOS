@@ -28,9 +28,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 use tracing::debug;
 
-use crate::core::constitution::{ConstitutionRegistry, TriggerCondition as ConstitutionTrigger};
+use crate::core::constitution::{ActivationCondition, ConstitutionRegistry};
 use crate::methodology::{
-    ActivationCondition, AntiPatternEntry, MethodologyDefinition, MethodologyRegistry,
+    AntiPatternEntry, MethodologyDefinition, MethodologyRegistry,
     RedFlagEntry, RedFlagSeverity, MethodologyType,
 };
 use crate::tools::hooks::{FunctionHook, HookContext, HookManager, HookPoint, HookResult};
@@ -90,7 +90,7 @@ pub struct AntiPatternGateResult {
 pub struct ConstitutionMethodologyBinding {
     pub constitution_id: String,
     pub methodology_id: String,
-    pub condition: ConstitutionTrigger,
+    pub condition: ActivationCondition,
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -181,7 +181,7 @@ impl MethodologyGate {
                 None => continue,
             };
 
-            let source = match self.evaluate_constitution_trigger(&binding.condition, point, context) {
+            let source = match self.evaluate_activation(&binding.condition, point, context) {
                 Some(s) => s,
                 None => continue,
             };
@@ -254,62 +254,6 @@ impl MethodologyGate {
                     context.agent_role == role_str
                         || context.agent_role.to_lowercase() == role_str.to_lowercase()
                 }) {
-                    Some(TriggerSource::AgentRole(context.agent_role.clone()))
-                } else {
-                    None
-                }
-            }
-        }
-    }
-
-    /// Evaluate a constitution trigger condition.
-    fn evaluate_constitution_trigger(
-        &self,
-        condition: &ConstitutionTrigger,
-        point: HookPoint,
-        context: &HookContext,
-    ) -> Option<TriggerSource> {
-        match condition {
-            ConstitutionTrigger::Always => Some(TriggerSource::Always),
-            ConstitutionTrigger::OnToolCategory(categories) => {
-                let tool_name = context.data.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
-                if categories.iter().any(|c| tool_name.contains(c) || category_matches_tool(c, tool_name)) {
-                    Some(TriggerSource::ToolCategory(ToolCategory::Meta))
-                } else {
-                    None
-                }
-            }
-            ConstitutionTrigger::OnHookPoint(hook_str) => {
-                if point.as_str() == *hook_str {
-                    Some(TriggerSource::HookPoint(point))
-                } else {
-                    None
-                }
-            }
-            ConstitutionTrigger::OnPhaseEnd(phase) => {
-                if point == HookPoint::PhaseEnd {
-                    let ctx_phase = context.data.get("phase").and_then(|v| v.as_str()).unwrap_or("");
-                    if ctx_phase == *phase {
-                        Some(TriggerSource::PhaseEnd(phase.to_string()))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            ConstitutionTrigger::OnTaskError => {
-                if point == HookPoint::TaskError && context.error.is_some() {
-                    Some(TriggerSource::TaskError)
-                } else {
-                    None
-                }
-            }
-            ConstitutionTrigger::OnAgentRole(role) => {
-                let role_str = role.as_str();
-                if context.agent_role == role_str
-                    || context.agent_role.to_lowercase() == role_str.to_lowercase()
-                {
                     Some(TriggerSource::AgentRole(context.agent_role.clone()))
                 } else {
                     None
@@ -488,7 +432,7 @@ impl MethodologyGate {
         &mut self,
         constitution_id: &str,
         methodology_id: &str,
-        condition: ConstitutionTrigger,
+        condition: ActivationCondition,
     ) {
         self.bindings.retain(|b| b.constitution_id != constitution_id || b.methodology_id != methodology_id);
         self.bindings.push(ConstitutionMethodologyBinding {
@@ -529,16 +473,6 @@ impl MethodologyGate {
         self.bindings.len()
     }
 
-    // ─── Hook Registration ───
-
-    /// Register this gate as a hook into HookManager.
-    ///
-    /// Use `MethodologyGateHandle` for thread-safe hook registration instead,
-    /// since the gate maintains mutable active-state tracking.
-    pub fn register_hooks(&self, _hook_manager: &HookManager) {
-        debug!("MethodologyGate: Use MethodologyGateHandle for hook registration");
-    }
-
     /// Get a reference to the underlying registry.
     pub fn registry(&self) -> &MethodologyRegistry {
         &self.registry
@@ -553,6 +487,7 @@ impl MethodologyGate {
 ///
 /// This is the recommended way to register MethodologyGate with HookManager,
 /// since the gate maintains mutable active-state tracking.
+#[derive(Clone)]
 pub struct MethodologyGateHandle {
     inner: std::sync::Arc<parking_lot::RwLock<MethodologyGate>>,
 }
@@ -1037,7 +972,7 @@ mod tests {
         gate.bind_constitution_to_methodology(
             "uni-verification-2",
             "methodology:systematic-debugging",
-            ConstitutionTrigger::OnTaskError,
+            ActivationCondition::OnTaskError,
         );
 
         assert_eq!(gate.binding_count(), 1);
@@ -1049,12 +984,12 @@ mod tests {
         gate.bind_constitution_to_methodology(
             "uni-verification-2",
             "methodology:systematic-debugging",
-            ConstitutionTrigger::OnTaskError,
+            ActivationCondition::OnTaskError,
         );
         gate.bind_constitution_to_methodology(
             "uni-verification-2",
             "methodology:systematic-debugging",
-            ConstitutionTrigger::OnTaskError,
+            ActivationCondition::OnTaskError,
         );
 
         assert_eq!(gate.binding_count(), 1, "Duplicate bindings should be deduplicated");

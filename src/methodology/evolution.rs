@@ -18,7 +18,7 @@
 /// Architecture Layer: L4 — Self-Evolution (Iterative)
 /// See design: PR-res/superpowers-skills-full-integration-design.md §4
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::methodology::RedFlagSeverity;
@@ -133,8 +133,8 @@ pub struct EvolutionReport {
 
 /// Records methodology violations, learns patterns, and tracks effectiveness.
 pub struct EvolutionEngine {
-    /// All recorded violations
-    violations: Vec<ViolationRecord>,
+    /// All recorded violations (ring buffer via VecDeque)
+    violations: VecDeque<ViolationRecord>,
     /// Per-methodology metrics
     metrics: HashMap<String, MethodologyMetrics>,
     /// Maximum number of violations to retain (ring buffer)
@@ -145,7 +145,7 @@ impl EvolutionEngine {
     /// Create a new engine with default capacity (10,000 records).
     pub fn new() -> Self {
         Self {
-            violations: Vec::new(),
+            violations: VecDeque::new(),
             metrics: HashMap::new(),
             max_records: 10_000,
         }
@@ -154,7 +154,7 @@ impl EvolutionEngine {
     /// Create with a specific maximum record capacity.
     pub fn with_max_records(max: usize) -> Self {
         Self {
-            violations: Vec::new(),
+            violations: VecDeque::new(),
             metrics: HashMap::new(),
             max_records: max,
         }
@@ -169,14 +169,15 @@ impl EvolutionEngine {
         let is_block = record.blocked;
         let sev = record.severity;
         let mid = record.methodology_id.clone();
+        let mid_for_metrics = mid.clone();
 
         if self.violations.len() >= self.max_records {
-            self.violations.remove(0);
+            self.violations.pop_front();
         }
-        self.violations.push(record);
+        self.violations.push_back(record);
 
         let metrics = self.metrics.entry(mid).or_insert_with(|| MethodologyMetrics {
-            methodology_id: String::new(),
+            methodology_id: mid_for_metrics,
             activation_count: 0,
             total_violations: 0,
             block_count: 0,
@@ -334,8 +335,8 @@ impl EvolutionEngine {
     }
 
     /// Get all violations recorded.
-    pub fn all_violations(&self) -> &[ViolationRecord] {
-        &self.violations
+    pub fn all_violations(&self) -> impl Iterator<Item = &ViolationRecord> {
+        self.violations.iter()
     }
 
     /// Count of recorded violations.
@@ -482,6 +483,7 @@ impl ViolationReporter {
         result: &AntiPatternGateResult,
         agent_role: &str,
         task_id: Option<String>,
+        timestamp: u64,
     ) -> ViolationRecord {
         ViolationRecord {
             methodology_id: result.methodology_id.clone(),
@@ -495,10 +497,7 @@ impl ViolationReporter {
             agent_role: agent_role.to_string(),
             tool_name: None,
             blocked: result.should_block,
-            timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            timestamp,
             task_id,
             description: result.description.clone(),
         }
@@ -511,6 +510,7 @@ impl ViolationReporter {
         agent_role: &str,
         tool_name: Option<String>,
         task_id: Option<String>,
+        timestamp: u64,
     ) -> ViolationRecord {
         ViolationRecord {
             methodology_id: methodology_id.to_string(),
@@ -520,10 +520,7 @@ impl ViolationReporter {
             agent_role: agent_role.to_string(),
             tool_name,
             blocked: matches!(flag.severity, RedFlagSeverity::Critical),
-            timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            timestamp,
             task_id,
             description: flag.pattern.to_string(),
         }
@@ -721,7 +718,7 @@ mod tests {
             message: "⚠️ Blocked".to_string(),
         };
 
-        let record = ViolationReporter::from_anti_pattern(&result, "DA", Some("task_1".to_string()));
+        let record = ViolationReporter::from_anti_pattern(&result, "DA", Some("task_1".to_string()), 1000);
         assert_eq!(record.methodology_id, "methodology:test");
         assert_eq!(record.pattern_name, "Test Pattern");
         assert!(record.blocked);

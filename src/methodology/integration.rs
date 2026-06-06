@@ -27,19 +27,19 @@ impl MethodologyPromptInjector {
     ///
     /// Returns `None` for roles that only need the constitution baseline (DA).
     pub fn build_for_role(role: AgentRole) -> Option<String> {
-        let registry = MethodologyRegistry::new();
+        let registry = crate::methodology::global_registry();
         match role {
-            AgentRole::Plan => Some(Self::pa_plan_review_gate(&registry)),
-            AgentRole::Check => Some(Self::ca_dual_stage_audit(&registry)),
-            AgentRole::Act => Some(Self::aa_pressure_test(&registry)),
-            AgentRole::Do => None,
+            AgentRole::Plan => Some(Self::pa_plan_review_gate(registry)),
+            AgentRole::Check => Some(Self::ca_dual_stage_audit(registry)),
+            AgentRole::Act => Some(Self::aa_pressure_test(registry)),
+            AgentRole::Do => Some(Self::da_execution_discipline(registry)),
         }
     }
 
     /// Build methodology addendum for SA (used in sa.rs prompt assembly).
     pub fn build_for_sa() -> String {
-        let registry = MethodologyRegistry::new();
-        Self::sa_methodology_awareness(&registry)
+        let registry = crate::methodology::global_registry();
+        Self::sa_methodology_awareness(registry)
     }
 
     // ─── PA: Plan-Review Gate + Granularity Check ───
@@ -237,11 +237,63 @@ impl MethodologyPromptInjector {
 
         sections.join("\n")
     }
-}
 
-// ════════════════════════════════════════════════════════════════════════
-// Tests
-// ════════════════════════════════════════════════════════════════════════
+    // ─── DA: Execution Discipline ───
+
+    fn da_execution_discipline(registry: &MethodologyRegistry) -> String {
+        let debugging = registry.get("methodology:systematic-debugging");
+        let verification = registry.get("methodology:verification-before-completion");
+
+        let mut sections = vec![
+            "\n## 📋 方法论纪律 — 执行规范".to_string(),
+            "作为执行Agent，你必须遵守以下执行规范：".to_string(),
+        ];
+
+        sections.push("\n### 1. 最小权限执行（Least Privilege）".to_string());
+        sections.push(
+            "在每一步执行中，严格限定操作范围：\n\
+            - 只执行分配的任务，不越权操作\n\
+            - 不在非职责范围内修改系统配置\n\
+            - 如需扩展权限，先标记再请示"
+                .to_string(),
+        );
+
+        if let Some(v) = verification {
+            let reds: Vec<&str> = v.red_flags.iter().map(|r| r.pattern).collect();
+            sections.push("\n### 2. 验证前置（Verification Before Completion）".to_string());
+            sections.push(format!(
+                "在宣称完成之前，必须提供验证证据：\n\
+                - 避免『{}』——运行时验证\n\
+                - 工具操作后检查实际效果\n\
+                - 文件写入后确认内容正确",
+                reds.first().unwrap_or(&"假设成功"),
+            ));
+        }
+
+        if let Some(d) = debugging {
+            let aps: Vec<&str> = d.anti_patterns.iter().map(|ap| ap.name).collect();
+            sections.push("\n### 3. 异常处理规范".to_string());
+            sections.push(format!(
+                "当遇到执行失败时：\n\
+                - 重试前分析根因，不盲目重试\n\
+                - 避免 {}——一次只改一处并验证\n\
+                - 连续失败 3 次后停止并报告",
+                aps.first().unwrap_or(&"随机修改"),
+            ));
+        }
+
+        sections.push("\n### 4. 成本意识（Cost Awareness）".to_string());
+        sections.push(
+            "在执行过程中保持对成本（tokens/时间）的敏感：\n\
+            - 优先使用精准工具而非大输出遍历\n\
+            - 读取文件时只读需要部分，不整文件全读\n\
+            - 不执行不必要的验证步骤超出任务需求"
+                .to_string(),
+        );
+
+        sections.join("\n")
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -279,9 +331,12 @@ mod tests {
     }
 
     #[test]
-    fn test_da_addendum_none() {
+    fn test_da_addendum_exists() {
         let addendum = MethodologyPromptInjector::build_for_role(AgentRole::Do);
-        assert!(addendum.is_none(), "DA should not have a methodology addendum");
+        assert!(addendum.is_some(), "DA should now have a methodology addendum");
+        let text = addendum.unwrap();
+        assert!(text.contains("最小权限"), "DA addendum should mention least privilege");
+        assert!(text.contains("成本意识"), "DA addendum should mention cost awareness");
     }
 
     #[test]
@@ -326,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_all_roles_have_consistent_structure() {
-        for role in &[AgentRole::Plan, AgentRole::Check, AgentRole::Act] {
+        for role in &[AgentRole::Plan, AgentRole::Check, AgentRole::Act, AgentRole::Do] {
             if let Some(text) = MethodologyPromptInjector::build_for_role(*role) {
                 assert!(text.starts_with("\n##"), "{} addendum should start with a header", role);
                 assert!(text.len() > 100, "{} addendum should be substantial", role);

@@ -79,21 +79,21 @@ pub enum ConstitutionRole {
 // Methodology Binding
 // ════════════════════════════════════════════════════════════════════════
 
-/// Trigger condition for activating a methodology
+/// When a rule/methodology is automatically activated
 #[derive(Debug, Clone)]
-pub enum TriggerCondition {
-    /// Always active when the constitution rule is in scope
+pub enum ActivationCondition {
+    /// Always active for a given role
     Always,
-    /// Activates when a tool in the listed categories is used
-    OnToolCategory(Vec<&'static str>),
-    /// Activates on a specific hook point
+    /// Active when a specific tool category is used
+    OnToolCategory(&'static [&'static str]),
+    /// Active at a specific hook point
     OnHookPoint(&'static str),
-    /// Activates at end of a PDCA phase
+    /// Active at end of a phase
     OnPhaseEnd(&'static str),
-    /// Activates on task error
+    /// Active on task error
     OnTaskError,
-    /// Activates for a specific agent role
-    OnAgentRole(ConstitutionRole),
+    /// Active only for specific roles
+    OnAgentRole(&'static [ConstitutionRole]),
 }
 
 /// A binding from a constitution rule to a methodology
@@ -104,7 +104,7 @@ pub struct MethodologyBinding {
     /// The enforcement mechanism that implements this binding
     pub enforcement: &'static str,
     /// When this methodology should be activated
-    pub trigger: TriggerCondition,
+    pub trigger: ActivationCondition,
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -154,28 +154,28 @@ pub fn default_bindings() -> HashMap<&'static str, Vec<MethodologyBinding>> {
         MethodologyBinding {
             methodology_id: "methodology:using-superpowers",
             enforcement: "ToolGuard::PreInjection(file_read tools) — 红线表注入",
-            trigger: TriggerCondition::OnToolCategory(vec!["file_read", "file_search"]),
+            trigger: ActivationCondition::OnToolCategory(&["file_read", "file_search"]),
         },
     ]);
     m.insert("uni-perception-2", vec![
         MethodologyBinding {
             methodology_id: "methodology:index-priority",
             enforcement: "ToolGuard::PreInjection(search_before_traverse) — 优先搜索后读取",
-            trigger: TriggerCondition::OnToolCategory(vec!["glob", "find", "search"]),
+            trigger: ActivationCondition::OnToolCategory(&["glob", "find", "search"]),
         },
     ]);
     m.insert("uni-perception-3", vec![
         MethodologyBinding {
             methodology_id: "methodology:index-priority",
             enforcement: "SyscallGate::validate_source(time_sensitive → realtime tool)",
-            trigger: TriggerCondition::OnHookPoint("PreToolCall"),
+            trigger: ActivationCondition::OnHookPoint("PreToolCall"),
         },
     ]);
     m.insert("uni-perception-4", vec![
         MethodologyBinding {
             methodology_id: "methodology:brainstorming",
             enforcement: "SA::clarify() → StageGate::Plan→Do pre-check",
-            trigger: TriggerCondition::OnPhaseEnd("PLAN"),
+            trigger: ActivationCondition::OnPhaseEnd("PLAN"),
         },
     ]);
 
@@ -184,21 +184,21 @@ pub fn default_bindings() -> HashMap<&'static str, Vec<MethodologyBinding>> {
         MethodologyBinding {
             methodology_id: "methodology:verification-before-completion",
             enforcement: "StageGate::Act→Archive + ToolGuard::PostValidation",
-            trigger: TriggerCondition::OnPhaseEnd("ACT"),
+            trigger: ActivationCondition::OnPhaseEnd("ACT"),
         },
     ]);
     m.insert("uni-verification-2", vec![
         MethodologyBinding {
             methodology_id: "methodology:systematic-debugging",
             enforcement: "RootCauseEngine::trace() — 5级回溯 + 证据链",
-            trigger: TriggerCondition::OnTaskError,
+            trigger: ActivationCondition::OnTaskError,
         },
     ]);
     m.insert("uni-verification-3", vec![
         MethodologyBinding {
             methodology_id: "methodology:verification-before-completion",
             enforcement: "ToolGuard::PostValidation — 修复后重跑验证",
-            trigger: TriggerCondition::OnHookPoint("PostToolCall"),
+            trigger: ActivationCondition::OnHookPoint("PostToolCall"),
         },
     ]);
 
@@ -207,28 +207,28 @@ pub fn default_bindings() -> HashMap<&'static str, Vec<MethodologyBinding>> {
         MethodologyBinding {
             methodology_id: "methodology:least-privilege",
             enforcement: "SyscallGate::WhitelistManager — 工具白名单限制",
-            trigger: TriggerCondition::OnToolCategory(vec!["shell", "network", "file_write"]),
+            trigger: ActivationCondition::OnToolCategory(&["shell", "network", "file_write"]),
         },
     ]);
     m.insert("uni-boundary-2", vec![
         MethodologyBinding {
             methodology_id: "methodology:boundary-enforcement",
             enforcement: "StageGate::HardBlock — 副作用前风险评估",
-            trigger: TriggerCondition::OnHookPoint("PreDestructiveAction"),
+            trigger: ActivationCondition::OnHookPoint("PreDestructiveAction"),
         },
     ]);
     m.insert("uni-boundary-3", vec![
         MethodologyBinding {
             methodology_id: "methodology:boundary-enforcement",
             enforcement: "SyscallGate::Abort — 非法请求拒绝",
-            trigger: TriggerCondition::Always,
+            trigger: ActivationCondition::Always,
         },
     ]);
     m.insert("uni-boundary-4", vec![
         MethodologyBinding {
             methodology_id: "methodology:complexity-assessment",
             enforcement: "StageGate::ScopeCheck — 任务规模超限建议",
-            trigger: TriggerCondition::OnPhaseEnd("PLAN"),
+            trigger: ActivationCondition::OnPhaseEnd("PLAN"),
         },
     ]);
 
@@ -237,35 +237,35 @@ pub fn default_bindings() -> HashMap<&'static str, Vec<MethodologyBinding>> {
         MethodologyBinding {
             methodology_id: "methodology:writing-plans",
             enforcement: "PlanStep 粒度 — 每步引用来源",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Plan),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Plan]),
         },
     ]);
     m.insert("pa-2", vec![
         MethodologyBinding {
             methodology_id: "methodology:using-superpowers",
             enforcement: "SyscallGate::RulePriorityCheck",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Plan),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Plan]),
         },
     ]);
     m.insert("pa-3", vec![
         MethodologyBinding {
             methodology_id: "methodology:systematic-debugging",
             enforcement: "假设声明模板注入",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Plan),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Plan]),
         },
     ]);
     m.insert("pa-4", vec![
         MethodologyBinding {
             methodology_id: "methodology:cost-awareness",
             enforcement: "TokenBudget + TimeEstimator",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Plan),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Plan]),
         },
     ]);
     m.insert("pa-5", vec![
         MethodologyBinding {
             methodology_id: "methodology:verification-before-completion",
             enforcement: "PA 自检清单",
-            trigger: TriggerCondition::OnPhaseEnd("PLAN"),
+            trigger: ActivationCondition::OnPhaseEnd("PLAN"),
         },
     ]);
 
@@ -274,42 +274,42 @@ pub fn default_bindings() -> HashMap<&'static str, Vec<MethodologyBinding>> {
         MethodologyBinding {
             methodology_id: "methodology:test-driven-development",
             enforcement: "ToolGuard(Write前强制Read)",
-            trigger: TriggerCondition::OnToolCategory(vec!["file_write"]),
+            trigger: ActivationCondition::OnToolCategory(&["file_write"]),
         },
     ]);
     m.insert("da-2", vec![
         MethodologyBinding {
             methodology_id: "methodology:executing-plans",
             enforcement: "SkillRegistry 前置搜索",
-            trigger: TriggerCondition::OnToolCategory(vec!["file_create"]),
+            trigger: ActivationCondition::OnToolCategory(&["file_create"]),
         },
     ]);
     m.insert("da-3", vec![
         MethodologyBinding {
             methodology_id: "methodology:dispatching-parallel-agents",
             enforcement: "ToolGuard 原子性校验",
-            trigger: TriggerCondition::Always,
+            trigger: ActivationCondition::Always,
         },
     ]);
     m.insert("da-4", vec![
         MethodologyBinding {
             methodology_id: "methodology:subagent-driven-development",
             enforcement: "输出模板 + 注释规则",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Do),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Do]),
         },
     ]);
     m.insert("da-5", vec![
         MethodologyBinding {
             methodology_id: "methodology:finishing-a-development-branch",
             enforcement: "HumanApprovalHook",
-            trigger: TriggerCondition::OnHookPoint("PreDestructiveAction"),
+            trigger: ActivationCondition::OnHookPoint("PreDestructiveAction"),
         },
     ]);
     m.insert("da-6", vec![
         MethodologyBinding {
             methodology_id: "methodology:cost-awareness",
             enforcement: "OutputCompressor + grep限流",
-            trigger: TriggerCondition::OnToolCategory(vec!["bash", "file_read"]),
+            trigger: ActivationCondition::OnToolCategory(&["bash", "file_read"]),
         },
     ]);
 
@@ -318,28 +318,28 @@ pub fn default_bindings() -> HashMap<&'static str, Vec<MethodologyBinding>> {
         MethodologyBinding {
             methodology_id: "methodology:requesting-code-review",
             enforcement: "CA 双阶段审查",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Check),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Check]),
         },
     ]);
     m.insert("ca-2", vec![
         MethodologyBinding {
             methodology_id: "methodology:requesting-code-review",
             enforcement: "EvidenceChain 引用校验",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Check),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Check]),
         },
     ]);
     m.insert("ca-3", vec![
         MethodologyBinding {
             methodology_id: "methodology:receiving-code-review",
             enforcement: "RuleBasedReview 标准加载",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Check),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Check]),
         },
     ]);
     m.insert("ca-4", vec![
         MethodologyBinding {
             methodology_id: "methodology:subagent-driven-development",
             enforcement: "StageGate 偏差→回退路径",
-            trigger: TriggerCondition::OnPhaseEnd("CHECK"),
+            trigger: ActivationCondition::OnPhaseEnd("CHECK"),
         },
     ]);
 
@@ -348,28 +348,28 @@ pub fn default_bindings() -> HashMap<&'static str, Vec<MethodologyBinding>> {
         MethodologyBinding {
             methodology_id: "methodology:receiving-code-review",
             enforcement: "CA→AA 证据传递",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Act),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Act]),
         },
     ]);
     m.insert("aa-2", vec![
         MethodologyBinding {
             methodology_id: "methodology:finishing-a-development-branch",
             enforcement: "决策树保守分支",
-            trigger: TriggerCondition::OnHookPoint("PreDestructiveAction"),
+            trigger: ActivationCondition::OnHookPoint("PreDestructiveAction"),
         },
     ]);
     m.insert("aa-3", vec![
         MethodologyBinding {
             methodology_id: "methodology:cost-awareness",
             enforcement: "已发生成本 vs 回退成本对比",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Act),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Act]),
         },
     ]);
     m.insert("aa-4", vec![
         MethodologyBinding {
             methodology_id: "methodology:receiving-code-review",
             enforcement: "建议→执行 分离模板",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Act),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Act]),
         },
     ]);
 
@@ -378,77 +378,77 @@ pub fn default_bindings() -> HashMap<&'static str, Vec<MethodologyBinding>> {
         MethodologyBinding {
             methodology_id: "methodology:brainstorming",
             enforcement: "L3 Projection — 任务上下文全量加载",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Supervisor),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Supervisor]),
         },
     ]);
     m.insert("sa-perception-2", vec![
         MethodologyBinding {
             methodology_id: "methodology:brainstorming",
             enforcement: "澄清模板 → 追问SA→User",
-            trigger: TriggerCondition::OnHookPoint("PrePlanCreation"),
+            trigger: ActivationCondition::OnHookPoint("PrePlanCreation"),
         },
     ]);
     m.insert("sa-perception-3", vec![
         MethodologyBinding {
             methodology_id: "methodology:complexity-assessment",
             enforcement: "TaskComplexity — 7级复杂度评估矩阵",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Supervisor),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Supervisor]),
         },
     ]);
     m.insert("sa-decision-1", vec![
         MethodologyBinding {
             methodology_id: "methodology:systematic-debugging",
             enforcement: "RootCauseEngine — 事实链验证",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Supervisor),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Supervisor]),
         },
     ]);
     m.insert("sa-decision-2", vec![
         MethodologyBinding {
             methodology_id: "methodology:using-superpowers",
             enforcement: "SyscallGate — 规则优先级裁决",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Supervisor),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Supervisor]),
         },
     ]);
     m.insert("sa-decision-3", vec![
         MethodologyBinding {
             methodology_id: "methodology:cost-awareness",
             enforcement: "AgentSequenceOptimizer — Token+成本评估",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Supervisor),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Supervisor]),
         },
     ]);
     m.insert("sa-decision-4", vec![
         MethodologyBinding {
             methodology_id: "methodology:writing-plans",
             enforcement: "来源引用验证",
-            trigger: TriggerCondition::OnAgentRole(ConstitutionRole::Supervisor),
+            trigger: ActivationCondition::OnAgentRole(&[ConstitutionRole::Supervisor]),
         },
     ]);
     m.insert("sa-safety-1", vec![
         MethodologyBinding {
             methodology_id: "methodology:executing-plans",
             enforcement: "StageGate — Plan→Do 人工确认",
-            trigger: TriggerCondition::OnHookPoint("PrePlanExecution"),
+            trigger: ActivationCondition::OnHookPoint("PrePlanExecution"),
         },
     ]);
     m.insert("sa-safety-2", vec![
         MethodologyBinding {
             methodology_id: "methodology:dispatching-parallel-agents",
             enforcement: "EventBus 进度广播",
-            trigger: TriggerCondition::OnHookPoint("TaskProgress"),
+            trigger: ActivationCondition::OnHookPoint("TaskProgress"),
         },
     ]);
     m.insert("sa-safety-3", vec![
         MethodologyBinding {
             methodology_id: "methodology:complexity-assessment",
             enforcement: "ResourceMonitor — 超限预警",
-            trigger: TriggerCondition::OnHookPoint("PreTaskAssign"),
+            trigger: ActivationCondition::OnHookPoint("PreTaskAssign"),
         },
     ]);
     m.insert("sa-safety-4", vec![
         MethodologyBinding {
             methodology_id: "methodology:boundary-enforcement",
             enforcement: "SyscallGate::Abort + 拒绝原因模板",
-            trigger: TriggerCondition::Always,
+            trigger: ActivationCondition::Always,
         },
     ]);
 

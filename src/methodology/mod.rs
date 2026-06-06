@@ -10,11 +10,7 @@ pub mod gate;
 pub mod integration;
 pub mod evolution;
 
-use crate::core::constitution::{ConstitutionRegistry, ConstitutionRole};
-
-// ════════════════════════════════════════════════════════════════════════
-// Methodology Types
-// ════════════════════════════════════════════════════════════════════════
+use crate::core::constitution::{ActivationCondition, ConstitutionRegistry, ConstitutionRole};
 
 /// The nature of a methodology — determines how it's communicated to the agent
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,23 +23,6 @@ pub enum MethodologyType {
     Reference,
     /// Process flows — for multi-step workflows (plan→execute→review)
     Process,
-}
-
-/// When a methodology is automatically activated
-#[derive(Debug, Clone)]
-pub enum ActivationCondition {
-    /// Always active for a given role
-    Always,
-    /// Active when a specific tool category is used
-    OnToolCategory(&'static [&'static str]),
-    /// Active at a specific hook point
-    OnHookPoint(&'static str),
-    /// Active at end of a phase
-    OnPhaseEnd(&'static str),
-    /// Active on task error
-    OnTaskError,
-    /// Active only for specific roles
-    OnAgentRole(&'static [ConstitutionRole]),
 }
 
 /// A red flag entry — pattern the methodology should watch for
@@ -169,6 +148,13 @@ impl Default for MethodologyRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Global singleton accessor — caches the registry on first call.
+pub fn global_registry() -> &'static MethodologyRegistry {
+    use std::sync::OnceLock;
+    static REGISTRY: OnceLock<MethodologyRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(MethodologyRegistry::new)
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -570,61 +556,6 @@ pub fn builtin_methodologies() -> Vec<MethodologyDefinition> {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// Constitution → Methodology Binding Resolver
-// ════════════════════════════════════════════════════════════════════════
-
-/// Resolves which methodologies to activate based on context.
-///
-/// Combines constitution registry bindings with methodology activation conditions.
-pub struct MethodologyResolver {
-    methodologies: MethodologyRegistry,
-    constitution: ConstitutionRegistry,
-}
-
-impl MethodologyResolver {
-    pub fn new(methodologies: MethodologyRegistry, constitution: ConstitutionRegistry) -> Self {
-        Self { methodologies, constitution }
-    }
-
-    /// Get all constitutions that bind to a given methodology ID
-    pub fn constitutions_for_methodology(&self, methodology_id: &str) -> Vec<String> {
-        let mut result = Vec::new();
-        for entry in self.constitution.all() {
-            if let Some(bindings) = self.constitution.get_bindings(entry.id) {
-                if bindings.iter().any(|b| b.methodology_id == methodology_id) {
-                    result.push(entry.id.to_string());
-                }
-            }
-        }
-        result
-    }
-
-    /// Get all methodologies that a constitution rule binds to
-    pub fn methodologies_for_constitution(&self, constitution_id: &str) -> Vec<&MethodologyDefinition> {
-        self.constitution.get_bindings(constitution_id)
-            .map(|bindings| {
-                bindings.iter()
-                    .filter_map(|b| self.methodologies.get(b.methodology_id))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Count of constitution-methodology mappings
-    pub fn binding_count(&self) -> usize {
-        let mut seen = std::collections::HashSet::new();
-        for entry in self.constitution.all() {
-            if let Some(bindings) = self.constitution.get_bindings(entry.id) {
-                for b in bindings {
-                    seen.insert((entry.id, b.methodology_id));
-                }
-            }
-        }
-        seen.len()
-    }
-}
-
-// ════════════════════════════════════════════════════════════════════════
 // Tests
 // ════════════════════════════════════════════════════════════════════════
 
@@ -679,22 +610,11 @@ mod tests {
 
     #[test]
     fn test_resolver_bindings() {
-        let resolver = MethodologyResolver::new(
-            MethodologyRegistry::new(),
-            ConstitutionRegistry::new(),
-        );
-        assert!(resolver.binding_count() > 30,
-            "Expected 30+ constitution-methodology bindings, got {}", resolver.binding_count());
+        // binding count covered in constitution tests; MethodologyResolver removed (P9)
     }
 
     #[test]
     fn test_constitutions_for_methodology() {
-        let resolver = MethodologyResolver::new(
-            MethodologyRegistry::new(),
-            ConstitutionRegistry::new(),
-        );
-        let cons = resolver.constitutions_for_methodology("methodology:systematic-debugging");
-        assert!(cons.contains(&"uni-verification-2".to_string()),
-            "Root cause rule should bind to systematic-debugging");
+        // MethodologyResolver removed as unused (P9)
     }
 }

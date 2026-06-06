@@ -11,6 +11,11 @@ use crate::core::system_prompt::{
     SystemPromptBuilder, SystemPromptRegion, build_constitution_prompt,
 };
 use crate::methodology::integration::MethodologyPromptInjector;
+use crate::methodology::{
+    gate::{MethodologyGate, MethodologyGateHandle},
+    MethodologyRegistry,
+};
+use crate::core::constitution::ConstitutionRegistry;
 use crate::gateway::unified_gateway::{ChatMessage, UnifiedGateway};
 use crate::jsonld::{generate_iri, validate_jsonld_node, JsonLdContext, JsonLdNode};
 use crate::memory::l0_store::L0Store;
@@ -28,6 +33,7 @@ use crate::tools::tool_guard::ToolGuard;
 use crate::tools::skill_registry::SkillRegistry;
 use crate::core::execution_event::{ExecutionEvent, ExecutionEventKind};
 use crate::tools::tool_executor::ToolExecutor;
+use crate::root_cause::RootCauseEngine;
 use crate::CoreError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,6 +220,8 @@ pub struct AgentRunner {
     pub tool_result_compressor: Option<Arc<std::sync::Mutex<ToolResultCompressor>>>,
     pub context_window_manager: Option<Arc<std::sync::Mutex<ContextWindowManager>>>,
     pub prompt_loader: Option<Arc<crate::core::prompt_loader::PromptLoader>>,
+    pub methodology_gate: Option<MethodologyGateHandle>,
+    pub root_cause_engine: Option<Arc<RootCauseEngine>>,
 }
 
 impl AgentRunner {
@@ -231,6 +239,24 @@ impl AgentRunner {
         let sharing = Arc::new(SharingProtocol::new());
         let hook_manager = Arc::new(HookManager::new());
         ToolGuard::new().register_hooks(&hook_manager);
+
+        // Initialize MethodologyGate with constitution bindings
+        let methodology_gate = {
+            let registry = MethodologyRegistry::new();
+            let mut gate = MethodologyGate::new(registry);
+            gate.register_constitution_bindings(&ConstitutionRegistry::new());
+            let handle = MethodologyGateHandle::new(gate);
+            handle.register_hooks(&hook_manager);
+            Some(handle)
+        };
+
+        // Conditionally initialize RootCauseEngine (lightweight, always-on by default)
+        let root_cause_engine = {
+            let engine = Arc::new(RootCauseEngine::default());
+            engine.register_hooks(&hook_manager, "agent");
+            Some(engine)
+        };
+
         let mut runner = Self {
             gateway,
             skills,
@@ -254,6 +280,8 @@ impl AgentRunner {
             tool_result_compressor: None,
             context_window_manager: None,
             prompt_loader: None,
+            methodology_gate,
+            root_cause_engine,
         };
         runner.init_context_compressors();
         runner
@@ -1020,6 +1048,16 @@ impl AgentRunner {
             // 注入方法论纪律（PA/CA/AA 专属）
             if let Some(methodology_addendum) = MethodologyPromptInjector::build_for_role(agent.role) {
                 policy_text.push_str(&methodology_addendum);
+            }
+            // 注入活跃方法论的劝导指令
+            if let Some(ref gate) = self.methodology_gate {
+                let directives = gate.inner().read().persuasive_directives();
+                if !directives.is_empty() {
+                    policy_text.push_str("\n\n### 方法论执行要求\n");
+                    for d in &directives {
+                        policy_text.push_str(&format!("- {}\n", d));
+                    }
+                }
             }
             prompt_builder.set_region(SystemPromptRegion::BehavioralPolicy, policy_text);
         }

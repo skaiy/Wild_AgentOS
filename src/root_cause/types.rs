@@ -133,10 +133,6 @@ pub enum RootCauseError {
         message: String,
         errors: Vec<String>,
     },
-    TraceTimeout {
-        message: String,
-        duration_ms: u64,
-    },
     InsufficientEvidence {
         message: String,
         min_confidence: f64,
@@ -152,7 +148,6 @@ impl std::fmt::Display for RootCauseError {
         match self {
             Self::TraceDeadEnd { message, .. } => write!(f, "Trace dead end: {}", message),
             Self::InvalidEvidenceChain { message, .. } => write!(f, "Invalid evidence chain: {}", message),
-            Self::TraceTimeout { message, .. } => write!(f, "Trace timeout: {}", message),
             Self::InsufficientEvidence { message, .. } => write!(f, "Insufficient evidence: {}", message),
             Self::Internal { message } => write!(f, "Internal error: {}", message),
         }
