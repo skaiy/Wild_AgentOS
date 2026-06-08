@@ -894,6 +894,7 @@ impl super::AgentRunner {
             tool_call_count: tc,
             five_w2h_updates: None,
                 tracked_actions: Vec::new(),
+            archive_iri: None,
         }), session)
     }
 

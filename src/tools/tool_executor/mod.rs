@@ -117,6 +117,7 @@ pub struct ToolExecutor {
     tools: HashMap<String, ToolFn>,
     tool_descriptions: Vec<ToolDescription>,
     kg_store: Arc<RwLock<KnowledgeGraphStore>>,
+    projection_engine: Arc<std::sync::RwLock<Option<Arc<crate::memory::l3_projection::ProjectionEngine>>>>,
     micro_tool_contexts: Arc<std::sync::RwLock<HashMap<String, MicroToolContext>>>,
     micro_tool_data: Arc<std::sync::RwLock<HashMap<String, serde_json::Value>>>,
     syscall_gate: Option<crate::core::syscall_gate::SyscallGate>,
@@ -153,6 +154,7 @@ impl ToolExecutor {
             tools: HashMap::new(),
             tool_descriptions: Vec::new(),
             kg_store,
+            projection_engine: Arc::new(std::sync::RwLock::new(None)),
             micro_tool_contexts: Arc::new(std::sync::RwLock::new(HashMap::new())),
             micro_tool_data: Arc::new(std::sync::RwLock::new(HashMap::new())),
             syscall_gate: None,
@@ -162,6 +164,12 @@ impl ToolExecutor {
         };
         exe.register_builtins();
         exe
+    }
+    
+    pub fn set_projection_engine(&mut self, engine: Arc<crate::memory::l3_projection::ProjectionEngine>) {
+        if let Ok(mut pe) = self.projection_engine.write() {
+            *pe = Some(engine);
+        }
     }
     
     pub fn set_tool_group_manager(&mut self, manager: ToolGroupManager) {
@@ -496,6 +504,32 @@ impl ToolExecutor {
             let kg_store = kg_store_for_code.clone();
             Box::pin(async move { builtins::execute_knowledge_extract_code(input, kg_store).await })
         }), all);
+
+        // ========== L3 投影查询工具 ==========
+        let proj_for_tool = self.projection_engine.clone();
+        self.register("read_agent_output", "通过 L3 投影读取指定 agent 的完整输出。用于查看前序 agent（PA/DA/CA/AA）的详细报告。node_iri 可从任务上下文中获取（格式如 iri://task/xxx/turn_3）。", json!({
+            "properties": {
+                "node_iri": {"type":"string","description":"要读取的 L2 节点 IRI（如 iri://task/xxx/turn_3）"}
+            },
+            "required": ["node_iri"]
+        }), Arc::new(move |input: Value| {
+            let proj = proj_for_tool.clone();
+            Box::pin(async move {
+                let node_iri = input
+                    .get("node_iri")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "缺少 node_iri 参数".to_string())?;
+                let guard = proj.read().map_err(|e| format!("投影引擎读锁失败: {}", e))?;
+                let engine = guard.as_ref()
+                    .ok_or_else(|| "投影引擎未初始化".to_string())?;
+                let result = engine.read_node(node_iri)
+                    .map_err(|e| format!("读取 L2 节点失败: {}", e))?;
+                match result {
+                    Some(node) => Ok(node),
+                    None => Err(format!("节点未找到: {}", node_iri)),
+                }
+            })
+        }), all);
     }
 
     /// Register a tool with role whitelist. 空 = 所有角色可用.
@@ -814,9 +848,19 @@ impl ToolExecutor {
             manager.get_tool_names_for_role(role_name)
         } else {
             let is_pa = role == "Plan" || role == "PA";
+            let is_aa = role == "Act" || role == "AA";
             if is_pa {
                 let default: HashSet<String> = Self::pa_readonly_tools().iter().map(|s| s.to_string()).collect();
                 (default.clone(), default)
+            } else if is_aa {
+                // 设计: AA = Core(file_read,file_list) + System(tool_search) 默认, Search+Knowledge 按需
+                let aa_tools: HashSet<String> = [
+                    "file_read", "file_list", "tool_search",
+                    "grep_search", "glob_search", "rag_search", "kg_search", "codebase_search",
+                    "knowledge_list", "knowledge_search", "knowledge_extract_code",
+                ].iter().map(|s| s.to_string()).collect();
+                let all = aa_tools.clone();
+                (all, aa_tools)
             } else {
                 let all: HashSet<String> = self.tool_descriptions.iter().map(|td| td.name.clone()).collect();
                 (all.clone(), all)

@@ -1458,12 +1458,18 @@ impl SupervisorAgent {
                         turn_count: results.iter().map(|r| r.turn_count).sum(),
                         tool_call_count: results.iter().map(|r| r.tool_call_count).sum(),
                         five_w2h_updates: None,
-                tracked_actions: Vec::new(),
+                        tracked_actions: Vec::new(),
+                        archive_iri: None,
                     });
                 }
 
                 let combined_summary: String = results.iter()
-                    .map(|r| format!("[{}] {}", r.task_iri, r.summary))
+                    .map(|r| {
+                        let iri_part = r.archive_iri.as_ref()
+                            .map(|iri| format!(" | read_agent_output 查询: {}", iri))
+                            .unwrap_or_default();
+                        format!("[{}] {}{}", r.task_iri, r.summary, iri_part)
+                    })
                     .collect::<Vec<_>>()
                     .join("\n\n");
                 prev_summary = Some(combined_summary);
@@ -1487,7 +1493,8 @@ impl SupervisorAgent {
                         turn_count: result.turn_count,
                         tool_call_count: result.tool_call_count,
                         five_w2h_updates: None,
-                tracked_actions: Vec::new(),
+                        tracked_actions: Vec::new(),
+                        archive_iri: None,
                     });
                 }
 
@@ -1592,11 +1599,19 @@ impl SupervisorAgent {
                         }
                         Err(e) => {
                             warn!(error = %e, "递归子循环执行失败，继续使用 DA 原始结果");
-                            prev_summary = Some(result.summary.clone());
+                            let prev = match result.archive_iri {
+                                Some(ref iri) => format!("{}\n\n如需查看完整报告，可使用 read_agent_output 工具查询: {}", result.summary, iri),
+                                None => result.summary.clone(),
+                            };
+                            prev_summary = Some(prev);
                         }
                     }
                 } else {
-                    prev_summary = Some(result.summary.clone());
+                    let prev = match result.archive_iri {
+                        Some(ref iri) => format!("{}\n\n如需查看完整报告，可使用 read_agent_output 工具查询: {}", result.summary, iri),
+                        None => result.summary.clone(),
+                    };
+                    prev_summary = Some(prev);
                 }
 
                 last_result = Some(result);
@@ -1632,7 +1647,8 @@ impl SupervisorAgent {
             turn_count: 0,
             tool_call_count: 0,
             five_w2h_updates: None,
-                tracked_actions: Vec::new(),
+            tracked_actions: Vec::new(),
+            archive_iri: None,
         }))
     }
 

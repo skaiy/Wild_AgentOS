@@ -188,6 +188,7 @@ pub struct TaskResult {
     pub tool_call_count: u32,
     pub five_w2h_updates: Option<serde_json::Value>,
     pub tracked_actions: Vec<crate::core::tracked_action::TrackedAction>,
+    pub archive_iri: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -270,7 +271,11 @@ impl AgentRunner {
             l0_store,
             memory_manager,
             templates,
-            tool_executor: Arc::new(std::sync::RwLock::new(ToolExecutor::new())),
+            tool_executor: {
+                let mut exe = ToolExecutor::new();
+                exe.set_projection_engine(projection.clone());
+                Arc::new(std::sync::RwLock::new(exe))
+            },
             agent_settings,
             hook_manager,
             projection,

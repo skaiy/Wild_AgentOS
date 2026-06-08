@@ -883,6 +883,21 @@ impl ProjectionEngine {
         }
         self
     }
+
+    /// 按节点 IRI 从 L2 黑板上读取单个节点（L3 投影入口）
+    /// 用于 agent 工具 read_agent_output —— 代替直接访问 L0
+    pub fn read_node(&self, node_iri: &str) -> Result<Option<serde_json::Value>, CoreError> {
+        match self.blackboard.read_node(node_iri)? {
+            Some(node) => {
+                let parsed: serde_json::Value = serde_json::from_str(&node.json_ld)
+                    .map_err(|e| CoreError::Internal {
+                        message: format!("解析 L2 节点 JSON 失败: {}", e),
+                    })?;
+                Ok(Some(parsed))
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]

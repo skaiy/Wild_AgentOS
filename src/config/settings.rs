@@ -655,7 +655,7 @@ impl Default for Settings {
                     max_memory_mb: 0,
                 },
                 l2: L2Settings {
-                    max_node_size: 2048,
+                    max_node_size: 5_242_880,
                     max_projection_size: 500,
                     max_memory_mb: 0,
                 },

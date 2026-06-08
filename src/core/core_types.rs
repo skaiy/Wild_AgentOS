@@ -80,7 +80,7 @@ pub struct CoreConfig {
 impl Default for CoreConfig {
     fn default() -> Self {
         Self {
-            max_node_size: 2048,
+            max_node_size: 5_242_880, // 5MB: agent 全量 content 可能达数百 KB
             max_projection_size: 500,
             l0_storage_path: "./data/l0".to_string(),
             event_buffer_size: 1000,
@@ -96,7 +96,7 @@ impl CoreConfig {
             max_node_size: std::env::var("PDCA_MAX_NODE_SIZE")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(2048),
+                .unwrap_or(5_242_880),
             max_projection_size: std::env::var("PDCA_MAX_PROJECTION_SIZE")
                 .ok()
                 .and_then(|v| v.parse().ok())

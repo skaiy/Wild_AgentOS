@@ -933,8 +933,10 @@ fn extract_ddg_api_results(body: &str) -> Vec<Value> {
                                 "url": sub["FirstURL"].as_str().unwrap_or(""),
                                 "snippet": text,
                             }));
-                        }
-                    }
+    }
+}
+
+// ---- L0 存储读取函数已移除：agent 不应直接访问 L0，应通过 L3 投影读取 ----
                 }
             }
         }

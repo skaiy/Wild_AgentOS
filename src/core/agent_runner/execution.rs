@@ -64,7 +64,8 @@ impl super::AgentRunner {
                     turn_count: 0,
                     tool_call_count: 0,
                     five_w2h_updates: None,
-                tracked_actions: Vec::new(),
+                    tracked_actions: Vec::new(),
+                    archive_iri: None,
                 });
             }
         }
@@ -94,6 +95,7 @@ impl super::AgentRunner {
                 tool_call_count: 0,
                 five_w2h_updates: None,
                 tracked_actions: Vec::new(),
+                archive_iri: None,
             });
         }
 
@@ -247,19 +249,20 @@ impl super::AgentRunner {
                 .execute(HookPoint::TaskStart, &mut hook_ctx)
                 .await;
             if hook_result == HookResult::Abort {
-                return Ok(TaskResult {
-                    task_iri: ctx.task_iri,
-                    status: "aborted".to_string(),
-                    summary: "Task aborted by hook".to_string(),
-                    output: None,
-                    jsonld_output: None,
-                    artifacts: Vec::new(),
-                    errors: vec!["Task aborted by hook".to_string()],
-                    turn_count: 0,
-                    tool_call_count: 0,
-                    five_w2h_updates: None,
+            return Ok(TaskResult {
+                task_iri: ctx.task_iri,
+                status: "aborted".to_string(),
+                summary: "Agent aborted by hook".to_string(),
+                output: None,
+                jsonld_output: None,
+                artifacts: Vec::new(),
+                errors: vec!["Agent aborted by hook".to_string()],
+                turn_count: 0,
+                tool_call_count: 0,
+                five_w2h_updates: None,
                 tracked_actions: Vec::new(),
-                });
+                archive_iri: None,
+            });
             }
         }
 
@@ -287,6 +290,7 @@ impl super::AgentRunner {
                 tool_call_count: 0,
                 five_w2h_updates: None,
                 tracked_actions: Vec::new(),
+                archive_iri: None,
             });
         }
 
@@ -356,11 +360,13 @@ impl super::AgentRunner {
         {
             let mut policy_text = build_constitution_prompt(agent.role);
 
-            policy_text.push_str("\n\n### 任务专注原则\n");
-            policy_text.push_str("- 严格聚焦于当前任务目标，仅处理与任务直接相关的文件和目录\n");
-            policy_text.push_str("- 对于不相关的文件或目录（如其他项目、测试产出、无关代码库），直接忽略，不要探索或处理\n");
-            policy_text.push_str("- 使用 glob_search 或 file_list 时，如果结果包含无关内容，自动过滤，不要被其分散注意力\n");
-            policy_text.push_str("- 如果遇到不属于当前任务的文件/目录，跳过它们，继续执行当前任务\n");
+            policy_text.push_str("\n\n### 🔴 任务专注原则（必须遵守）\n");
+            policy_text.push_str("- 你的唯一任务是当前指定的「当前任务」，工作区中的其他任何目录/文件都与你的任务无关\n");
+            policy_text.push_str("- 对于不相关的文件或目录（如其他项目、测试产出、无关代码库），必须直接忽略，禁止探索或处理\n");
+            policy_text.push_str("- 使用 glob_search、file_list 或类似工具时，如果结果中包含无关内容，必须自动过滤，禁止被其分散注意力\n");
+            policy_text.push_str("- 如果遇到任何不属于当前任务的文件/目录，必须跳过它们，继续执行当前任务，不得因无关内容改变任务方向\n");
+            policy_text.push_str("- 检查Agent(CA) 特别注意：你的审计报告只能包含与当前任务相关的内容，发现无关文件时必须忽略，不得写入报告\n");
+            policy_text.push_str("- 决策Agent(AA) 特别注意：禁止主动探索文件，你的决策必须仅基于 CA 审计结果，忽略审计结果中的任何无关内容\n");
 
             // 注入方法论纪律（PA/CA/AA 专属）
             if let Some(methodology_addendum) = MethodologyPromptInjector::build_for_role(agent.role) {
@@ -436,12 +442,8 @@ impl super::AgentRunner {
         let system_content = prompt_builder.build();
 
         // 构建上下文消息（动态变化，放在最后的 user role）
-        let summary_chain = sess.get_summary_chain();
-        let summary_text = summary_chain
-            .first()
-            .and_then(|v| v.get("content"))
-            .and_then(|c| c.as_str())
-            .unwrap_or("");
+        let summary_iris = sess.get_summary_chain_with_iris(50, 200);
+        let summary_text = summary_iris.join("\n");
 
         let context_msg = if summary_text.is_empty() {
             format!(
@@ -450,7 +452,7 @@ impl super::AgentRunner {
             )
         } else {
             format!(
-                "## 当前任务\n{}\n\n## 历史摘要\n{}\n\n## 可用工具\n请根据需要使用工具完成任务。",
+                "## 当前任务\n{}\n\n## 历史摘要\n{}\n\n如果需要查看某轮次的完整报告，可使用 read_agent_output 工具查询对应的 IRI。\n\n## 可用工具\n请根据需要使用工具完成任务。",
                 ctx.objective, summary_text
             )
         };
@@ -952,6 +954,7 @@ impl super::AgentRunner {
                 "@id": &node_iri,
                 "@type": "AgentTurn",
                 "role": agent.role.to_string(),
+                "content": parsed.content,
                 "content_len": parsed.content.len(),
                 "is_valid_json": parsed.is_valid_json,
                 "has_native_reasoning": parsed.has_native_reasoning
@@ -968,24 +971,28 @@ impl super::AgentRunner {
             }
             JsonLdContext::inject(&mut node_json);
             let cfg = crate::CoreConfig::default();
-            if self
+            match self
                 .blackboard
                 .write_node(&node_iri, &node_json.to_string(), &cfg)
-                .is_ok()
             {
-                debug!("[L2] 写入节点: {}", node_iri);
+                Ok(_) => {
+                    debug!("[L2] 写入节点: {}", node_iri);
 
-                // BlackboardWrite hook
-                let mut hook_ctx = HookContext::new(
-                    HookPoint::BlackboardWrite,
-                    &agent.agent_id,
-                    &agent.role.to_string(),
-                )
-                .with_task(&ctx.task_iri, &ctx.task_iri)
-                .with_data("node_iri", Value::String(node_iri.clone()));
-                self.hook_manager
-                    .execute(HookPoint::BlackboardWrite, &mut hook_ctx)
-                    .await;
+                    // BlackboardWrite hook
+                    let mut hook_ctx = HookContext::new(
+                        HookPoint::BlackboardWrite,
+                        &agent.agent_id,
+                        &agent.role.to_string(),
+                    )
+                    .with_task(&ctx.task_iri, &ctx.task_iri)
+                    .with_data("node_iri", Value::String(node_iri.clone()));
+                    self.hook_manager
+                        .execute(HookPoint::BlackboardWrite, &mut hook_ctx)
+                        .await;
+                }
+                Err(e) => {
+                    warn!("[L2] 写入节点失败 {}: {:?}", node_iri, e);
+                }
             }
 
             // 使用解析后的 summary 或生成 fallback
@@ -993,7 +1000,7 @@ impl super::AgentRunner {
                 .summary
                 .clone()
                 .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content));
-            sess.add_summary(&agent.role.to_string(), &summary_text, l0_iri);
+            sess.add_summary(&agent.role.to_string(), &summary_text, l0_iri.clone());
 
             // ===== Action 阶段 =====
             info!("[ReAct Turn {}] ===== Action =====", turn);
@@ -1085,6 +1092,7 @@ impl super::AgentRunner {
                         tool_call_count: tc,
                         five_w2h_updates: None,
                         tracked_actions: action_tracker.actions,
+                        archive_iri: Some(node_iri.clone()),
                     });
                 }
                 "tool_call" => {
@@ -1140,7 +1148,8 @@ impl super::AgentRunner {
                                     turn_count: turn,
                                     tool_call_count: tc,
                                     five_w2h_updates: None,
-                tracked_actions: Vec::new(),
+                                    tracked_actions: Vec::new(),
+                                    archive_iri: Some(node_iri.clone()),
                                 });
                             }
                         }
@@ -1490,6 +1499,7 @@ impl super::AgentRunner {
             tool_call_count: tc,
             five_w2h_updates: None,
                 tracked_actions: Vec::new(),
+            archive_iri: None,
         })
     }
 }
