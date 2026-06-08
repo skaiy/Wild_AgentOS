@@ -16,6 +16,10 @@
 ---
 
 [**English**](README.md) · [**中文**](README.zh.md) · [**Design Detail →**](docs/DESIGN_DETAIL.md)
+[**medium URL：**](https://medium.com/@doiito-sun)
+[**中文思否博客地址：**](https://segmentfault.com/u/chenwendejiezi_bn4i4z/articles)
+[**中文CSDN博客地址：**](https://blog.csdn.net/2604_96270735)
+[**B站播客地址：**](https://space.bilibili.com/1547455799/lists)
 
 </div>
 
