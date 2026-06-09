@@ -29,37 +29,48 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 /// 不同 Agent 角色使用不同配置以优化其上下文中保留的内容。
 ///
 /// 公式: `score = recency_weight * (1/time_since) + relevance_weight * (1/semantic_relevance) + cost_weight * token_cost`
+///
+/// 其中 `semantic_relevance = beta * query_sim + (1-beta) * task_relevance`
+///
+/// 增强: 新增硬阈值过滤 (relevance_threshold + safe_window_seconds)，
+/// 低相关度且超安全窗口的条目直接被淘汰，不参与分数排序。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EvictionConfig {
     pub recency_weight: f64,
     pub relevance_weight: f64,
     pub cost_weight: f64,
+    /// 低相关度硬阈值: relevance_score < 此值且超过安全窗口 → 直接淘汰
+    pub relevance_threshold: f64,
+    /// 安全窗口秒数: 即使低相关度也保留的最小时间
+    pub safe_window_seconds: i64,
+    /// beta 融合权重: β * query_sim + (1-β) * task_relevance
+    pub beta: f64,
 }
 
 impl EvictionConfig {
     /// 默认配置 — 适用于 Supervisor (SA)，全面视野
     pub const fn default_sa() -> Self {
-        Self { recency_weight: 0.30, relevance_weight: 0.40, cost_weight: 0.30 }
+        Self { recency_weight: 0.30, relevance_weight: 0.40, cost_weight: 0.30, relevance_threshold: 0.3, safe_window_seconds: 300, beta: 0.7 }
     }
 
     /// Plan (PA) — 优先保留与计划结构相关的历史
     pub const fn plan() -> Self {
-        Self { recency_weight: 0.20, relevance_weight: 0.60, cost_weight: 0.20 }
+        Self { recency_weight: 0.20, relevance_weight: 0.60, cost_weight: 0.20, relevance_threshold: 0.3, safe_window_seconds: 300, beta: 0.7 }
     }
 
     /// Do (DA) — 优先保留近期技术细节，平衡 token 成本
     pub const fn do_agent() -> Self {
-        Self { recency_weight: 0.35, relevance_weight: 0.30, cost_weight: 0.35 }
+        Self { recency_weight: 0.35, relevance_weight: 0.30, cost_weight: 0.35, relevance_threshold: 0.3, safe_window_seconds: 300, beta: 0.7 }
     }
 
     /// Check (CA) — 优先保留审计标准与验证相关
     pub const fn check() -> Self {
-        Self { recency_weight: 0.15, relevance_weight: 0.65, cost_weight: 0.20 }
+        Self { recency_weight: 0.15, relevance_weight: 0.65, cost_weight: 0.20, relevance_threshold: 0.3, safe_window_seconds: 300, beta: 0.7 }
     }
 
     /// Act (AA) — 均衡配置，略偏向决策上下文
     pub const fn act() -> Self {
-        Self { recency_weight: 0.25, relevance_weight: 0.45, cost_weight: 0.30 }
+        Self { recency_weight: 0.25, relevance_weight: 0.45, cost_weight: 0.30, relevance_threshold: 0.3, safe_window_seconds: 300, beta: 0.7 }
     }
 
     pub fn for_role(role: &str) -> Self {
@@ -93,6 +104,15 @@ pub struct L1Turn {
     /// 语义向量，用于相关度计算
     #[serde(default)]
     pub embedding: Option<Vec<f32>>,
+    /// 任务关联度系数 [0,1]，用于增强 eviction 策略
+    #[serde(default)]
+    pub relevance_score: Option<f64>,
+    /// 最后访问时间（用于安全窗口计算）
+    #[serde(default)]
+    pub last_access: Option<DateTime<Utc>>,
+    /// 补充输入标识：true = 用户中间补充，不受硬阈值淘汰
+    #[serde(default)]
+    pub is_supplement: bool,
 }
 
 /// L1 会话 — 单 Agent 摘要链
@@ -192,8 +212,11 @@ impl L1Session {
 
     /// 使用可选的 query_embedding 进行语义相关度评估的淘汰
     ///
-    /// 当提供 query_embedding 时，semantic_relevance 使用余弦相似度计算。
-    /// 否则使用 fallback 值 0.5。
+    /// 策略 (两阶段):
+    /// 1. 硬阈值阶段: relevance < threshold 且超过安全窗口 → 直接淘汰（跳过 is_supplement 条目）
+    /// 2. 评分阶段: 按 recency/relevance/cost 加权评分淘汰
+    ///
+    /// semantic_relevance = beta * cosine_sim(query, turn_embedding) + (1-beta) * turn.relevance_score
     pub fn evict_with_query(&mut self, query_embedding: Option<&[f32]>) -> usize {
         if self.current_tokens <= self.token_budget || self.turns.len() <= 1 {
             return 0;
@@ -203,6 +226,30 @@ impl L1Session {
         let mut evicted = 0;
         let cfg = &self.eviction_config;
 
+        // Phase 1: 硬阈值淘汰 — 低相关 + 超安全窗口 → 直接淘汰
+        // is_supplement 条目跳过此阶段，仅参与评分阶段
+        if cfg.relevance_threshold > 0.0 {
+            let mut i = 1;
+            while i < self.turns.len() && self.current_tokens > self.token_budget && self.turns.len() > 1 {
+                let t = &self.turns[i];
+                if !t.is_supplement {
+                    let time_since = (now - t.timestamp).num_seconds();
+                    let relevance = t.relevance_score.unwrap_or(0.5);
+                    if relevance < cfg.relevance_threshold && time_since > cfg.safe_window_seconds {
+                        let removed = self.turns.remove(i);
+                        self.current_tokens -= (removed.summary.len() as f64 * 0.3) as usize;
+                        if let Some(iri) = removed.l0_archive_iri {
+                            self.weak_refs.push(iri);
+                        }
+                        evicted += 1;
+                        continue; // i 不自增，因为 remove 后后续元素前移
+                    }
+                }
+                i += 1;
+            }
+        }
+
+        // Phase 2: 评分淘汰 — 按 β 融合分数淘汰最低分
         while self.current_tokens > self.token_budget && self.turns.len() > 1 {
             let mut min_idx = None;
             let mut min_score = f64::MAX;
@@ -210,12 +257,15 @@ impl L1Session {
                 let time_since = (now - t.timestamp).num_seconds().max(1) as f64;
                 let token_cost = (t.summary.len() as f64 * 0.3) as f64;
 
-                let semantic_relevance = match (query_embedding, t.embedding.as_ref()) {
+                let query_sim = match (query_embedding, t.embedding.as_ref()) {
                     (Some(q), Some(e)) if q.len() == e.len() && !q.is_empty() => {
                         cosine_similarity(q, e).abs().max(0.001)
                     }
                     _ => 0.5,
                 };
+                // β 融合: 当前查询相关度 × β + 任务关联度 × (1-β)
+                let task_relevance = t.relevance_score.unwrap_or(query_sim);
+                let semantic_relevance = (cfg.beta * query_sim + (1.0 - cfg.beta) * task_relevance).max(0.001);
 
                 let score = (1.0 / time_since) * cfg.recency_weight
                     + (1.0 / semantic_relevance) * cfg.relevance_weight
@@ -258,16 +308,52 @@ impl L1Session {
         }
     }
 
+    /// 存储补充输入到 L1（由 AgentRunner 在 CycleStart 注入时调用）
+    ///
+    /// 与 add_summary 不同:
+    /// - is_supplement = true（不受淘汰硬阈值影响）
+    /// - 保留 embedding 和 relevance_score 供 eviction 策略使用
+    pub fn add_supplement(
+        &mut self,
+        role: &str,
+        summary: &str,
+        embedding: Option<Vec<f32>>,
+        relevance_score: Option<f64>,
+    ) -> &mut L1Turn {
+        let turn = L1Turn {
+            role: role.to_string(),
+            summary: summary.to_string(),
+            timestamp: Utc::now(),
+            l0_archive_iri: None,
+            embedding,
+            relevance_score,
+            last_access: Some(Utc::now()),
+            is_supplement: true,
+        };
+        let token_cost = (summary.len() as f64 * 0.3) as usize;
+        self.current_tokens += token_cost;
+        self.turns.push(turn);
+
+        if self.current_tokens > self.token_budget {
+            self.evict_with_query(None);
+        }
+
+        self.turns.last_mut().unwrap()
+    }
+
     /// 存储 LLM `summary` 字段到 L1。
     /// thought+content 应通过 archive_full() 单独归档至 L0。
     /// 添加后自动检查令牌预算, 超出则触发驱逐。
-    pub fn add_summary(&mut self, role: &str, summary: &str, l0_archive_iri: Option<String>) -> &L1Turn {
+    pub fn add_summary(&mut self, role: &str, summary: &str, l0_archive_iri: Option<String>) -> &mut L1Turn {
         let turn = L1Turn {
             role: role.to_string(),
             summary: summary.to_string(),
             timestamp: Utc::now(),
             l0_archive_iri,
             embedding: None,
+            relevance_score: None,
+            last_access: Some(Utc::now()),
+            is_supplement: false,
         };
         let token_cost = (summary.len() as f64 * 0.3) as usize;
         self.current_tokens += token_cost;
@@ -277,7 +363,7 @@ impl L1Session {
             self.evict_by_policy();
         }
 
-        self.turns.last().expect("turn was just pushed above")
+        self.turns.last_mut().expect("turn was just pushed above")
     }
 
     /// 归档完整 thought+content 到 L0 并返回归档 IRI。
@@ -603,7 +689,7 @@ mod tests {
 
     #[test]
     fn test_eviction_config_with_config() {
-        let custom = EvictionConfig { recency_weight: 0.5, relevance_weight: 0.3, cost_weight: 0.2 };
+        let custom = EvictionConfig { recency_weight: 0.5, relevance_weight: 0.3, cost_weight: 0.2, ..Default::default() };
         let mut session = L1Session::with_config("agent_1", "DA", "iri://task/abc", 1000, custom);
         assert!((session.eviction_config().recency_weight - 0.5).abs() < 1e-6);
     }
@@ -632,5 +718,84 @@ mod tests {
         let remaining: Vec<&str> = session.turns.iter().map(|t| t.summary.as_str()).collect();
         let still_has_matching = remaining.iter().any(|s| *s == "matching content");
         assert!(still_has_matching, "matching content should be retained");
+    }
+
+    // ========== 补充输入 (Supplement) 测试 ==========
+
+    #[test]
+    fn test_add_supplement_preserves_fields() {
+        let mut session = L1Session::with_budget("agent_1", "DA", "iri://task/abc", 10000);
+        let emb = Some(vec![0.5, 0.5]);
+        session.add_supplement("user", "supplement note", emb.clone(), Some(0.85));
+
+        assert_eq!(session.turns.len(), 1);
+        let t = &session.turns[0];
+        assert!(t.is_supplement, "add_supplement should set is_supplement = true");
+        assert_eq!(t.role, "user");
+        assert_eq!(t.summary, "supplement note");
+        assert_eq!(t.embedding, emb);
+        assert!((t.relevance_score.unwrap() - 0.85).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_supplement_protected_from_hard_threshold_eviction() {
+        let mut session = L1Session::with_budget("agent_1", "DA", "iri://task/abc", 10000);
+        // 加一个摘要做第一个 turn，add_supplement 做后续 turn
+        session.add_summary("assistant", "the first real assistant turn", None);
+
+        // 加补充输入，设置低相关度 + 旧时间戳（模拟会触发硬阈值淘汰的场景）
+        session.add_supplement("user", "old supplement", None, Some(0.1));
+        // 强制让这个 turn 的时间戳更老
+        let old_time = chrono::Utc::now() - chrono::Duration::seconds(600);
+        if let Some(t) = session.turns.last_mut() {
+            t.timestamp = old_time;
+        }
+
+        // 增加 budget 压力，触发 eviction
+        session.token_budget = 100;
+
+        // 硬阈值淘汰不会移除 is_supplement 条目
+        let evicted = session.evict_with_query(None);
+        // 补充输入不应该被硬阈值淘汰
+        let has_supplement = session.turns.iter().any(|t| t.is_supplement);
+        assert!(has_supplement, "supplement should be protected from hard threshold eviction");
+    }
+
+    #[test]
+    fn test_beta_fusion_influences_eviction() {
+        let mut session = L1Session::with_config(
+            "agent_1", "DA", "iri://task/abc", 10000,
+            EvictionConfig { recency_weight: 0.0, relevance_weight: 1.0, cost_weight: 0.0, relevance_threshold: 0.0, safe_window_seconds: 0, beta: 0.5 }
+        );
+        // 保留第一个 turn（always kept），后面加几个 padding 制造预算压力
+        session.add_summary("assistant", "first long padding text to generate token cost xxxxxx", None);
+        session.add_summary("assistant", "second long padding text to generate more cost yyyyyy", None);
+
+        // 两个 turn: 相同 query_sim 但不同 task_relevance
+        let emb = Some(vec![1.0, 0.0]);
+        session.add_summary("assistant", "high_rel_turn", None);
+        if let Some(t) = session.turns.last_mut() {
+            t.embedding = emb.clone();
+            t.relevance_score = Some(0.9);
+        }
+        session.add_summary("assistant", "low_rel_turn", None);
+        if let Some(t) = session.turns.last_mut() {
+            t.embedding = emb.clone();
+            t.relevance_score = Some(0.1);
+        }
+
+        // 直接收紧预算以触发 evict（仅少 1 token，确保只淘汰 1 个 turn）
+        session.token_budget = session.current_tokens - 1;
+        let q_emb = vec![1.0, 0.0];
+        let evicted = session.evict_with_query(Some(&q_emb));
+        assert!(evicted > 0, "eviction should occur when tokens exceed budget");
+
+        // β=0.5: high_rel semantic = 0.5*1.0+0.5*0.9=0.95, low_rel = 0.5*1.0+0.5*0.1=0.55
+        // score = (1/semantic)*1.0, so high_rel ≈ 1.05, low_rel ≈ 1.82
+        // min score wins eviction → high_rel evicted
+        let has_low = session.turns.iter().any(|t| t.summary == "low_rel_turn");
+        assert!(has_low, "low relevance turn (higher score) should survive eviction");
+        let has_high = session.turns.iter().any(|t| t.summary == "high_rel_turn");
+        assert!(!has_high, "high relevance turn (lower score) should be evicted first");
     }
 }

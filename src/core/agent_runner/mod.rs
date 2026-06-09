@@ -228,6 +228,8 @@ pub struct AgentRunner {
     pub prompt_loader: Option<Arc<crate::core::prompt_loader::PromptLoader>>,
     pub methodology_gate: Option<MethodologyGateHandle>,
     pub root_cause_engine: Option<Arc<RootCauseEngine>>,
+    /// 补充输入共享存储（SA 写入 → AgentRunner 在 CycleStart 消费）
+    pub supplement_store: crate::core::supplementary_store::SupplementaryInputStore,
 }
 
 impl AgentRunner {
@@ -293,6 +295,7 @@ impl AgentRunner {
             prompt_loader: None,
             methodology_gate,
             root_cause_engine,
+            supplement_store: crate::core::supplementary_store::SupplementaryInputStore::new(),
         };
         runner.init_context_compressors();
         runner
@@ -386,6 +389,12 @@ impl AgentRunner {
 
     pub fn set_event_bus(&mut self, event_bus: Arc<crate::core::event_bus::EventBus>) {
         self.event_bus = Some(event_bus);
+    }
+
+    /// 设置补充输入共享存储（由 SA 创建时注入，确保 SA 和 AgentRunner 共享同一实例）
+    pub fn with_supplement_store(mut self, store: crate::core::supplementary_store::SupplementaryInputStore) -> Self {
+        self.supplement_store = store;
+        self
     }
 
 

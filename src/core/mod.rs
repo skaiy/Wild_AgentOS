@@ -15,6 +15,8 @@ pub mod context_compressor;
 pub mod execution_event;
 pub mod prompt_loader;
 pub mod tracked_action;
+pub mod supplementary_store;
+pub mod relevance_tracker;
 
 pub use agent_runner::AgentRunner;
 pub use agent_instance::{AgentInstance, AgentRole, AgentStatus};
@@ -30,3 +32,5 @@ pub use five_w2h::*;
 pub use context_compressor::{ToolResultCompressor, ContextWindowManager};
 pub use execution_event::{ExecutionEventEmitter, ExecutionEvent, ExecutionEventKind, ExecutionState};
 pub use prompt_loader::{PromptLoader, PromptConfig};
+pub use supplementary_store::{SupplementaryInputStore, SupplementEntry};
+pub use relevance_tracker::RelevanceTracker;

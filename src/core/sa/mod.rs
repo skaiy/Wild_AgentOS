@@ -12,10 +12,13 @@ use crate::core::agent_instance::{AgentInstance, AgentRole};
 use crate::core::agent_runner::{AgentRunner, TaskContext, TaskResult};
 use crate::core::event_bus::{EventBus, Event, EventPriority};
 use crate::core::execution_event::{ExecutionEvent, ExecutionEventKind, Thought};
+use crate::core::relevance_tracker::RelevanceTracker;
+use crate::core::supplementary_store::SupplementaryInputStore;
 use crate::jsonld::type_router::TypeRouter;
 use crate::memory::l2_blackboard::Blackboard;
 use crate::memory::prefetch_engine::PrefetchEngine;
 use crate::memory::scheduler::MemoryScheduler;
+use crate::memory::EmbeddingService;
 use crate::perception::proactive_engine::ProactiveEngine;
 use crate::templates::template_engine::TemplateEngine;
 use crate::tools::sharing::{SharingProtocol, ShareType, Permission};
@@ -277,6 +280,12 @@ pub struct SupervisorAgent {
     type_router: TypeRouter,
     pending_approvals: Arc<tokio::sync::Mutex<HashMap<String, bool>>>,
     supplementary_inputs: HashMap<String, Vec<(String, String)>>,
+    /// 补充输入共享存储，SA 写入后由 AgentRunner 在 CycleStart 消费
+    supplement_store: SupplementaryInputStore,
+    /// 嵌入服务（可选，用于计算补充输入的 embedding 和 relevance_score）
+    embedder: Option<Arc<dyn EmbeddingService>>,
+    /// 相关性跟踪器
+    relevance_tracker: RelevanceTracker,
 }
 
 impl SupervisorAgent {
@@ -294,6 +303,11 @@ impl SupervisorAgent {
         }
 
         let event_bus_for_perception = event_bus.clone();
+        // 创建补充输入共享存储，同时注入 AgentRunner（确保 SA 和 Runner 共享同一实例）
+        let supplement_store = SupplementaryInputStore::new();
+        if let Some(r) = Arc::get_mut(&mut runner) {
+            r.supplement_store = supplement_store.clone();
+        }
         Self {
             runner: runner.clone(),
             template_engine,
@@ -310,6 +324,9 @@ impl SupervisorAgent {
             type_router: TypeRouter::new(),
             pending_approvals: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             supplementary_inputs: HashMap::new(),
+            supplement_store,
+            embedder: None,
+            relevance_tracker: RelevanceTracker::new(0.6),
         }
     }
 
@@ -323,6 +340,17 @@ impl SupervisorAgent {
         self.prefetch_engine = prefetch_engine;
         self.scheduler = scheduler;
         self
+    }
+
+    /// 设置嵌入服务（用于计算补充输入的 embedding 和 relevance_score）
+    pub fn with_embedder(mut self, embedder: Arc<dyn EmbeddingService>) -> Self {
+        self.embedder = Some(embedder);
+        self
+    }
+
+    /// 获取补充输入共享存储（AgentRunner 注入用）
+    pub fn supplement_store(&self) -> SupplementaryInputStore {
+        self.supplement_store.clone()
     }
 
     pub fn blackboard(&self) -> Option<&Arc<Blackboard>> {
@@ -2294,6 +2322,25 @@ impl SupervisorAgent {
             | SupplementaryInputAction::ConfirmDirection
             | SupplementaryInputAction::CorrectApproach
             | SupplementaryInputAction::SuggestApproach => {
+                // 1. 计算 embedding 和 relevance_score
+                let embedding = if let Some(ref embedder) = self.embedder {
+                    embedder.embed(supplement).await.ok()
+                } else {
+                    None
+                };
+                let relevance_score = embedding.as_ref()
+                    .map(|emb| self.relevance_tracker.on_new_input(emb))
+                    .unwrap_or(0.5);
+
+                // 2. 存入 SupplementaryInputStore（AgentRunner 在 CycleStart 消费）
+                self.supplement_store.store(task_iri, supplement, embedding, relevance_score);
+                info!(
+                    task_iri = %task_iri,
+                    score = relevance_score,
+                    "补充输入已存入 SupplementaryInputStore"
+                );
+
+                // 3. 保持向后兼容：emit SUPPLEMENTARY_CONTEXT 事件（TUI 渲染用）
                 self.inject_to_current_agent(task_iri, supplement).await;
             }
             SupplementaryInputAction::RefineObjective => {

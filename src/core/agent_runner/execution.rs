@@ -618,6 +618,30 @@ impl super::AgentRunner {
             // ===== Thought 阶段 =====
             info!("[ReAct Turn {}] ===== Thought =====", turn);
 
+            // CycleStart: 注入补充输入（SA 写入 → AgentRunner 消费）
+            {
+                let pending = self.supplement_store.take_pending(&ctx.task_iri);
+                if !pending.is_empty() {
+                    info!(
+                        task_iri = %ctx.task_iri,
+                        count = pending.len(),
+                        "注入 {} 条补充输入到 AgentRunner 上下文",
+                        pending.len()
+                    );
+                    for entry in &pending {
+                        messages.push(ChatMessage {
+                            role: "user".to_string(),
+                            content: entry.content.clone(),
+                            name: None,
+                            tool_calls: None,
+                            tool_call_id: None,
+                            reasoning_content: None,
+                        });
+                        sess.add_supplement("user", &entry.content, entry.embedding.clone(), Some(entry.relevance_score));
+                    }
+                }
+            }
+
             // CycleStart hook
             {
                 let mut hook_ctx = HookContext::new(

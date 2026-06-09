@@ -17,6 +17,6 @@ pub use l3_projection::ProjectionEngine;
 pub use memory_bus::MemoryBus;
 pub use memory_manager::MemoryManager;
 pub use consistency_engine::{ConsistencyEngine, WriteStrategy};
-pub use vector_store::{VectorStore, EmbeddingService, OneApiEmbeddingService, FallbackEmbeddingService, HybridSearchFilter, ScoredEntry};
+pub use vector_store::{VectorStore, EmbeddingService, OneApiEmbeddingService, FallbackEmbeddingService, HybridSearchFilter, ScoredEntry, create_embedding_service_from_config};
 pub use prefetch_engine::PrefetchEngine;
 pub use scheduler::MemoryScheduler;
