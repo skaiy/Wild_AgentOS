@@ -17,6 +17,7 @@ pub mod prompt_loader;
 pub mod tracked_action;
 pub mod supplementary_store;
 pub mod relevance_tracker;
+pub mod workflow;
 
 pub use agent_runner::AgentRunner;
 pub use agent_instance::{AgentInstance, AgentRole, AgentStatus};

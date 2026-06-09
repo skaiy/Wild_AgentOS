@@ -89,6 +89,8 @@ pub struct TaskContext {
     pub resumed_turn_count: u32,
     /// 从 checkpoint 恢复的 tool call 计数
     pub resumed_tool_count: u32,
+    /// JSON-LD 工作流定义（可选，替代 LLM 生成的 plan）
+    pub workflow_jsonld: Option<String>,
 }
 
 impl TaskContext {
@@ -109,7 +111,14 @@ impl TaskContext {
             resumed_messages: None,
             resumed_turn_count: 0,
             resumed_tool_count: 0,
+            workflow_jsonld: None,
         }
+    }
+
+    /// 设置 JSON-LD 工作流定义（替代 LLM 生成的 plan）
+    pub fn with_workflow(mut self, jsonld: &str) -> Self {
+        self.workflow_jsonld = Some(jsonld.to_string());
+        self
     }
 
     pub fn with_prev_summary(mut self, summary: &str) -> Self {
@@ -171,6 +180,7 @@ impl Default for TaskContext {
             resumed_messages: None,
             resumed_turn_count: 0,
             resumed_tool_count: 0,
+            workflow_jsonld: None,
         }
     }
 }

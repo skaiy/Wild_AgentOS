@@ -190,7 +190,16 @@ impl CodeCliEngine {
         let task_id = uuid::Uuid::new_v4().to_string();
         let task_iri = format!("iri://task/{}", task_id);
 
-        let result = self.sa.process_task(user_input, &task_iri).await?;
+        let result = if let Some(ref wf_path) = self.config.workflow_path {
+            let wf_jsonld = std::fs::read_to_string(wf_path)
+                .map_err(|e| anyhow::anyhow!("读取工作流文件 '{}' 失败: {}", wf_path, e))?;
+            let ctx = glidinghorse::core::agent_runner::TaskContext::new(&task_iri, user_input, self.config.max_iterations)
+                .with_original_task(user_input)
+                .with_workflow(&wf_jsonld);
+            self.sa.process_task_with_context(user_input, &task_iri, ctx).await?
+        } else {
+            self.sa.process_task(user_input, &task_iri).await?
+        };
 
         info!(
             task_iri = %task_iri,
@@ -293,8 +302,14 @@ impl CodeCliEngine {
 
         let ctx = TaskContext::new(task_iri, user_input, self.config.max_iterations)
             .with_original_task(user_input);
+        let ctx = if let Some(ref wf_path) = self.config.workflow_path {
+            let wf_jsonld = std::fs::read_to_string(wf_path)
+                .map_err(|e| anyhow::anyhow!("读取工作流文件 '{}' 失败: {}", wf_path, e))?;
+            ctx.with_workflow(&wf_jsonld)
+        } else {
+            ctx
+        };
         let ctx = if let Some(msgs) = resumed_messages {
-            // 从历史消息推算 turn/tool 计数
             let turn_count = msgs.iter().filter(|m| m.role == "assistant").count() as u32;
             let tool_count = msgs.iter().filter(|m| m.role == "tool" || m.tool_call_id.is_some()).count() as u32;
             ctx.with_resumed_messages(msgs, turn_count, tool_count)

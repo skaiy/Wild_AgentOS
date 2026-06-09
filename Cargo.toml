@@ -49,6 +49,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 tracing-appender = "0.2"
 
+# 图算法（DAG 调度引擎）
+petgraph = "0.6"
+
 # 工具
 uuid = { version = "1.6", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }

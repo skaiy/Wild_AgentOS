@@ -2482,6 +2482,25 @@ impl SupervisorAgent {
             .map(|a| a.relevant_experience_hints)
             .unwrap_or_default();
 
+        // 如果 TaskContext 包含 JSON-LD 工作流定义，使用 DAG 引擎执行
+        if let Some(ref wf_jsonld) = ctx.workflow_jsonld {
+            info!(task_iri = %task_iri, "使用 JSON-LD 工作流模式");
+            self.emit_sa_thought(task_iri,
+                "使用预定义 JSON-LD 工作流执行", "workflow_mode").await;
+
+            if let Some(cycle) = self.active_cycles.get_mut(&cycle_id) {
+                cycle.phase = CyclePhase::Executing;
+                cycle.phase_history.push("Workflow mode".to_string());
+            }
+
+            let result = self.execute_workflow_dag(wf_jsonld, task_iri, user_input).await?;
+
+            if let Some(scheduler) = &self.scheduler {
+                let _ = scheduler.on_task_complete(task_iri).await;
+            }
+            return Ok(result);
+        }
+
         let plan = if ctx.resumed_messages.is_some() {
             // Resume 模式：跳过完整分析，创建从中断阶段继续的计划
             // 默认 standard PDCA 序列，SA 会根据 checkpoint 跳过已完成阶段
@@ -2554,7 +2573,6 @@ impl SupervisorAgent {
             }
         }
         for plan in pending_interventions {
-            // 使用超时防止干预处理阻塞主流程
             let _ = tokio::time::timeout(
                 std::time::Duration::from_secs(30),
                 self.execute_intervention(plan, task_iri),
@@ -2700,6 +2718,58 @@ impl SupervisorAgent {
 
         experience_section.push_str("**注意**: 历史经验仅供参考，请根据当前任务实际情况调整。\n");
         experience_section
+    }
+
+    /// 执行 JSON-LD DAG 工作流（通过 WorkflowLoader + DagEngine）
+    async fn execute_workflow_dag(
+        &self,
+        wf_jsonld: &str,
+        task_iri: &str,
+        user_input: &str,
+    ) -> Result<crate::core::agent_runner::TaskResult, crate::core::core_types::CoreError> {
+        use crate::core::workflow::{load_workflow_jsonld, build_dag, DagEngine};
+        use crate::core::core_types::CoreError;
+
+        let def = load_workflow_jsonld(wf_jsonld)
+            .map_err(|e| CoreError::Internal { message: format!("工作流解析失败: {}", e) })?;
+
+        let dag = build_dag(&def)
+            .map_err(|e| CoreError::Internal { message: format!("DAG 构建失败: {}", e) })?;
+
+        let engine = DagEngine::new(self.runner.clone(), self.max_iterations);
+        let results = engine.execute(&dag, task_iri, user_input).await
+            .map_err(|e| CoreError::Internal { message: format!("DAG 执行失败: {}", e) })?;
+
+        // 汇总所有节点结果
+        let total_turns: u32 = results.iter().map(|r| r.turn_count).sum();
+        let total_tools: u32 = results.iter().map(|r| r.tool_call_count).sum();
+        let has_failure = results.iter().any(|r| r.status == "failed");
+        let status = if has_failure { "partial_failure" } else { "success" };
+
+        let summary = if results.len() == 1 {
+            results[0].summary.clone()
+        } else {
+            let parts: Vec<String> = results.iter().map(|r| {
+                format!("[{}] {} (status: {})", r.node_id, r.summary, r.status)
+            }).collect();
+            format!("工作流执行完成 ({} 节点):\n{}", results.len(), parts.join("\n"))
+        };
+
+        let last = results.last();
+        Ok(crate::core::agent_runner::TaskResult {
+            task_iri: task_iri.to_string(),
+            status: status.to_string(),
+            summary,
+            output: last.and_then(|r| r.output.clone()),
+            jsonld_output: None,
+            artifacts: results.iter().flat_map(|r| r.artifacts.clone()).collect(),
+            errors: results.iter().filter_map(|r| r.error.clone()).collect(),
+            turn_count: total_turns,
+            tool_call_count: total_tools,
+            five_w2h_updates: None,
+            tracked_actions: Vec::new(),
+            archive_iri: last.and_then(|r| r.archive_iri.clone()),
+        })
     }
 }
 

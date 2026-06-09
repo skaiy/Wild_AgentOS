@@ -32,6 +32,9 @@ struct Cli {
 
     #[arg(long = "list-checkpoints", help = "列出所有 checkpoint")]
     list_checkpoints: bool,
+
+    #[arg(long = "workflow", help = "JSON-LD 工作流定义文件路径（可选，替代 LLM 生成的 plan）")]
+    workflow: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -77,6 +80,7 @@ fn main() -> anyhow::Result<()> {
         cli.model,
         cli.workspace.clone(),
         cli.max_iterations,
+        cli.workflow,
     );
 
     if cli.list_checkpoints {

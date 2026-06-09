@@ -11,10 +11,12 @@ pub struct CliConfig {
     pub max_l2_mb: u64,
     pub max_l3_mb: u64,
     pub data_dir: Option<String>,
+    /// JSON-LD 工作流文件路径（可选，替代 LLM 生成的 plan）
+    pub workflow_path: Option<String>,
 }
 
 impl CliConfig {
-    pub fn from_env_and_args(model: String, workspace: String, max_iterations: u32) -> Self {
+    pub fn from_env_and_args(model: String, workspace: String, max_iterations: u32, workflow_path: Option<String>) -> Self {
         let api_key = std::env::var("DEEPSEEK_API_KEY")
             .or_else(|_| std::env::var("AGENT_OS_GATEWAY_API_KEY"))
             .unwrap_or_else(|_| {
@@ -63,6 +65,7 @@ impl CliConfig {
             max_l2_mb,
             max_l3_mb,
             data_dir,
+            workflow_path,
         }
     }
 
@@ -107,6 +110,7 @@ impl CliConfig {
             max_l2_mb: self.max_l2_mb,
             max_l3_mb: self.max_l3_mb,
             data_dir: self.data_dir.clone(),
+            workflow_path: self.workflow_path.clone(),
         }
     }
 
@@ -122,6 +126,7 @@ impl CliConfig {
             max_l2_mb: self.max_l2_mb,
             max_l3_mb: self.max_l3_mb,
             data_dir: self.data_dir.clone(),
+            workflow_path: self.workflow_path.clone(),
         }
     }
 
@@ -137,6 +142,7 @@ impl CliConfig {
             max_l2_mb: self.max_l2_mb,
             max_l3_mb: self.max_l3_mb,
             data_dir: self.data_dir.clone(),
+            workflow_path: self.workflow_path.clone(),
         }
     }
 }
