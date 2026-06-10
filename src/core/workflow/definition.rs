@@ -53,6 +53,9 @@ pub struct WorkflowNodeDef {
     /// 允许的工具列表
     #[serde(default)]
     pub tools: Vec<String>,
+    /// 预期输出（对应 PlanStep.expected_output）
+    #[serde(default)]
+    pub expected_output: String,
     /// 成功标准
     #[serde(default)]
     pub success_criteria: String,

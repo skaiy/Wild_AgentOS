@@ -6,7 +6,7 @@
 use super::definition::*;
 use super::loader::*;
 use crate::core::agent_instance::AgentRole;
-use crate::core::sa::ExecutionPlan;
+use crate::core::sa::{ExecutionPlan, PlanStep};
 
 /// 将 ExecutionPlan 转换为 WorkflowDefinition（可被 DAG 引擎执行）
 pub fn plan_to_workflow(plan: &ExecutionPlan, task_iri: &str) -> WorkflowDefinition {
@@ -27,6 +27,7 @@ pub fn plan_to_workflow(plan: &ExecutionPlan, task_iri: &str) -> WorkflowDefinit
             next_nodes: vec![],
             dependencies: step.dependencies.clone(),
             tools: step.tools_allowed.clone(),
+            expected_output: step.expected_output.clone(),
             success_criteria: step.success_criteria.clone(),
             input_mapping: None,
             branch_on_failure: None,
@@ -97,9 +98,67 @@ pub fn plan_to_workflow(plan: &ExecutionPlan, task_iri: &str) -> WorkflowDefinit
     }
 }
 
+/// 将 DAG 节点 (WorkflowNodeDef) 转换为 PlanStep（统一迭代接口）
+pub fn node_to_planstep(node: &WorkflowNodeDef) -> PlanStep {
+    PlanStep {
+        step_id: node.id.clone(),
+        role: parse_role_from_str(&node.agent_role),
+        objective: node.objective.clone(),
+        expected_output: if node.expected_output.is_empty() {
+            node.success_criteria.clone()
+        } else {
+            node.expected_output.clone()
+        },
+        dependencies: node.dependencies.clone(),
+        tools_allowed: node.tools.clone(),
+        success_criteria: node.success_criteria.clone(),
+    }
+}
+
+/// 从 agent_role 字符串解析 AgentRole
+fn parse_role_from_str(role: &str) -> AgentRole {
+    match role.to_lowercase().as_str() {
+        "plan" | "pa" => AgentRole::Plan,
+        "do" | "da" | "executor" => AgentRole::Do,
+        "check" | "ca" | "reviewer" => AgentRole::Check,
+        "act" | "aa" | "decision" => AgentRole::Act,
+        _ => AgentRole::Do,
+    }
+}
+
 /// 快速判断：ExecutionPlan 是否可被 DAG 引擎执行（总是可以，因 adapter）
 pub fn is_plan_compatible(_plan: &ExecutionPlan) -> bool {
     true
+}
+
+/// 将 DAG (WorkflowDag) 转换回 ExecutionPlan（用于外部 workflow.jsonld 的统一执行路径）
+pub fn dag_to_execution_plan(
+    dag: &WorkflowDag,
+    def: &WorkflowDefinition,
+    task_iri: &str,
+) -> ExecutionPlan {
+    let order = crate::core::workflow::loader::topological_order(dag)
+        .unwrap_or_else(|_| dag.graph.node_indices().collect::<Vec<_>>());
+
+    let steps: Vec<PlanStep> = order.iter()
+        .map(|&idx| node_to_planstep(&dag.graph[idx].def))
+        .collect();
+
+    let agent_sequence: Vec<AgentRole> = steps.iter().map(|s| s.role).collect();
+
+    ExecutionPlan {
+        plan_id: def.id.clone(),
+        agent_sequence,
+        parallel_groups: vec![],
+        task_complexity: crate::core::sa::TaskComplexity::Standard,
+        description: def.name.clone(),
+        steps,
+        context_requirements: std::collections::HashMap::new(),
+        success_metrics: vec![],
+        max_recursion_depth: 0,
+        sub_tasks: vec![],
+        dag_jsonld: None,
+    }
 }
 
 #[cfg(test)]
@@ -139,6 +198,7 @@ mod tests {
             success_metrics: vec![],
             max_recursion_depth: 0,
             sub_tasks: vec![],
+            dag_jsonld: None,
         };
 
         let wf = plan_to_workflow(&plan, "iri://task/test_task");
@@ -180,6 +240,7 @@ mod tests {
             success_metrics: vec![],
             max_recursion_depth: 0,
             sub_tasks: vec![],
+            dag_jsonld: None,
         };
 
         let wf = plan_to_workflow(&plan, "iri://task/test2");

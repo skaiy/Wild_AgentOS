@@ -201,6 +201,9 @@ fn parse_agent_node(entry: &Value) -> Result<WorkflowNodeDef, String> {
         .ok_or_else(|| format!("节点 {} 缺少 agent_role", node_id))?;
 
     let objective = get_jsonld_str(entry, "objective").unwrap_or_default();
+    let expected_output = get_jsonld_str(entry, "expected_output")
+        .or_else(|| get_jsonld_str(entry, "expectedOutput"))
+        .unwrap_or_default();
     let success_criteria = get_jsonld_str(entry, "success_criteria")
         .or_else(|| get_jsonld_str(entry, "successCriteria"))
         .unwrap_or_default();
@@ -246,6 +249,7 @@ fn parse_agent_node(entry: &Value) -> Result<WorkflowNodeDef, String> {
         next_nodes,
         dependencies: dependencies.unwrap_or_default(),
         tools: tools.unwrap_or_default(),
+        expected_output,
         success_criteria,
         input_mapping,
         branch_on_failure,
