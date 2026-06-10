@@ -204,7 +204,7 @@ Build the complete multi-agent system from source (requires Rust + Go + Docker).
 
 #### Prerequisites
 
-- **Rust** 1.75+ · **Go** 1.25+ · **Docker** · **Temporal Server**
+- **Rust** 1.94+ · **Go** 1.24+ · **Docker** · **Temporal Server**
 - LLM API key (OpenAI-compatible)
 
 #### 1. Clone & Configure

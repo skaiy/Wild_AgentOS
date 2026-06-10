@@ -204,7 +204,7 @@ export AGENT_OS_GATEWAY_API_URL="https://your-endpoint/v1"
 
 #### 前置要求
 
-- **Rust** 1.75+ · **Go** 1.25+ · **Docker** · **Temporal Server**
+- **Rust** 1.94+ · **Go** 1.24+ · **Docker** · **Temporal Server**
 - LLM API 密钥（兼容 OpenAI）
 
 #### 1. 克隆并配置
