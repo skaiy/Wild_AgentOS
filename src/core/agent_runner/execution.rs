@@ -384,6 +384,40 @@ impl super::AgentRunner {
             if let Some(methodology_addendum) = MethodologyPromptInjector::build_for_role(agent.role) {
                 policy_text.push_str(&methodology_addendum);
             }
+
+            // Scheduling skill injection: when the task involves APS scheduling,
+            // inject SPARQL prefixes + mandatory tool-chain instructions directly
+            // into the DA system prompt so the agent cannot "plan only" or escape
+            // via read_agent_output.
+            let is_scheduling_task = ctx.objective.contains("一键排程")
+                || ctx.objective.contains("排程")
+                || ctx.objective.contains("scheduling")
+                || ctx.objective.contains("solve_schedule");
+            if agent.role == AgentRole::Do && is_scheduling_task {
+                policy_text.push_str("\n\n## 🔴 APS 台架排程 — 强制执行指令\n");
+                policy_text.push_str("你是 DA 执行 Agent，本任务是 APS 台架排程编排。**你必须通过真实 MCP 工具调用完成每一个步骤，禁止仅描述工具链而不实际调用。**\n\n");
+                policy_text.push_str("### SPARQL 前缀（每次 knowledge_query 必须带）\n");
+                policy_text.push_str("```\nPREFIX aps: <http://aps.local/ontology/>\nPREFIX meta: <https://agentos.ontology/meta/>\nPREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\nPREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n```\n\n");
+                policy_text.push_str("### 强制工具调用顺序（按序执行，不得跳过）\n");
+                policy_text.push_str("1. **knowledge_query** — 查询 graph:aps/constraints 的硬/软约束，以及 graph:aps/preferences 的偏好。SPARQL 体内显式写 GRAPH <http://aps.local/graph/...> { ... }，LIMIT 放外层。\n");
+                policy_text.push_str("2. **get_tasks** — 获取全部 20 条计划任务\n");
+                policy_text.push_str("3. **get_pins** — 获取当前固化锁\n");
+                policy_text.push_str("4. **get_preferences** — 获取当前偏好\n");
+                policy_text.push_str("5. **compute_eligibility** — 判定每个任务的合格台架与不可用原因\n");
+                policy_text.push_str("6. **solve_schedule** — 调用 CP-SAT 求解（硬约束 100% 由求解器保证，你不可改写结果）\n");
+                policy_text.push_str("7. **save_assignments** — 把 solve_schedule 返回的 assignments 数组原值写入 PG（不得置空 [] 或编造）\n");
+                policy_text.push_str("8. **finish** — 叙事化解释排程结果（引用真实数据：已排/未排数、DVP 优先、环境仓→C07/C08、同样机集中、负载均衡）\n\n");
+                policy_text.push_str("### 🚫 禁止行为\n");
+                policy_text.push_str("- 禁止只描述工具链就 finish（必须真实发出 tool_call）\n");
+                policy_text.push_str("- 禁止用 read_agent_output 替代真实工具调用\n");
+                policy_text.push_str("- 禁止在 save_assignments 之前就 finish 声称完成\n");
+                policy_text.push_str("- 禁止凭空叙述 KG 内容（knowledge_query 失败时必须如实暴露）\n");
+                policy_text.push_str("- 禁止编造 file_read/file_write 等无关工具调用\n");
+                policy_text.push_str("- solve 的大结果会附加 IRI——如看到摘要请调 read_full_result_* 微工具取完整数据\n");
+                policy_text.push_str("### 反幻觉规则\n");
+                policy_text.push_str("- KG 查询失败/空时如实说明，不得伪造 PREFIX/key/severity\n");
+                policy_text.push_str("- 解释类问题(为什么任务X没排上)必须先调 compute_eligibility 取真实不可用原因\n");
+            }
             // 注入活跃方法论的劝导指令
             if let Some(ref gate) = self.methodology_gate {
                 let directives = gate.inner().read().persuasive_directives();
@@ -457,16 +491,32 @@ impl super::AgentRunner {
         let summary_iris = sess.get_summary_chain_with_iris(20, 100);
         let summary_text = summary_iris.join("\n");
 
+        let is_scheduling = ctx.objective.contains("一键排程")
+            || ctx.objective.contains("排程")
+            || ctx.objective.contains("scheduling")
+            || ctx.objective.contains("solve_schedule")
+            || ctx.objective.contains("save_assignments");
+
         let context_msg = if summary_text.is_empty() {
             format!(
                 "## 当前任务\n{}\n\n## 可用工具\n请根据需要使用工具完成任务。",
                 ctx.objective
             )
         } else {
-            format!(
-                "## 当前任务\n{}\n\n## 历史摘要\n{}\n\n如果需要查看某轮次的完整报告，可使用 read_agent_output 工具查询对应的 IRI。\n\n## 可用工具\n请根据需要使用工具完成任务。",
-                ctx.objective, summary_text
-            )
+            // Do NOT suggest read_agent_output for scheduling tasks —
+            // the DA would use it as an escape hatch instead of calling
+            // the real MCP tool chain (knowledge_query→get_tasks→...→save_assignments).
+            if is_scheduling {
+                format!(
+                    "## 当前任务\n{}\n\n## 历史摘要\n{}\n\n## 可用工具\n请根据需要使用工具完成任务。已授权所有写操作(save_assignments/record_feedback)。",
+                    ctx.objective, summary_text
+                )
+            } else {
+                format!(
+                    "## 当前任务\n{}\n\n## 历史摘要\n{}\n\n如果需要查看某轮次的完整报告，可使用 read_agent_output 工具查询对应的 IRI。\n\n## 可用工具\n请根据需要使用工具完成任务。",
+                    ctx.objective, summary_text
+                )
+            }
         };
 
         let mut messages: Vec<ChatMessage> = vec![

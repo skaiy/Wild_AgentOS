@@ -108,8 +108,23 @@ impl KnowledgeGraphStore {
                     let after_where = &sparql[where_pos + 5..];
                     if let Some(brace_pos) = after_where.find('{') {
                         let prefix = &sparql[..where_pos + 5 + brace_pos + 1];
-                        let inner = after_where[brace_pos + 1..].trim_end_matches('}').trim();
-                        format!("{} GRAPH {} {{ {} }} }}", prefix, g, inner)
+                        let rest = after_where[brace_pos + 1..].trim();
+                        // Find the LAST '}' to keep LIMIT/OFFSET/ORDER BY
+                        // outside the GRAPH {} block. rfind handles simple
+                        // SELECT-WHERE patterns correctly; nested sub-queries
+                        // are not expected in APS scheduling domain queries.
+                        if let Some(last_brace) = rest.rfind('}') {
+                            let inner = rest[..last_brace].trim();
+                            let trailing = rest[last_brace + 1..].trim();
+                            if trailing.is_empty() {
+                                format!("{} GRAPH {} {{ {} }} }}", prefix, g, inner)
+                            } else {
+                                format!("{} GRAPH {} {{ {} }} }} {}", prefix, g, inner, trailing)
+                            }
+                        } else {
+                            // No closing brace: wrap the whole expression
+                            format!("{} GRAPH {} {{ {} }} }}", prefix, g, rest)
+                        }
                     } else {
                         sparql.to_string()
                     }

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use reqwest::Client;
 
 use crate::CoreError;
@@ -109,60 +109,63 @@ impl McpClient {
             id: self.next_request_id(),
         };
 
-        let tools = match self.send_rpc(&url, &request).await {
-            Ok(response) => {
-                if let Some(result) = response.result {
-                    let tools: Vec<McpTool> = result.get("tools")
-                        .and_then(|t| serde_json::from_value(t.clone()).ok())
-                        .unwrap_or_default();
-                    let state = self.servers.get_mut(name)
-                        .ok_or_else(|| CoreError::Internal {
-                            message: format!("MCP 服务器在连接过程中被移除: {}", name),
-                        })?;
-                    state.tools = tools.clone();
-                    state.status = "connected".to_string();
-                    info!(server = %name, tool_count = tools.len(), "MCP 服务器连接成功");
-                    tools
-                } else {
-                    let state = self.servers.get_mut(name)
-                        .ok_or_else(|| CoreError::Internal {
-                            message: format!("MCP 服务器在连接过程中被移除: {}", name),
-                        })?;
-                    state.status = "connected".to_string();
-                    state.tools = Vec::new();
-                    Vec::new()
+        // Retry up to 3 times with backoff for transient failures.
+        // BFF MCP server may still be starting when agentos connects.
+        const MAX_RETRIES: u32 = 3;
+        let mut last_error: Option<String> = None;
+
+        for attempt in 1..=MAX_RETRIES {
+            match self.send_rpc(&url, &request).await {
+                Ok(response) => {
+                    if let Some(result) = response.result {
+                        let tools: Vec<McpTool> = result.get("tools")
+                            .and_then(|t| serde_json::from_value(t.clone()).ok())
+                            .unwrap_or_default();
+                        let state = self.servers.get_mut(name)
+                            .ok_or_else(|| CoreError::Internal {
+                                message: format!("MCP 服务器在连接过程中被移除: {}", name),
+                            })?;
+                        state.tools = tools.clone();
+                        state.status = "connected".to_string();
+                        info!(server = %name, tool_count = tools.len(), "MCP 服务器连接成功");
+                        return Ok(tools);
+                    } else {
+                        let state = self.servers.get_mut(name)
+                            .ok_or_else(|| CoreError::Internal {
+                                message: format!("MCP 服务器在连接过程中被移除: {}", name),
+                            })?;
+                        state.status = "connected".to_string();
+                        state.tools = Vec::new();
+                        return Ok(Vec::new());
+                    }
+                }
+                Err(e) => {
+                    last_error = Some(e.to_string());
+                    if attempt < MAX_RETRIES {
+                        let delay_ms = 500u64 * attempt as u64;
+                        warn!(server = %name, attempt, delay_ms, error = %e,
+                              "MCP 服务器连接失败，重试中...");
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    }
                 }
             }
-            Err(e) => {
-                let tools = vec![
-                    McpTool {
-                        name: "list_resources".to_string(),
-                        description: Some("列出可用资源".to_string()),
-                        input_schema: None,
-                    },
-                    McpTool {
-                        name: "read_resource".to_string(),
-                        description: Some("按 URI 读取资源".to_string()),
-                        input_schema: Some(json!({
-                            "type": "object",
-                            "properties": { "uri": {"type": "string"} },
-                            "required": ["uri"]
-                        })),
-                    },
-                ];
-                let state = self.servers.get_mut(name)
-                    .ok_or_else(|| CoreError::Internal {
-                        message: format!("MCP 服务器在连接过程中被移除: {}", name),
-                    })?;
-                state.tools = tools.clone();
-                state.status = "connected_fallback".to_string();
-                state.error = Some(e.to_string());
-                warn!(server = %name, error = %e, "MCP 服务器连接失败，使用模拟工具");
-                tools
-            }
-        };
+        }
 
-        Ok(tools)
+        // All retries exhausted — fail fast with a clear error instead of
+        // silently falling back to simulated/built-in tools.
+        let err_msg = format!(
+            "MCP 服务器 {} ({}) 连接失败（已重试 {} 次）: {}",
+            name, url, MAX_RETRIES,
+            last_error.as_deref().unwrap_or("unknown")
+        );
+        let state = self.servers.get_mut(name)
+            .ok_or_else(|| CoreError::Internal {
+                message: format!("MCP 服务器在连接过程中被移除: {}", name),
+            })?;
+        state.status = "error".to_string();
+        state.error = Some(err_msg.clone());
+        error!(server = %name, "MCP 服务器连接彻底失败");
+        Err(CoreError::Internal { message: err_msg })
     }
 
     pub async fn call_tool(

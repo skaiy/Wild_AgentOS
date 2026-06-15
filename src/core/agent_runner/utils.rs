@@ -983,10 +983,27 @@ impl super::AgentRunner {
         use crate::tools::result_router::micro_tools::MicroToolGenerator;
         use crate::tools::tool_executor::MicroToolContext;
 
+        // Scheduling MCP tools whose complete results must never be
+        // summarised/truncated — otherwise the DA sees a summary with
+        // assignments=[] and passes that to save_assignments.
+        const PASSTHROUGH_TOOLS: &[&str] = &[
+            "solve_schedule",
+            "save_assignments",
+            "compute_eligibility",
+            "get_tasks",
+            "get_pins",
+            "get_preferences",
+            "get_schedule",
+        ];
+
         let settings = crate::config::settings::ToolResultRouterSettings::default();
         let router = ResultRouter::new(&settings);
 
-        let decision = router.route(result_str, tool_name, call_id);
+        let decision = if PASSTHROUGH_TOOLS.contains(&tool_name) {
+            RouteDecision::PassThrough
+        } else {
+            router.route(result_str, tool_name, call_id)
+        };
         let iri = format!("iri://tool-result/{}", call_id);
 
         match decision {

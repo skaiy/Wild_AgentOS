@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio_stream::{Stream, StreamExt};
 use futures::stream;
-use tracing::info;
+use tracing::{error, info, warn};
 
 use crate::config::settings::Settings;
 use crate::core::core_types::SemanticCore;
@@ -574,10 +574,20 @@ async fn stream_task_handler(
                         }
                     }
                     None => {
-                        tracing::warn!(
+                        // MCP tool registration is mandatory for scheduling.
+                        // Without real MCP tools (get_tasks / compute_eligibility /
+                        // solve_schedule / save_assignments) the Agent will only
+                        // have built-in tools (file_read, etc.) and cannot perform
+                        // a real ReAct scheduling workflow.
+                        tracing::error!(
                             server = %server_name,
                             error = ?last_err,
-                            "Failed to connect MCP server after retries (non-fatal, continuing)"
+                            "MCP server connection exhausted all retries — aborting agentos startup"
+                        );
+                        panic!(
+                            "Failed to connect MCP server {}: {:?}. \
+                             Ensure BFF MCP server ({}) is healthy before starting agentos.",
+                            server_name, last_err, url
                         );
                     }
                 }
