@@ -102,6 +102,7 @@ tool_result_router:
   enabled: true
   threshold_small: 2048
   threshold_large: 8192
+  micro_tool_threshold: 16384
   preview_size: 2000
   max_graph_entities: 500
   max_micro_tools: 5

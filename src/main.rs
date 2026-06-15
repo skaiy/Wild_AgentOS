@@ -30,6 +30,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 异步初始化 BatchAgent 系统（注册 agent、启动触发器）
     agent_os_service.init_batch_system().await;
 
+    // 把已存在的 axum HTTP/SSE 路由(build_router) 与 gRPC 并行挂载，复用同一运行期状态。
+    let http_router = agent_os_service.build_http_router();
+    let http_port: u16 = std::env::var("AGENT_OS_HTTP_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8080);
+    let http_addr = std::net::SocketAddr::from(([0, 0, 0, 0], http_port));
+    tokio::spawn(async move {
+        match tokio::net::TcpListener::bind(http_addr).await {
+            Ok(listener) => {
+                tracing::info!("Agent OS HTTP/SSE server starting on {}", http_addr);
+                if let Err(e) = axum::serve(listener, http_router).await {
+                    tracing::error!("HTTP server error: {}", e);
+                }
+            }
+            Err(e) => tracing::error!("Failed to bind HTTP server on {}: {}", http_addr, e),
+        }
+    });
+
     tracing::info!("Agent OS gRPC server starting on {}", addr);
 
     tonic::transport::Server::builder()

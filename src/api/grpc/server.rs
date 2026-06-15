@@ -260,6 +260,26 @@ impl AgentOSService {
         Ok(s)
     }
 
+    /// 装配 axum HTTP/SSE 路由，复用本服务的运行期共享状态（EventBus / Blackboard /
+    /// SkillRegistry 等），使 HTTP `/api/v1/tasks/stream` 与 gRPC 任务执行处于同一事件总线。
+    pub fn build_http_router(&self) -> axum::Router {
+        use crate::core::core_types::SemanticCore;
+        use crate::core::validation::ValidationEngine;
+
+        let config = CoreConfig::default();
+        let core = Arc::new(SemanticCore {
+            blackboard: self.blackboard.clone(),
+            l0_store: self.l0.clone(),
+            projection: self.projection.clone(),
+            skills: self.skills.clone(),
+            events: self.event_bus.clone(),
+            validation: Arc::new(ValidationEngine::new(config.max_node_size)),
+            checkpoints: self.checkpoints.clone(),
+            config,
+        });
+        crate::api::http::build_router(core)
+    }
+
     /// 异步启动 BatchAgent 系统。在 gRPC serve 之前调用。
     pub async fn init_batch_system(&self) {
         let mut guard = self.batch_manager.lock().await;
