@@ -18,17 +18,46 @@ use tokio_stream::{Stream, StreamExt};
 use futures::stream;
 use tracing::info;
 
+use crate::config::settings::Settings;
 use crate::core::core_types::SemanticCore;
 use crate::core::event_bus::EventBus;
+use crate::core::execution_event::ExecutionEventEmitter;
 use crate::core::execution_event::{ExecutionEvent, ExecutionEventKind};
+use crate::core::sa::SupervisorAgent;
+use crate::core::agent_runner::AgentRunner;
+use crate::gateway::unified_gateway::UnifiedGateway;
+use crate::memory::l0_store::L0Store;
+use crate::memory::memory_manager::MemoryManager;
+use crate::memory::l2_blackboard::Blackboard;
+use crate::memory::scheduler::MemoryScheduler;
+use crate::memory::prefetch_engine::PrefetchEngine;
+use crate::memory::unified_graph::UnifiedGraphStore;
 use crate::knowledge_graph::rdf_mapper::RdfMapper;
 use crate::knowledge_graph::store::KnowledgeGraphStore;
 use crate::knowledge_graph::types::{EdgeDef, LLMExtractionOutput, NodeDef};
+use crate::templates::template_engine::TemplateEngine;
+use crate::tools::skill_registry::SkillRegistry;
 use crate::tools::tool_guard::{GuardAuditEntry, GUARD_AUDIT_LOG};
 
 pub struct AppState {
     pub core: Arc<SemanticCore>,
     pub kg_store: Arc<oxigraph::store::Store>,
+    /// Shared gateway for creating SupervisorAgent instances in HTTP stream handler
+    pub gateway: Arc<UnifiedGateway>,
+    /// App settings (gateway config, agent params, etc.)
+    pub settings: Settings,
+    /// L0 store shared with agent runner
+    pub l0: Arc<L0Store>,
+    /// Memory manager shared with agent runner
+    pub memory_manager: Arc<tokio::sync::Mutex<MemoryManager>>,
+    /// Template engine shared with agent runner
+    pub templates: Arc<TemplateEngine>,
+    /// Memory scheduler
+    pub scheduler: Arc<MemoryScheduler>,
+    /// Prefetch engine
+    pub prefetch: Arc<PrefetchEngine>,
+    /// Unified graph store
+    pub unified_graph: Arc<UnifiedGraphStore>,
 }
 
 #[derive(Serialize)]
@@ -93,8 +122,33 @@ pub struct StreamEventResponse {
     pub data: Value,
 }
 
-pub fn build_router(core: Arc<SemanticCore>, kg_store: Arc<oxigraph::store::Store>) -> Router {
-    let state = Arc::new(AppState { core, kg_store });
+pub fn build_router(
+    core: Arc<SemanticCore>,
+    kg_store: Arc<oxigraph::store::Store>,
+    gateway: Arc<UnifiedGateway>,
+    settings: Settings,
+    l0: Arc<L0Store>,
+    memory_manager: Arc<tokio::sync::Mutex<MemoryManager>>,
+    templates: Arc<TemplateEngine>,
+    scheduler: Arc<MemoryScheduler>,
+    prefetch: Arc<PrefetchEngine>,
+    unified_graph: Arc<UnifiedGraphStore>,
+) -> Router {
+    // Load skills from the skills/ directory (if it exists next to the binary/config)
+    load_skills_from_dir(&core.skills, &settings);
+
+    let state = Arc::new(AppState {
+        core,
+        kg_store,
+        gateway,
+        settings,
+        l0,
+        memory_manager,
+        templates,
+        scheduler,
+        prefetch,
+        unified_graph,
+    });
 
     Router::new()
         .route("/health", get(health_handler))
@@ -115,6 +169,114 @@ pub fn build_router(core: Arc<SemanticCore>, kg_store: Arc<oxigraph::store::Stor
         .route("/api/v1/kg/import", post(kg_import_handler))
         .route("/api/v1/kg/query", post(kg_query_handler))
         .with_state(state)
+}
+
+/// Scan skill directories for JSON-LD definitions and register them.
+/// Looks in: (1) AGENT_OS_SKILLS_DIR env var, (2) `skills/` relative to CWD,
+/// (3) `../skills/` relative to CWD (supports agentos/skills/ when CWD is agentos/gliding_horse).
+fn load_skills_from_dir(skills: &Arc<SkillRegistry>, settings: &Settings) {
+    let mut dirs_to_scan: Vec<std::path::PathBuf> = Vec::new();
+
+    // 1. Environment variable override
+    if let Ok(skills_dir) = std::env::var("AGENT_OS_SKILLS_DIR") {
+        let p = std::path::PathBuf::from(&skills_dir);
+        if p.is_dir() {
+            dirs_to_scan.push(p);
+        }
+    }
+
+    // 2. CWD/skills/ (e.g. when running from gliding_horse root)
+    let cwd_skills = std::path::Path::new("skills");
+    if cwd_skills.is_dir() {
+        dirs_to_scan.push(cwd_skills.to_path_buf());
+    }
+
+    // 3. Parent/skills/ (e.g. agentos/skills/ when CWD = agentos/gliding_horse)
+    let parent_skills = std::path::Path::new("../skills");
+    if parent_skills.is_dir() {
+        dirs_to_scan.push(parent_skills.to_path_buf());
+    }
+
+    if dirs_to_scan.is_empty() {
+        info!("No skills/ directory found, skipping skill loading");
+        return;
+    }
+
+    for skills_dir in &dirs_to_scan {
+        if let Ok(entries) = std::fs::read_dir(skills_dir) {
+            for entry in entries.flatten() {
+                let jsonld = entry.path().join("skill.jsonld");
+                if jsonld.is_file() {
+                    if let Ok(content) = std::fs::read_to_string(&jsonld) {
+                        if let Ok(parsed) = serde_json::from_str::<Value>(&content) {
+                            if let Some(skill) = parse_compact_jsonld_to_skill_meta(&parsed) {
+                                info!(name = %skill.name, iri = %skill.skill_iri, "Loaded skill from {}", jsonld.display());
+                                skills.register_skill(skill);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let _ = settings; // used for future parametric skill loading
+}
+
+/// Parse a compact JSON-LD skill file (like skills/test_skill/skill.jsonld) into SkillMeta.
+fn parse_compact_jsonld_to_skill_meta(json: &Value) -> Option<crate::tools::skill_registry::SkillMeta> {
+    use crate::tools::skill_registry::SkillMeta;
+    let skill_iri = json.get("@id")?.as_str()?.to_string();
+    let name = json.get("schema:name")
+        .or_else(|| json.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let description = json.get("schema:description")
+        .or_else(|| json.get("description"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let version = json.get("skill:version")
+        .or_else(|| json.get("version"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("1.0.0")
+        .to_string();
+    let category = json.get("skill:category")
+        .or_else(|| json.get("category"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("general")
+        .to_string();
+    let tags: Vec<String> = json.get("skill:tags")
+        .or_else(|| json.get("tags"))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let maturity = json.get("skill:maturity")
+        .or_else(|| json.get("maturity"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("stable")
+        .to_string();
+    let skill_types: Vec<String> = json.get("@type")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    Some(SkillMeta {
+        skill_iri,
+        name,
+        description,
+        version,
+        category,
+        security_level: "normal".to_string(),
+        allowed_roles: vec!["DA".to_string()],
+        input_schema: serde_json::json!({"type": "object", "properties": {"prompt": {"type": "string", "description": "自然语言排程意图"}}}),
+        output_schema: serde_json::json!({"type": "object", "properties": {"result": {"type": "string"}, "assignments": {"type": "array"}}}),
+        compiled_template: "{}".to_string(),
+        signature: None,
+        signature_algorithm: None,
+        input_mapping: HashMap::new(),
+        output_mapping: HashMap::new(),
+        skill_types,
+    })
 }
 
 async fn health_handler() -> impl IntoResponse {
@@ -213,6 +375,83 @@ async fn stream_task_handler(
     let task_iri_clone = task_iri.clone();
     let mut rx = event_bus.subscribe();
 
+    // --- Spawn agent execution using shared components (same event_bus) ---
+    let gateway = state.gateway.clone();
+    let skills = state.core.skills.clone();
+    let blackboard = state.core.blackboard.clone();
+    let l0 = state.l0.clone();
+    let memory_manager = state.memory_manager.clone();
+    let templates = state.templates.clone();
+    let scheduler = state.scheduler.clone();
+    let prefetch = state.prefetch.clone();
+    let ug_store = state.unified_graph.store();
+    let settings = state.settings.clone();
+    let prompt = req.prompt.clone();
+    let task_iri_exec = task_iri.clone();
+    let event_bus_exec = event_bus.clone();
+    let include_thought = req.include_thought.unwrap_or(true);
+    let include_tool_calls = req.include_tool_calls.unwrap_or(true);
+
+    tokio::spawn(async move {
+        let mut runner = AgentRunner::new(
+            gateway,
+            skills.clone(),
+            blackboard.clone(),
+            l0,
+            memory_manager,
+            templates.clone(),
+            settings.agents.clone(),
+        )
+        .with_scheduler(scheduler.clone())
+        .with_prefetch_engine(prefetch.clone())
+        .with_unified_graph_store(ug_store);
+
+        // Wire up unified KG store for tool executor
+        {
+            let ug = runner.unified_graph_store.clone();
+            if let Some(ug) = ug {
+                let mut executor = runner.tool_executor.write().expect("tool_executor RwLock poisoned");
+                executor.set_unified_kg_store(ug);
+            }
+        }
+
+        let runner = Arc::new(runner);
+
+        let mut sa = SupervisorAgent::new(
+            runner,
+            templates,
+            skills,
+            event_bus_exec.clone(), // Same event_bus as subscriber
+            settings.agents.max_iterations,
+        );
+        sa = sa.with_memory(
+            Some(blackboard),
+            Some(prefetch),
+            Some(scheduler),
+        );
+
+        let emitter = ExecutionEventEmitter::with_options(
+            &task_iri_exec,
+            None,
+            Some(event_bus_exec),
+            include_thought,
+            include_tool_calls,
+        );
+
+        emitter.emit_phase_change("idle", "plan", "PA", "Task started");
+
+        match sa.process_task(&prompt, &task_iri_exec).await {
+            Ok(result) => {
+                emitter.emit_completion(&result.status, &result.summary, result.output.clone());
+            }
+            Err(e) => {
+                emitter.emit_error("ExecutionError", &e.to_string(), "SA", false);
+                emitter.emit_completion("failed", &e.to_string(), None);
+            }
+        }
+    });
+
+    // --- Stream events from the shared event_bus as SSE ---
     let stream = async_stream::stream! {
         yield Ok::<axum::response::sse::Event, std::convert::Infallible>(Event::default().event("task_started").data(json!({
             "task_iri": task_iri_clone,
@@ -230,7 +469,7 @@ async fn stream_task_handler(
                         yield Ok(sse_event);
                     }
 
-                    if event.event_type == "TASK_COMPLETED" || event.event_type == "TASK_FAILED" {
+                    if event.event_type == "EXECUTION_COMPLETE" || event.event_type == "TASK_FAILED" {
                         break;
                     }
                 }
@@ -606,20 +845,203 @@ fn convert_event_to_sse(event: &crate::core::event_bus::Event) -> Option<Event> 
                 "message": event.payload
             }),
         ),
-        EventType::TaskCompleted => (
-            "completion",
-            json!({
-                "status": "success",
-                "summary": event.payload
-            }),
-        ),
-        EventType::TaskFailed => (
-            "completion",
-            json!({
-                "status": "failed",
-                "summary": event.payload
-            }),
-        ),
+        EventType::TaskCompleted => {
+            // Memory subsystem lifecycle — not the agent's final completion.
+            // The structured completion comes via EXECUTION_COMPLETE.
+            (
+                "agent_status",
+                json!({
+                    "agent_id": "system",
+                    "status": "task_completed",
+                    "detail": event.payload,
+                }),
+            )
+        }
+        EventType::TaskFailed => {
+            (
+                "agent_status",
+                json!({
+                    "agent_id": "system",
+                    "status": "task_failed",
+                    "detail": event.payload,
+                }),
+            )
+        }
+        // --- Phase / Agent lifecycle events (from ExecutionEventEmitter) ---
+        EventType::Custom(ref name) if name == "PHASE_CHANGE" => {
+            let payload: Value = serde_json::from_str(&event.payload)
+                .unwrap_or_default();
+            let pc = payload.get("event").and_then(|e| e.get("PhaseChange"));
+            (
+                "phase",
+                json!({
+                    "from_phase": pc.and_then(|p| p.get("from_phase")).and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "to_phase": pc.and_then(|p| p.get("to_phase")).and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "agent_role": pc.and_then(|p| p.get("agent_role")).and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "reason": pc.and_then(|p| p.get("reason")).and_then(|v| v.as_str()).unwrap_or(""),
+                }),
+            )
+        }
+        EventType::Custom(ref name) if name == "AGENT_STATUS" => {
+            let payload: Value = serde_json::from_str(&event.payload)
+                .unwrap_or_default();
+            let as_ = payload.get("event").and_then(|e| e.get("AgentStatus"));
+            (
+                "agent_status",
+                json!({
+                    "agent_id": as_.and_then(|s| s.get("agent_id")).and_then(|v| v.as_str()).unwrap_or(&event.source_agent_iri),
+                    "role": as_.and_then(|s| s.get("role")).and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "status": as_.and_then(|s| s.get("status")).and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "turn": as_.and_then(|s| s.get("turn")).and_then(|v| v.as_u64()).unwrap_or(0),
+                    "iteration": as_.and_then(|s| s.get("iteration")).and_then(|v| v.as_u64()).unwrap_or(0),
+                }),
+            )
+        }
+        // --- Thought/Reasoning events (from SA/AgentRunner ReAct loop) ---
+        EventType::Custom(ref name) if name == "THOUGHT" => {
+            // Payload is ExecutionEvent { event: { Thought: { thought, action, … } } }
+            let payload: Value = serde_json::from_str(&event.payload)
+                .unwrap_or_default();
+            let thought_obj = payload.get("event").and_then(|e| e.get("Thought"));
+            let content = thought_obj
+                .and_then(|t| t.get("thought"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let agent_id = thought_obj
+                .and_then(|t| t.get("agent_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(&event.source_agent_iri);
+            let action = thought_obj
+                .and_then(|t| t.get("action"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("continue");
+            (
+                "reasoning",
+                json!({
+                    "content": content,
+                    "agent_id": agent_id,
+                    "action": action,
+                }),
+            )
+        }
+        EventType::Custom(ref name) if name == "TOOL_CALL" => {
+            // Payload is ExecutionEvent { event: { ToolCall: { tool_name, arguments_json, … } } }
+            let payload: Value = serde_json::from_str(&event.payload)
+                .unwrap_or_default();
+            let tc = payload.get("event").and_then(|e| e.get("ToolCall"));
+            let tool_name = tc
+                .and_then(|t| t.get("tool_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let call_id = tc
+                .and_then(|t| t.get("call_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let args_raw = tc
+                .and_then(|t| t.get("arguments_json"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("{}");
+            let args: Value = serde_json::from_str(args_raw).unwrap_or(Value::Null);
+            let agent_id = tc
+                .and_then(|t| t.get("agent_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(&event.source_agent_iri);
+            (
+                "tool_call",
+                json!({
+                    "tool": tool_name,
+                    "call_id": call_id,
+                    "agent_id": agent_id,
+                    "arguments": args,
+                }),
+            )
+        }
+        EventType::Custom(ref name) if name == "TOOL_RESULT" => {
+            // Payload is ExecutionEvent { event: { ToolResult: { tool_name, result, … } } }
+            let payload: Value = serde_json::from_str(&event.payload)
+                .unwrap_or_default();
+            let tr = payload.get("event").and_then(|e| e.get("ToolResult"));
+            let tool_name = tr
+                .and_then(|t| t.get("tool_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let call_id = tr
+                .and_then(|t| t.get("call_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let result_raw = tr
+                .and_then(|t| t.get("result"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let result_val: Value = serde_json::from_str(result_raw).unwrap_or(Value::Null);
+            let success = tr
+                .and_then(|t| t.get("success"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let agent_id = tr
+                .and_then(|t| t.get("agent_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(&event.source_agent_iri);
+            (
+                "tool_call",
+                json!({
+                    "tool": tool_name,
+                    "call_id": call_id,
+                    "agent_id": agent_id,
+                    "result": result_val,
+                    "success": success,
+                    "is_result": true,
+                }),
+            )
+        }
+        EventType::Custom(ref name) if name == "EXECUTION_COMPLETE" => {
+            let payload: Value = serde_json::from_str(&event.payload)
+                .unwrap_or_default();
+            let comp = payload.get("event").and_then(|e| e.get("Completion"));
+            let status = comp
+                .and_then(|c| c.get("status"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("success");
+            let summary = comp
+                .and_then(|c| c.get("summary"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let total_turns = comp
+                .and_then(|c| c.get("total_turns"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let total_tool_calls = comp
+                .and_then(|c| c.get("total_tool_calls"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let total_tokens = comp
+                .and_then(|c| c.get("total_tokens"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            (
+                "completion",
+                json!({
+                    "status": status,
+                    "summary": summary,
+                    "total_turns": total_turns,
+                    "total_tool_calls": total_tool_calls,
+                    "total_tokens": total_tokens,
+                }),
+            )
+        }
+        EventType::Custom(ref name) if name == "EXECUTION_ERROR" => {
+            let payload: Value = serde_json::from_str(&event.payload)
+                .unwrap_or_default();
+            let err = payload.get("event").and_then(|e| e.get("Error"));
+            (
+                "error",
+                json!({
+                    "agent_id": err.and_then(|e| e.get("agent_id")).and_then(|v| v.as_str()).unwrap_or(&event.source_agent_iri),
+                    "error_type": err.and_then(|e| e.get("error_type")).and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "message": err.and_then(|e| e.get("message")).and_then(|v| v.as_str()).unwrap_or(&event.payload),
+                }),
+            )
+        }
         _ => return None,
     };
 
