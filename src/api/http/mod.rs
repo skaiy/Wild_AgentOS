@@ -1163,10 +1163,30 @@ fn convert_event_to_sse(event: &crate::core::event_bus::Event) -> Option<Event> 
                 .and_then(|t| t.get("success"))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
+            let result_size = tr
+                .and_then(|t| t.get("result_size_bytes"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(result_raw.len() as u64);
             let agent_id = tr
                 .and_then(|t| t.get("agent_id"))
                 .and_then(|v| v.as_str())
                 .unwrap_or(&event.source_agent_iri);
+            // Inline a preview of the routed/truncated result alongside the
+            // structured `result` field so SSE consumers can still inspect
+            // tool output even when the router redirects the full payload to
+            // a micro-tool / KG node and the parsed JSON would otherwise be
+            // null. Preview is the first 256 chars; top-level keys are
+            // included when the raw string happens to parse as JSON.
+            let result_preview: String = result_raw.chars().take(256).collect();
+            let result_top_keys: Vec<String> = match &result_val {
+                Value::Object(map) => map.keys().cloned().collect(),
+                Value::Array(arr) => arr
+                    .first()
+                    .and_then(|first| first.as_object())
+                    .map(|obj| obj.keys().cloned().collect())
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            };
             (
                 "tool_call",
                 json!({
@@ -1174,6 +1194,9 @@ fn convert_event_to_sse(event: &crate::core::event_bus::Event) -> Option<Event> 
                     "call_id": call_id,
                     "agent_id": agent_id,
                     "result": result_val,
+                    "result_preview": result_preview,
+                    "result_top_keys": result_top_keys,
+                    "result_size_bytes": result_size,
                     "success": success,
                     "is_result": true,
                 }),
