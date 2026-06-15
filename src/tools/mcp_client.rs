@@ -15,6 +15,7 @@ static JSON_RPC_VERSION: &str = "2.0";
 pub struct McpTool {
     pub name: String,
     pub description: Option<String>,
+    #[serde(default, alias = "inputSchema", alias = "input_schema")]
     pub input_schema: Option<Value>,
 }
 
@@ -315,6 +316,31 @@ mod tests {
     fn test_all_tools_empty() {
         let client = McpClient::new();
         assert!(client.all_tools().is_empty());
+    }
+
+    #[test]
+    fn test_mcp_tool_deserialize_camelcase_input_schema() {
+        let raw = json!({
+            "name": "get_tasks",
+            "description": "Return tasks",
+            "inputSchema": {"type": "object", "properties": {}, "required": []},
+        });
+        let tool: McpTool = serde_json::from_value(raw).expect("camelCase inputSchema must deserialize");
+        assert_eq!(tool.name, "get_tasks");
+        assert!(tool.input_schema.is_some(), "camelCase inputSchema must populate input_schema");
+        let schema = tool.input_schema.unwrap();
+        assert_eq!(schema.get("type").and_then(|v| v.as_str()), Some("object"));
+    }
+
+    #[test]
+    fn test_mcp_tool_deserialize_snake_case_input_schema() {
+        let raw = json!({
+            "name": "get_tasks",
+            "description": "Return tasks",
+            "input_schema": {"type": "object"},
+        });
+        let tool: McpTool = serde_json::from_value(raw).expect("snake_case input_schema must deserialize");
+        assert!(tool.input_schema.is_some());
     }
 
     #[test]

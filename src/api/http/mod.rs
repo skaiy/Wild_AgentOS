@@ -39,6 +39,25 @@ use crate::templates::template_engine::TemplateEngine;
 use crate::tools::skill_registry::SkillRegistry;
 use crate::tools::tool_guard::{GuardAuditEntry, GUARD_AUDIT_LOG};
 
+use std::sync::OnceLock;
+use std::sync::RwLock;
+
+static RAW_SKILL_JSONLD: OnceLock<RwLock<HashMap<String, Value>>> = OnceLock::new();
+
+fn raw_skill_jsonld() -> &'static RwLock<HashMap<String, Value>> {
+    RAW_SKILL_JSONLD.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn store_raw_jsonld(iri: &str, doc: Value) {
+    if let Ok(mut guard) = raw_skill_jsonld().write() {
+        guard.insert(iri.to_string(), doc);
+    }
+}
+
+fn get_raw_jsonld(iri: &str) -> Option<Value> {
+    raw_skill_jsonld().read().ok().and_then(|g| g.get(iri).cloned())
+}
+
 pub struct AppState {
     pub core: Arc<SemanticCore>,
     pub kg_store: Arc<oxigraph::store::Store>,
@@ -211,6 +230,7 @@ fn load_skills_from_dir(skills: &Arc<SkillRegistry>, settings: &Settings) {
                         if let Ok(parsed) = serde_json::from_str::<Value>(&content) {
                             if let Some(skill) = parse_compact_jsonld_to_skill_meta(&parsed) {
                                 info!(name = %skill.name, iri = %skill.skill_iri, "Loaded skill from {}", jsonld.display());
+                                store_raw_jsonld(&skill.skill_iri, parsed);
                                 skills.register_skill(skill);
                             }
                         }
@@ -419,13 +439,49 @@ async fn stream_task_handler(
         // Comma-separated URLs (e.g. "http://localhost:8900/mcp").
         // Each server is connected (tools/list) and its tools registered
         // in the ToolExecutor so the Agent can call them during ReAct.
+        // Retries connect with exponential backoff so a transient BFF startup
+        // race does not silently fall back to built-in tools only.
         if let Ok(mcp_urls) = std::env::var("AGENT_OS_MCP_SERVERS") {
             let mut mcp_client = crate::tools::mcp_client::McpClient::new();
             for url in mcp_urls.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
                 let server_name = format!("bff_mcp");
                 mcp_client.register_server(&server_name, url);
-                match mcp_client.connect(&server_name).await {
-                    Ok(tools) => {
+                let mut connect_result: Option<Vec<crate::tools::mcp_client::McpTool>> = None;
+                let mut last_err: Option<String> = None;
+                for attempt in 1u32..=5 {
+                    match mcp_client.connect(&server_name).await {
+                        Ok(tools) if !tools.is_empty() => {
+                            connect_result = Some(tools);
+                            break;
+                        }
+                        Ok(tools) => {
+                            last_err = Some(format!(
+                                "tools/list returned 0 tools (attempt {})",
+                                attempt
+                            ));
+                            // No tools returned: still treat as transient and retry.
+                            tracing::warn!(
+                                server = %server_name,
+                                attempt,
+                                "MCP server returned 0 tools, will retry"
+                            );
+                            let _ = tools;
+                        }
+                        Err(e) => {
+                            last_err = Some(e.to_string());
+                            tracing::warn!(
+                                server = %server_name,
+                                attempt,
+                                error = %e,
+                                "MCP connect attempt failed, will retry"
+                            );
+                        }
+                    }
+                    let backoff_ms = 200u64.saturating_mul(1u64 << (attempt - 1));
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                }
+                match connect_result {
+                    Some(tools) => {
                         tracing::info!(server = %server_name, tools = tools.len(), "MCP server connected, registering tools");
                         let mut executor = runner.tool_executor.write().expect("tool_executor RwLock");
                         for tool in &tools {
@@ -517,8 +573,12 @@ async fn stream_task_handler(
                             );
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(server = %server_name, error = %e, "Failed to connect MCP server (non-fatal, continuing)");
+                    None => {
+                        tracing::warn!(
+                            server = %server_name,
+                            error = ?last_err,
+                            "Failed to connect MCP server after retries (non-fatal, continuing)"
+                        );
                     }
                 }
             }
@@ -707,9 +767,25 @@ async fn list_skills_handler(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let skills = state.core.skills.list_all_skills();
+    let enriched: Vec<Value> = skills
+        .into_iter()
+        .map(|skill| {
+            let mut value = serde_json::to_value(&skill).unwrap_or_else(|_| json!({}));
+            if let Some(raw) = get_raw_jsonld(&skill.skill_iri) {
+                if let Value::Object(ref mut map) = value {
+                    if let Value::Object(raw_map) = raw {
+                        for (k, v) in raw_map {
+                            map.entry(k).or_insert(v);
+                        }
+                    }
+                }
+            }
+            value
+        })
+        .collect();
     Json(json!({
-        "count": skills.len(),
-        "skills": skills,
+        "count": enriched.len(),
+        "skills": enriched,
     }))
 }
 
