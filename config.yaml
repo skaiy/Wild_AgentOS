@@ -1,13 +1,13 @@
 gateway:
-  base_url: "https://api.deepseek.com"
-  api_key: "${DEEPSEEK_API_KEY}"
-  default_model: "deepseek-v4-flash"
+  base_url: "http://localhost:4000"
+  api_key: "sk-local-litellm"
+  default_model: "grok-4.3"
   timeout_seconds: 300
   max_retries: 3
   model_mapping:
-    planning: "deepseek-v4-pro"
-    execution: "deepseek-v4-flash"
-    analysis: "deepseek-v4-flash"
+    planning: "grok-4.3"
+    execution: "grok-4.3"
+    analysis: "grok-4.3"
     default: "deepseek-v4-flash"
 
 memory:
@@ -113,12 +113,12 @@ embedding:
   enabled: true
   provider: "ollama"
   ollama:
-    base_url: "http://localhost:11434"
+    base_url: "http://localhost:4000"
     model: "nomic-embed-text"
     dimension: 768
   oneapi:
-    base_url: ""
-    api_key: ""
+    base_url: "http://localhost:4000"
+    api_key: "sk-local-litellm"
     model: "text-embedding-3-small"
     dimension: 1536
   fallback:
@@ -155,3 +155,11 @@ token_optimization:
     enabled: true
     use_layered_prompts: true
     store_specs_in_kg: true
+
+
+# BFF MCP server registration (injected by patch-config.sh)
+# Remote MCP server exposing scheduling tools for Agent tool_call routing.
+mcp_servers:
+  bff:
+    url: "http://localhost:8900/mcp"
+    enabled: true

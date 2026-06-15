@@ -415,6 +415,115 @@ async fn stream_task_handler(
             }
         }
 
+        // Register remote MCP server tools from AGENT_OS_MCP_SERVERS env var.
+        // Comma-separated URLs (e.g. "http://localhost:8900/mcp").
+        // Each server is connected (tools/list) and its tools registered
+        // in the ToolExecutor so the Agent can call them during ReAct.
+        if let Ok(mcp_urls) = std::env::var("AGENT_OS_MCP_SERVERS") {
+            let mut mcp_client = crate::tools::mcp_client::McpClient::new();
+            for url in mcp_urls.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                let server_name = format!("bff_mcp");
+                mcp_client.register_server(&server_name, url);
+                match mcp_client.connect(&server_name).await {
+                    Ok(tools) => {
+                        tracing::info!(server = %server_name, tools = tools.len(), "MCP server connected, registering tools");
+                        let mut executor = runner.tool_executor.write().expect("tool_executor RwLock");
+                        for tool in &tools {
+                            let tool_name = format!("mcp__{}__{}", server_name, tool.name);
+                            let desc = tool.description.clone().unwrap_or_default();
+                            let schema = tool.input_schema.clone().unwrap_or(serde_json::json!({}));
+                            let url_c = url.to_string();
+                            let raw_name = tool.name.clone();
+                            let server_name_c = server_name.clone();
+                            executor.register(
+                                &tool_name,
+                                &desc,
+                                schema,
+                                Arc::new(move |args: serde_json::Value| {
+                                    let url = url_c.clone();
+                                    let name = raw_name.clone();
+                                    let srv = server_name_c.clone();
+                                    Box::pin(async move {
+                                        let client = reqwest::Client::new();
+                                        let req_body = serde_json::json!({
+                                            "jsonrpc": "2.0",
+                                            "id": 1,
+                                            "method": "tools/call",
+                                            "params": {
+                                                "name": name,
+                                                "arguments": args,
+                                            }
+                                        });
+                                        let resp = client.post(&url)
+                                            .json(&req_body)
+                                            .timeout(std::time::Duration::from_secs(120))
+                                            .send().await
+                                            .map_err(|e| format!("MCP call to {} failed: {}", srv, e))?;
+                                        let body: serde_json::Value = resp.json().await
+                                            .map_err(|e| format!("MCP response parse error: {}", e))?;
+                                        if let Some(error) = body.get("error") {
+                                            Err(format!("MCP error from {}: {}", srv, error))
+                                        } else {
+                                            Ok(body.get("result").cloned().unwrap_or(serde_json::json!({})))
+                                        }
+                                    })
+                                }),
+                                &["DA"],
+                            );
+                        }
+                        // Also register tools with their original names (without prefix)
+                        // so the LLM can call them by their natural names like "get_tasks"
+                        for tool in &tools {
+                            let desc = tool.description.clone().unwrap_or_default();
+                            let schema = tool.input_schema.clone().unwrap_or(serde_json::json!({}));
+                            let url_c = url.to_string();
+                            let raw_name_for_register = tool.name.clone();
+                            let raw_name_for_closure = tool.name.clone();
+                            let server_name_c = server_name.clone();
+                            executor.register(
+                                &raw_name_for_register,
+                                &desc,
+                                schema,
+                                Arc::new(move |args: serde_json::Value| {
+                                    let url = url_c.clone();
+                                    let name = raw_name_for_closure.clone();
+                                    let srv = server_name_c.clone();
+                                    Box::pin(async move {
+                                        let client = reqwest::Client::new();
+                                        let req_body = serde_json::json!({
+                                            "jsonrpc": "2.0",
+                                            "id": 1,
+                                            "method": "tools/call",
+                                            "params": {
+                                                "name": name,
+                                                "arguments": args,
+                                            }
+                                        });
+                                        let resp = client.post(&url)
+                                            .json(&req_body)
+                                            .timeout(std::time::Duration::from_secs(120))
+                                            .send().await
+                                            .map_err(|e| format!("MCP call to {} failed: {}", srv, e))?;
+                                        let body: serde_json::Value = resp.json().await
+                                            .map_err(|e| format!("MCP response parse error: {}", e))?;
+                                        if let Some(error) = body.get("error") {
+                                            Err(format!("MCP error from {}: {}", srv, error))
+                                        } else {
+                                            Ok(body.get("result").cloned().unwrap_or(serde_json::json!({})))
+                                        }
+                                    })
+                                }),
+                                &["DA"],
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(server = %server_name, error = %e, "Failed to connect MCP server (non-fatal, continuing)");
+                    }
+                }
+            }
+        }
+
         let runner = Arc::new(runner);
 
         let mut sa = SupervisorAgent::new(
