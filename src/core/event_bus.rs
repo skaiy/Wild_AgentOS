@@ -99,6 +99,12 @@ pub enum EventType {
     BatchLinkApplied,
     BatchTemplateAnalysisReady,
 
+    // ===== Workspace file events =====
+    WorkspaceFileCreated,
+    WorkspaceFileModified,
+    WorkspaceFileRemoved,
+    WorkspaceFileStale,
+
     // Custom
     Custom(String),
 }
@@ -160,6 +166,10 @@ impl EventType {
             EventType::BatchLinkRecommended => "BATCH_LINK_RECOMMENDED",
             EventType::BatchLinkApplied => "BATCH_LINK_APPLIED",
             EventType::BatchTemplateAnalysisReady => "BATCH_TEMPLATE_ANALYSIS_READY",
+            EventType::WorkspaceFileCreated => "WORKSPACE_FILE_CREATED",
+            EventType::WorkspaceFileModified => "WORKSPACE_FILE_MODIFIED",
+            EventType::WorkspaceFileRemoved => "WORKSPACE_FILE_REMOVED",
+            EventType::WorkspaceFileStale => "WORKSPACE_FILE_STALE",
             EventType::Custom(s) => s.as_str(),
         }
     }
@@ -220,6 +230,10 @@ impl EventType {
             "BATCH_LINK_RECOMMENDED" => EventType::BatchLinkRecommended,
             "BATCH_LINK_APPLIED" => EventType::BatchLinkApplied,
             "BATCH_TEMPLATE_ANALYSIS_READY" => EventType::BatchTemplateAnalysisReady,
+            "WORKSPACE_FILE_CREATED" => EventType::WorkspaceFileCreated,
+            "WORKSPACE_FILE_MODIFIED" => EventType::WorkspaceFileModified,
+            "WORKSPACE_FILE_REMOVED" => EventType::WorkspaceFileRemoved,
+            "WORKSPACE_FILE_STALE" => EventType::WorkspaceFileStale,
             other => EventType::Custom(other.to_string()),
         }
     }

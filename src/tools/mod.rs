@@ -8,6 +8,7 @@ pub mod hooks;
 pub mod sharing;
 pub mod sharing_audit;
 
+pub mod workspace_monitor;
 pub mod result_router;
 pub mod tool_guard;
 pub mod import_scanner;

@@ -23,6 +23,7 @@ use crate::knowledge_graph::rdf_mapper::RdfMapper;
 use crate::knowledge_graph::store::KnowledgeGraphStore;
 use crate::knowledge_graph::types::{BridgeRelationType, NodeDef, EdgeDef, RdfQuad, RdfValue};
 use crate::tools::tool_groups::ToolGroupManager;
+use crate::tools::workspace_monitor::{WorkspaceMonitor, FileState};
 
 mod builtins;
 
@@ -124,6 +125,7 @@ pub struct ToolExecutor {
     permission_policy: Option<PermissionPolicy>,
     hook_runner: Option<HookRunner>,
     tool_group_manager: Option<ToolGroupManager>,
+    workspace_monitor: Arc<std::sync::RwLock<Option<Arc<WorkspaceMonitor>>>>,
 }
 
 // 微工具描述数量上限，超过时移除最早注册的条目
@@ -161,6 +163,7 @@ impl ToolExecutor {
             permission_policy: None,
             hook_runner: None,
             tool_group_manager: None,
+            workspace_monitor: Arc::new(std::sync::RwLock::new(None)),
         };
         exe.register_builtins();
         exe
@@ -193,6 +196,12 @@ impl ToolExecutor {
 
     pub fn set_hook_runner(&mut self, runner: HookRunner) {
         self.hook_runner = Some(runner);
+    }
+
+    pub fn set_workspace_monitor(&mut self, monitor: Arc<WorkspaceMonitor>) {
+        if let Ok(mut wm) = self.workspace_monitor.write() {
+            *wm = Some(monitor);
+        }
     }
 
     /// Default tool requirements: bash/pwsh/code_exec→DangerFullAccess, file_write/edit→WorkspaceWrite, reads→ReadOnly
@@ -248,22 +257,76 @@ impl ToolExecutor {
             "properties": {"query": {"type":"string"},"max_results": {"type":"integer"}},
             "required": ["query"]
         }), Arc::new(|input: Value| Box::pin(async move { builtins::execute_tool_search(input).await })), all);
+        let ws_read = self.workspace_monitor.clone();
         self.register("file_read", "Read a text file. By default reads the entire file. Use offset/limit only for incremental chunked reading (will be tracked cumulatively).", json!({
             "properties": {
                 "path": {"type":"string", "description": "File path to read"},
                 "offset": {"type":"integer", "description": "Line offset to start from (0-indexed). Omit to read from beginning."},
-                "limit": {"type":"integer", "description": "Number of lines to read. Omit to read all remaining lines from offset."}
+                "limit": {"type":"integer", "description": "Number of lines to read. Omit to read all remaining lines from offset."},
+                "mode": {"type":"string", "description": "Read mode: auto (default) | full | force_refresh | diff. diff returns only new content since last tracked read."}
             },
             "required": ["path"]
-        }), Arc::new(|input: Value| Box::pin(async move { builtins::execute_file_read(input).await })), all);
+        }), Arc::new(move |input: Value| {
+            let ws = ws_read.clone();
+            Box::pin(async move {
+                let result = builtins::execute_file_read(input).await?;
+                if let Ok(guard) = ws.read() {
+                    if let Some(ref wm) = *guard {
+                        if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
+                            wm.read_file(path, crate::tools::workspace_monitor::ReadMode::Full).ok();
+                        }
+                    }
+                }
+                Ok(result)
+            })
+        }), all);
+        let ws_write = self.workspace_monitor.clone();
         self.register("file_write", "Write content to a file.", json!({
             "properties": {"path": {"type":"string"},"content": {"type":"string"}},
             "required": ["path","content"]
-        }), Arc::new(|input: Value| Box::pin(async move { builtins::execute_file_write(input).await })), all);
+        }), Arc::new(move |input: Value| {
+            let ws = ws_write.clone();
+            Box::pin(async move {
+                let result = builtins::execute_file_write(input).await?;
+                if result.get("success") == Some(&Value::Bool(true)) {
+                    if let Ok(guard) = ws.read() {
+                        if let Some(ref wm) = *guard {
+                            if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
+                                wm.mark_file_written(path);
+                            }
+                        }
+                    }
+                }
+                Ok(result)
+            })
+        }), all);
+        let ws_list = self.workspace_monitor.clone();
         self.register("file_list", "List files in a directory.", json!({
             "properties": {"path": {"type":"string"}},
             "required": []
-        }), Arc::new(|input: Value| Box::pin(async move { builtins::execute_file_list(input).await })), all);
+        }), Arc::new(move |input: Value| {
+            let ws = ws_list.clone();
+            Box::pin(async move {
+                let mut result = builtins::execute_file_list(input).await?;
+                if let Ok(guard) = ws.read() {
+                    if let Some(ref wm) = *guard {
+                        if let Some(entries) = result.get_mut("entries").and_then(|e| e.as_array_mut()) {
+                            for entry in entries.iter_mut() {
+                                let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                                let inv = wm.inventory.read();
+                                if let Some(file_entry) = inv.get_entry(name) {
+                                    entry.as_object_mut().map(|obj| {
+                                        obj.insert("state".to_string(), Value::String(file_entry.state.as_str().to_string()));
+                                        obj.insert("language".to_string(), Value::String(file_entry.language.clone()));
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(result)
+            })
+        }), all);
         let bash_desc = if cfg!(target_os = "windows") {
             "Execute a shell command via PowerShell. Use for running python, pytest, etc. Supports most common shell commands.\n\nOUTPUT MANAGEMENT (mandatory):\n- If the command may produce >100 lines of output, pipe through | head -N or | grep <keyword> to limit results\n- Use | tail -N for recent entries, | wc -l to count first, | grep -c to match-count\n- For file searches, constrain the path (e.g. grep ... path/) instead of searching the entire workspace\n- The output will be truncated at 16KB if too large; always filter proactively to avoid losing data"
         } else {
@@ -273,6 +336,7 @@ impl ToolExecutor {
             "properties": {"command": {"type":"string","description":"Shell command to run"},"description": {"type":"string","description":"What this command does"},"timeout": {"type":"integer","description":"Timeout in milliseconds"}},
             "required": ["command"]
         }), Arc::new(|input: Value| Box::pin(async move { builtins::execute_bash(input).await })), all);
+        let ws_edit = self.workspace_monitor.clone();
         self.register("file_edit", "Edit a file by replacing old_string with new_string.", json!({
             "properties": {
                 "path": {"type":"string","description":"File path to edit"},
@@ -281,7 +345,22 @@ impl ToolExecutor {
                 "replace_all": {"type":"boolean","description":"Replace all occurrences (default: false)"}
             },
             "required": ["path","old_string","new_string"]
-        }), Arc::new(|input: Value| Box::pin(async move { builtins::execute_file_edit(input).await })), all);
+        }), Arc::new(move |input: Value| {
+            let ws = ws_edit.clone();
+            Box::pin(async move {
+                let result = builtins::execute_file_edit(input).await?;
+                if result.get("success") == Some(&Value::Bool(true)) {
+                    if let Ok(guard) = ws.read() {
+                        if let Some(ref wm) = *guard {
+                            if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
+                                wm.mark_file_written(path);
+                            }
+                        }
+                    }
+                }
+                Ok(result)
+            })
+        }), all);
         self.register("powershell", "Execute a PowerShell command.", json!({
             "properties": {
                 "command": {"type":"string","description":"PowerShell command to run"},

@@ -365,6 +365,145 @@ impl ProjectionEngine {
             .with_max_depth(2)),
         });
 
+        // ── Workspace Monitor L3 frames ──
+        frames.insert("workspace_stale_files".to_string(), ProjectionFrame {
+            name: "workspace_stale_files".to_string(),
+            description: "Lists all workspace files with ReadStale or WrittenUnread state".to_string(),
+            target_role: "DA".to_string(),
+            include_properties: vec![
+                "@id".to_string(), "@type".to_string(),
+                "ws:filePath".to_string(), "ws:state".to_string(),
+                "ws:currentVersion".to_string(), "ws:lastReadVersion".to_string(),
+                "ws:mtime".to_string(), "ws:fileExt".to_string(),
+            ],
+            max_size: 1024,
+            max_nodes: 100,
+            sparql_template: Some(r#"
+        PREFIX ws: <iri://workspace/ontology/>
+        CONSTRUCT {
+            ?node a ws:File .
+            ?node ws:filePath ?path .
+            ?node ws:state ?state .
+            ?node ws:currentVersion ?ver .
+            ?node ws:lastReadVersion ?lver .
+            ?node ws:mtime ?mtime .
+            ?node ws:fileExt ?ext .
+        }
+        WHERE {
+            ?node a ws:File .
+            ?node ws:filePath ?path .
+            ?node ws:state ?state .
+            FILTER(?state = "ReadStale" || ?state = "WrittenUnread")
+            OPTIONAL { ?node ws:currentVersion ?ver }
+            OPTIONAL { ?node ws:lastReadVersion ?lver }
+            OPTIONAL { ?node ws:mtime ?mtime }
+            OPTIONAL { ?node ws:fileExt ?ext }
+        }
+        ORDER BY DESC(?mtime)
+    "#.to_string()),
+            params: vec![],
+            jsonld_frame: Some(FrameTemplate::new(serde_json::json!({
+                "ws": "iri://workspace/ontology/"
+            }))
+            .with_max_depth(2)),
+        });
+
+        frames.insert("workspace_file_detail".to_string(), ProjectionFrame {
+            name: "workspace_file_detail".to_string(),
+            description: "Detailed view of a specific workspace file by path".to_string(),
+            target_role: "DA".to_string(),
+            include_properties: vec![
+                "@id".to_string(), "@type".to_string(),
+                "ws:filePath".to_string(), "ws:fileSize".to_string(),
+                "ws:fileExt".to_string(), "ws:language".to_string(),
+                "ws:mtime".to_string(), "ws:contentHash".to_string(),
+                "ws:state".to_string(), "ws:lastReadAt".to_string(),
+                "ws:lastReadVersion".to_string(), "ws:currentVersion".to_string(),
+                "ws:readCount".to_string(), "ws:parentDir".to_string(),
+            ],
+            max_size: 512,
+            max_nodes: 5,
+            sparql_template: Some(r#"
+        PREFIX ws: <iri://workspace/ontology/>
+        CONSTRUCT {
+            ?node a ws:File .
+            ?node ws:filePath ?path .
+            ?node ws:fileSize ?size .
+            ?node ws:fileExt ?ext .
+            ?node ws:language ?lang .
+            ?node ws:mtime ?mtime .
+            ?node ws:contentHash ?hash .
+            ?node ws:state ?state .
+            ?node ws:lastReadAt ?lread .
+            ?node ws:lastReadVersion ?lver .
+            ?node ws:currentVersion ?ver .
+            ?node ws:readCount ?rc .
+            ?node ws:parentDir ?parent .
+        }
+        WHERE {
+            ?node a ws:File .
+            ?node ws:filePath ?path .
+            FILTER(CONTAINS(LCASE(?path), LCASE($target_path)))
+            OPTIONAL { ?node ws:fileSize ?size }
+            OPTIONAL { ?node ws:fileExt ?ext }
+            OPTIONAL { ?node ws:language ?lang }
+            OPTIONAL { ?node ws:mtime ?mtime }
+            OPTIONAL { ?node ws:contentHash ?hash }
+            OPTIONAL { ?node ws:state ?state }
+            OPTIONAL { ?node ws:lastReadAt ?lread }
+            OPTIONAL { ?node ws:lastReadVersion ?lver }
+            OPTIONAL { ?node ws:currentVersion ?ver }
+            OPTIONAL { ?node ws:readCount ?rc }
+            OPTIONAL { ?node ws:parentDir ?parent }
+        }
+        LIMIT 5
+    "#.to_string()),
+            params: vec!["target_path".to_string()],
+            jsonld_frame: Some(FrameTemplate::new(serde_json::json!({
+                "ws": "iri://workspace/ontology/"
+            }))
+            .with_max_depth(2)),
+        });
+
+        frames.insert("workspace_overview".to_string(), ProjectionFrame {
+            name: "workspace_overview".to_string(),
+            description: "Aggregated workspace overview: file counts by state, by language".to_string(),
+            target_role: "SA".to_string(),
+            include_properties: vec![
+                "@id".to_string(), "@type".to_string(),
+                "ws:filePath".to_string(), "ws:state".to_string(),
+                "ws:language".to_string(), "ws:fileSize".to_string(),
+                "ws:fileExt".to_string(),
+            ],
+            max_size: 2048,
+            max_nodes: 500,
+            sparql_template: Some(r#"
+        PREFIX ws: <iri://workspace/ontology/>
+        CONSTRUCT {
+            ?node a ws:File .
+            ?node ws:filePath ?path .
+            ?node ws:state ?state .
+            ?node ws:language ?lang .
+            ?node ws:fileSize ?size .
+            ?node ws:fileExt ?ext .
+        }
+        WHERE {
+            ?node a ws:File .
+            ?node ws:filePath ?path .
+            ?node ws:state ?state .
+            OPTIONAL { ?node ws:language ?lang }
+            OPTIONAL { ?node ws:fileSize ?size }
+            OPTIONAL { ?node ws:fileExt ?ext }
+        }
+        ORDER BY ?path
+    "#.to_string()),
+            params: vec![],
+            jsonld_frame: Some(FrameTemplate::new(serde_json::json!({
+                "ws": "iri://workspace/ontology/"
+            }))
+            .with_max_depth(1)),
+        });
+
         frames
     }
 
@@ -1078,5 +1217,43 @@ mod tests {
                 frame_name
             );
         }
+    }
+
+    #[test]
+    fn test_workspace_frames_registered() {
+        let blackboard = Arc::new(Blackboard::new().unwrap());
+        let engine = ProjectionEngine::new(blackboard, 2048);
+
+        let frame = engine.get_frame("workspace_overview").unwrap();
+        assert_eq!(frame.name, "workspace_overview");
+        assert_eq!(frame.target_role, "SA");
+        assert!(frame.include_properties.contains(&"ws:filePath".to_string()));
+        assert!(frame.include_properties.contains(&"ws:state".to_string()));
+        assert!(frame.sparql_template.is_some());
+
+        let frame = engine.get_frame("workspace_stale_files").unwrap();
+        assert_eq!(frame.name, "workspace_stale_files");
+        assert_eq!(frame.target_role, "DA");
+        assert!(frame.include_properties.contains(&"ws:filePath".to_string()));
+        assert!(frame.sparql_template.is_some());
+
+        let frame = engine.get_frame("workspace_file_detail").unwrap();
+        assert_eq!(frame.name, "workspace_file_detail");
+        assert!(frame.params.contains(&"target_path".to_string()));
+    }
+
+    #[test]
+    fn test_workspace_frames_max_nodes() {
+        let blackboard = Arc::new(Blackboard::new().unwrap());
+        let engine = ProjectionEngine::new(blackboard, 2048);
+
+        let overview = engine.get_frame("workspace_overview").unwrap();
+        assert!(overview.max_nodes >= 100, "workspace_overview should handle at least 100 files");
+
+        let stale = engine.get_frame("workspace_stale_files").unwrap();
+        assert!(stale.max_nodes >= 50, "workspace_stale_files should handle at least 50 files");
+
+        let detail = engine.get_frame("workspace_file_detail").unwrap();
+        assert!(detail.max_nodes >= 1, "workspace_file_detail should handle at least 1 file");
     }
 }

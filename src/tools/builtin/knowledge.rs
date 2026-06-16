@@ -3,7 +3,12 @@ use serde_json::{json, Value};
 use std::path::Path;
 use chrono::{DateTime, Utc};
 
-const RAG_INDEX_DIR: &str = "./data/rag_index";
+fn rag_index_dir() -> std::path::PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(&home).join(".gliding_horse").join("data").join("rag_index")
+}
 
 #[derive(Debug, Deserialize)]
 pub struct KnowledgeImportFileInput {
@@ -65,7 +70,7 @@ pub struct KnowledgeUpdateInput {
 }
 
 fn ensure_index_dir() -> Result<(), String> {
-    let dir = Path::new(RAG_INDEX_DIR);
+    let dir = rag_index_dir();
     if !dir.exists() {
         std::fs::create_dir_all(dir).map_err(|e| format!("创建索引目录失败: {}", e))?;
     }
@@ -168,7 +173,7 @@ fn index_chunk(content: &str, iri: &str, chunk_index: usize, tags: &[String], so
     });
     
     let file_name = chunk_iri.replace([':', '/', '#'], "_");
-    let file_path = Path::new(RAG_INDEX_DIR).join(format!("{}.json", file_name));
+    let file_path = rag_index_dir().join(format!("{}.json", file_name));
     let json_str = serde_json::to_string_pretty(&doc)
         .map_err(|e| format!("序列化 chunk 文档失败: {}", e))?;
     std::fs::write(&file_path, json_str)
@@ -377,7 +382,7 @@ pub async fn execute_knowledge_list(input: Value) -> Result<Value, String> {
     
     ensure_index_dir()?;
     
-    let index_dir = Path::new(RAG_INDEX_DIR);
+    let index_dir = rag_index_dir();
     let entries = std::fs::read_dir(index_dir)
         .map_err(|e| format!("读取索引目录失败: {}", e))?;
     
@@ -445,7 +450,7 @@ pub async fn execute_knowledge_delete(input: Value) -> Result<Value, String> {
     
     ensure_index_dir()?;
     
-    let index_dir = Path::new(RAG_INDEX_DIR);
+    let index_dir = rag_index_dir();
     let entries = std::fs::read_dir(index_dir)
         .map_err(|e| format!("读取索引目录失败: {}", e))?;
     
@@ -502,7 +507,7 @@ pub async fn execute_knowledge_search(input: Value) -> Result<Value, String> {
     let limit = params.limit.unwrap_or(10);
     let min_score = params.min_score.unwrap_or(0.1);
     
-    let index_dir = Path::new(RAG_INDEX_DIR);
+    let index_dir = rag_index_dir();
     let entries = std::fs::read_dir(index_dir)
         .map_err(|e| format!("读取索引目录失败: {}", e))?;
     
@@ -577,7 +582,7 @@ pub async fn execute_knowledge_update(input: Value) -> Result<Value, String> {
     
     ensure_index_dir()?;
     
-    let index_dir = Path::new(RAG_INDEX_DIR);
+    let index_dir = rag_index_dir();
     let entries = std::fs::read_dir(index_dir)
         .map_err(|e| format!("读取索引目录失败: {}", e))?;
     

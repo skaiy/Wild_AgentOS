@@ -139,6 +139,8 @@ pub struct ToolGuard {
     config_path: Arc<RwLock<Option<String>>>,
     /// Per-file cumulative read tracking with attempt limit (max 3 per file).
     file_coverage: Arc<Mutex<HashMap<String, FileCoverage>>>,
+    /// Optional stale file check callback: returns Some(warning) if file is stale.
+    stale_check: Arc<RwLock<Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>>>,
 }
 
 impl ToolGuard {
@@ -150,6 +152,7 @@ impl ToolGuard {
             audit_log: Arc::new(RwLock::new(Vec::new())),
             config_path: Arc::new(RwLock::new(None)),
             file_coverage: Arc::new(Mutex::new(HashMap::new())),
+            stale_check: Arc::new(RwLock::new(None)),
         };
         guard.load_default_rules();
         guard
@@ -166,6 +169,7 @@ impl ToolGuard {
             audit_log: Arc::new(RwLock::new(Vec::new())),
             config_path: Arc::new(RwLock::new(Some(path.as_ref().to_string_lossy().to_string()))),
             file_coverage: Arc::new(Mutex::new(HashMap::new())),
+            stale_check: Arc::new(RwLock::new(None)),
         };
         {
             let mut pre = guard.pre_injections.write();
@@ -443,6 +447,21 @@ impl ToolGuard {
                             "ToolGuard: Pre-injection applied ({} rules)",
                             rules.len()
                         );
+                    }
+                }
+
+                // Stale file check for write operations
+                if tool_name == "file_write" || tool_name == "file_edit" {
+                    if let Some(ref stale_fn) = *pre_guard.stale_check.read() {
+                        if let Some(path) = ctx.data.get("path").and_then(|v| v.as_str()) {
+                            if let Some(warning) = stale_fn(path) {
+                                warn!(tool = %tool_name, path = %path, warning = %warning, "ToolGuard: stale file detected");
+                                ctx.metadata.insert(
+                                    "stale_file_warning".to_string(),
+                                    Value::String(warning),
+                                );
+                            }
+                        }
                     }
                 }
 
@@ -740,6 +759,16 @@ impl ToolGuard {
     }
 
     #[allow(dead_code)]
+    /// Set a stale file check callback. Called for file_write/file_edit tools
+    /// before execution. If the callback returns Some(warning), the warning is
+    /// injected into the tool's context metadata.
+    pub fn set_stale_check<F>(&self, check: F)
+    where
+        F: Fn(&str) -> Option<String> + Send + Sync + 'static,
+    {
+        *self.stale_check.write() = Some(Arc::new(check));
+    }
+
     pub fn reset_file_coverage(&self, path: &str) {
         self.file_coverage.lock().remove(path);
     }
@@ -1213,5 +1242,59 @@ mod tests {
 
         // Add entries via global log (internal log is only pushed during hook execution)
         // Verify the stats method handles empty log
+    }
+
+    #[test]
+    fn test_set_stale_check_callback_invoked() {
+        let guard = ToolGuard::new();
+        let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let count = call_count.clone();
+
+        guard.set_stale_check(move |path| {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if path == "stale.rs" {
+                Some("File is stale: stale.rs".to_string())
+            } else {
+                None
+            }
+        });
+
+        let hm = HookManager::new();
+        guard.register_hooks(&hm);
+
+        let mut ctx = HookContext::new(HookPoint::SkillBefore, "test_agent", "DA");
+        ctx.data.insert("tool_name".to_string(), Value::String("file_write".to_string()));
+        ctx.data.insert("path".to_string(), Value::String("stale.rs".to_string()));
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(hm.execute(HookPoint::SkillBefore, &mut ctx));
+
+        assert_eq!(call_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let warning = ctx.metadata.get("stale_file_warning").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(warning.contains("stale"), "Expected stale warning, got: {}", warning);
+    }
+
+    #[test]
+    fn test_stale_check_not_invoked_for_non_write_tool() {
+        let guard = ToolGuard::new();
+        let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let count = call_count.clone();
+
+        guard.set_stale_check(move |_path| {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            None
+        });
+
+        let hm = HookManager::new();
+        guard.register_hooks(&hm);
+
+        let mut ctx = HookContext::new(HookPoint::SkillBefore, "test_agent", "DA");
+        ctx.data.insert("tool_name".to_string(), Value::String("file_read".to_string()));
+        ctx.data.insert("path".to_string(), Value::String("ok.rs".to_string()));
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(hm.execute(HookPoint::SkillBefore, &mut ctx));
+
+        assert_eq!(call_count.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

@@ -1,5 +1,18 @@
+use std::path::{Path, PathBuf};
+
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+fn gliding_data_dir() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(&home).join(".gliding_horse").join("data")
+}
+
+fn rag_index_dir() -> PathBuf {
+    gliding_data_dir().join("rag_index")
+}
 
 #[derive(Debug, Deserialize)]
 struct RagSearchInput {
@@ -30,7 +43,7 @@ pub fn execute_rag_search(input: &Value) -> Result<Value, String> {
     let query_lower = query.to_lowercase();
     let keywords: Vec<&str> = query_lower.split_whitespace().collect();
 
-    let index_dir = std::path::Path::new("./data/rag_index");
+    let index_dir = rag_index_dir();
     if !index_dir.exists() {
         return Ok(json!({
             "query": query,
@@ -83,8 +96,8 @@ pub fn execute_rag_index(input: &Value) -> Result<Value, String> {
     let params: RagIndexInput =
         serde_json::from_value(input.clone()).map_err(|e| format!("Invalid input: {}", e))?;
 
-    let index_dir = std::path::Path::new("./data/rag_index");
-    std::fs::create_dir_all(index_dir).map_err(|e| format!("创建索引目录失败: {}", e))?;
+    let index_dir = rag_index_dir();
+    std::fs::create_dir_all(&index_dir).map_err(|e| format!("创建索引目录失败: {}", e))?;
 
     let iri = params.iri.unwrap_or_else(|| {
         format!("iri://rag/{}", uuid::Uuid::new_v4())

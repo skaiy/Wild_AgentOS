@@ -97,6 +97,11 @@ tree-sitter-java = "0.23"
 tree-sitter-c = "0.23"
 tree-sitter-cpp = "0.23"
 sha2 = "0.10"
+similar = "2.5"
+lru = "0.12"
+hex = "0.4"
+notify = "6.1"
+notify-debouncer-mini = "0.4"
 
 # 文本/Unicode 处理
 unicode-width = "0.1"

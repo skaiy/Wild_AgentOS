@@ -426,12 +426,62 @@ impl ProactiveEngine {
 
     pub fn on_resource_conflict(&self, conflict: &Value, task_iri: &str) -> InterventionPlan {
         warn!(task = %task_iri, conflict = ?conflict, "Resource conflict");
+
+        let conflict_type = conflict
+            .get("conflict_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("generic");
+        let resource_path = conflict
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+
+        let (diagnosis, actions, priority, interrupt) = match conflict_type {
+            "stale_file_write" => (
+                format!("Write to stale file without re-read: {}", resource_path),
+                vec![
+                    format!("Re-read file: {}", resource_path),
+                    "Re-apply edit after reading latest version".to_string(),
+                ],
+                "high",
+                true,
+            ),
+            "concurrent_write" => (
+                format!("Concurrent write contention on: {}", resource_path),
+                vec![
+                    "Serialize writes to shared resource".to_string(),
+                    format!("Invalidate cache for: {}", resource_path),
+                    "Notify SA of contention".to_string(),
+                ],
+                "high",
+                true,
+            ),
+            "unread_write" => (
+                format!("Write to file without prior read: {}", resource_path),
+                vec![
+                    format!("Read file first: {}", resource_path),
+                    "Verify write is intentional without prior context".to_string(),
+                ],
+                "medium",
+                false,
+            ),
+            _ => (
+                format!("Resource conflict detected on: {}", resource_path),
+                vec![
+                    "Queue conflicting requests".to_string(),
+                    "Notify SA".to_string(),
+                ],
+                "medium",
+                false,
+            ),
+        };
+
         InterventionPlan {
             anomaly_id: format!("conflict_{}", uuid::Uuid::new_v4().hyphenated()),
-            diagnosis: "Resource conflict detected".to_string(),
-            actions: vec!["Queue conflicting requests".to_string(), "Notify SA".to_string()],
-            priority: "medium".to_string(),
-            should_interrupt: false,
+            diagnosis,
+            actions,
+            priority: priority.to_string(),
+            should_interrupt: interrupt,
         }
     }
 
@@ -456,6 +506,38 @@ impl ProactiveEngine {
             content: feedback.clone(),
             created_at: Utc::now(),
         }
+    }
+
+    /// Check for workspace file conflicts before a write operation.
+    /// Returns Some(conflict_value) if a conflict is detected.
+    pub fn check_file_conflict(
+        &self,
+        file_path: &str,
+        current_state: &str,
+        last_read_version: u64,
+        current_version: u64,
+        agent_id: &str,
+    ) -> Option<Value> {
+        if current_state == "ReadStale" {
+            return Some(json!({
+                "conflict_type": "stale_file_write",
+                "path": file_path,
+                "agent_id": agent_id,
+                "current_version": current_version,
+                "last_read_version": last_read_version,
+                "severity": "high",
+            }));
+        }
+        if current_state == "WrittenUnread" || current_state == "Discovered" {
+            return Some(json!({
+                "conflict_type": "unread_write",
+                "path": file_path,
+                "agent_id": agent_id,
+                "current_state": current_state,
+                "severity": "medium",
+            }));
+        }
+        None
     }
 
     fn analyze_task(&self, user_input: &str) -> TaskAnalysis {
@@ -845,5 +927,93 @@ mod tests_5w2h {
             assert!(result.is_some());
             assert!(result.unwrap().contains("DEADLINE_APPROACHING"));
         })
+    }
+
+    #[test]
+    fn test_check_file_conflict_stale_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(L0Store::new(dir.path().to_str().unwrap()).unwrap());
+        let engine = ProactiveEngine::new(store, test_event_bus());
+
+        let result = engine.check_file_conflict(
+            "/path/to/file.rs",
+            "ReadStale",
+            1,
+            3,
+            "agent_1",
+        );
+        assert!(result.is_some(), "Should detect stale file conflict");
+        let conflict = result.unwrap();
+        assert_eq!(conflict["conflict_type"], "stale_file_write");
+        assert_eq!(conflict["path"], "/path/to/file.rs");
+        assert_eq!(conflict["severity"], "high");
+    }
+
+    #[test]
+    fn test_check_file_conflict_unread_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(L0Store::new(dir.path().to_str().unwrap()).unwrap());
+        let engine = ProactiveEngine::new(store, test_event_bus());
+
+        let result = engine.check_file_conflict(
+            "/path/to/new.rs",
+            "WrittenUnread",
+            0,
+            0,
+            "agent_1",
+        );
+        assert!(result.is_some(), "Should detect unread file conflict");
+        let conflict = result.unwrap();
+        assert_eq!(conflict["conflict_type"], "unread_write");
+        assert_eq!(conflict["severity"], "medium");
+    }
+
+    #[test]
+    fn test_check_file_conflict_no_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(L0Store::new(dir.path().to_str().unwrap()).unwrap());
+        let engine = ProactiveEngine::new(store, test_event_bus());
+
+        let result = engine.check_file_conflict(
+            "/path/to/fresh.rs",
+            "ReadFresh",
+            2,
+            2,
+            "agent_1",
+        );
+        assert!(result.is_none(), "Fresh file should have no conflict");
+    }
+
+    #[test]
+    fn test_on_resource_conflict_stale_write_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(L0Store::new(dir.path().to_str().unwrap()).unwrap());
+        let engine = ProactiveEngine::new(store, test_event_bus());
+
+        let conflict = serde_json::json!({
+            "conflict_type": "stale_file_write",
+            "path": "/path/to/stale.rs",
+            "agent_id": "agent_1",
+        });
+        let plan = engine.on_resource_conflict(&conflict, "iri://task/test");
+        assert!(plan.should_interrupt);
+        assert_eq!(plan.priority, "high");
+        assert!(plan.diagnosis.contains("stale"));
+        assert!(plan.actions.len() >= 2);
+    }
+
+    #[test]
+    fn test_on_resource_conflict_unread_write_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(L0Store::new(dir.path().to_str().unwrap()).unwrap());
+        let engine = ProactiveEngine::new(store, test_event_bus());
+
+        let conflict = serde_json::json!({
+            "conflict_type": "unread_write",
+            "path": "/path/to/unread.rs",
+        });
+        let plan = engine.on_resource_conflict(&conflict, "iri://task/test");
+        assert!(!plan.should_interrupt);
+        assert_eq!(plan.priority, "medium");
     }
 }
