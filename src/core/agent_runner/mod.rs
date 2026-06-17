@@ -1,43 +1,34 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
-use serde_json::{json, Value};
-use tracing::{debug, info, instrument, warn};
+use serde_json::Value;
+use tracing::{info, warn};
 
 use crate::config::settings::AgentSettings;
-use crate::core::agent_instance::{AgentInstance, AgentRole, AgentStatus};
-use crate::core::system_prompt::{
-    SystemPromptBuilder, SystemPromptRegion, build_constitution_prompt,
-};
-use crate::methodology::integration::MethodologyPromptInjector;
-use crate::methodology::{
-    evolution::{EvolutionEngine, EvolutionEngineHandle},
-    gate::{MethodologyGate, MethodologyGateHandle},
-    MethodologyRegistry,
-};
 use crate::core::constitution::ConstitutionRegistry;
+use crate::core::context_compressor::{ContextWindowManager, ToolResultCompressor};
+use crate::core::relevance_tracker::RelevanceTracker;
 use crate::gateway::unified_gateway::{ChatMessage, UnifiedGateway};
-use crate::jsonld::{generate_iri, validate_jsonld_node, JsonLdContext, JsonLdNode};
 use crate::memory::l0_store::L0Store;
-use crate::memory::l1_session::L1Session;
 use crate::memory::l2_blackboard::Blackboard;
 use crate::memory::l3_projection::ProjectionEngine;
 use crate::memory::memory_manager::MemoryManager;
 use crate::memory::prefetch_engine::PrefetchEngine;
 use crate::memory::scheduler::MemoryScheduler;
-use crate::core::context_compressor::{ContextWindowManager, ToolResultCompressor};
-use crate::core::relevance_tracker::RelevanceTracker;
 use crate::memory::EmbeddingService;
-use crate::templates::template_engine::TemplateEngine;
-use crate::tools::hooks::{HookContext, HookManager, HookPoint, HookResult};
-use crate::tools::sharing::{ContextInjector, Permission, ShareType, SharingProtocol};
-use crate::tools::tool_guard::ToolGuard;
-use crate::tools::skill_registry::SkillRegistry;
-use crate::core::execution_event::{ExecutionEvent, ExecutionEventKind};
-use crate::tools::tool_executor::ToolExecutor;
+use crate::methodology::{
+    evolution::{EvolutionEngine, EvolutionEngineHandle},
+    gate::{MethodologyGate, MethodologyGateHandle},
+    MethodologyRegistry,
+};
 use crate::root_cause::RootCauseEngine;
-use crate::CoreError;
+use crate::templates::template_engine::TemplateEngine;
+use crate::tools::hooks::HookManager;
+use crate::tools::sharing::{SharingProtocol};
+use crate::tools::skill_registry::SkillRegistry;
+use crate::tools::tool_executor::ToolExecutor;
+use crate::tools::tool_guard::ToolGuard;
 
 mod execution;
 mod prompt;
@@ -256,6 +247,8 @@ pub struct AgentRunner {
     pub root_cause_engine: Option<Arc<RootCauseEngine>>,
     /// 补充输入共享存储（SA 写入 → AgentRunner 在 CycleStart 消费）
     pub supplement_store: crate::core::supplementary_store::SupplementaryInputStore,
+    /// 感知内容存储（系统组件写入 → 在 exec() 初始组装时注入 messages 头部）
+    pub perception_store: crate::core::perception_store::PerceptionStore,
     /// 嵌入服务（用于计算 turn embedding 和 relevance_score）
     pub embedder: Option<Arc<dyn EmbeddingService>>,
     /// 相关性跟踪器（计算每轮 turn 与 task 的语义相关度）
@@ -326,6 +319,7 @@ impl AgentRunner {
             methodology_gate,
             root_cause_engine,
             supplement_store: crate::core::supplementary_store::SupplementaryInputStore::new(),
+            perception_store: crate::core::perception_store::PerceptionStore::new(),
             embedder: None,
             relevance_tracker: None,
         };
@@ -426,6 +420,12 @@ impl AgentRunner {
     /// 设置补充输入共享存储（由 SA 创建时注入，确保 SA 和 AgentRunner 共享同一实例）
     pub fn with_supplement_store(mut self, store: crate::core::supplementary_store::SupplementaryInputStore) -> Self {
         self.supplement_store = store;
+        self
+    }
+
+    /// 设置主动感知存储（系统组件如 WorkspaceMonitor/BatchAgent 写入感知数据）
+    pub fn with_perception_store(mut self, store: crate::core::perception_store::PerceptionStore) -> Self {
+        self.perception_store = store;
         self
     }
 

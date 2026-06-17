@@ -727,41 +727,7 @@ src/
 
 ---
 
-## 12.9 实施计划
-
-### Phase 1: 基础数据模型（1 天）
-- [ ] `FileInventory` (L2/L3 facade + sled 热缓存)
-- [ ] `ContentStore` (LRU + SHA-256 + sled 版本）
-- [ ] `DiffEngine` (similar 封装)
-- [ ] `WorkspaceMonitor` 全局单例 + 初始化
-- [ ] L2 Named Graph `iri://workspace` + SPARQL 数据模型
-
-### Phase 2: 监控与集成（1 天）
-- [ ] `WatchEngine` (notify + 去抖 + 降级轮询)
-- [ ] EventBus `WorkspaceFile*` 事件类型 + 消费者
-- [ ] HookManager 3 个 hooks 注册
-- [ ] ToolGuard 写入前 stale 检查
-- [ ] ImportScanner 自动重扫描
-- [ ] CodeAst 事件驱动重提取
-
-### Phase 3: 工具增强（1 天）
-- [ ] `execute_file_read` — Diff/Full/ForceRefresh 模式 + 缓存集成
-- [ ] `execute_file_list` — 快照模式 + 状态附加
-- [ ] `execute_file_write` / `execute_file_edit` — 自动更新 FileInventory
-- [ ] L3 投影帧注册（workspace_dir_list / state_summary / stale_files / affected_files）
-
-### Phase 4: 后台增强与测试（1 天）
-- [ ] Batch Agent 文件变更触发
-- [ ] PerceptionEngine ResourceConflict 检查
-- [ ] 跨平台测试（Linux/macOS/Windows）
-- [ ] 事件风暴防护测试
-- [ ] 大工作区性能基准测试（10,000+ 文件）
-
-**预估总工期：4 天**
-
----
-
-## 12.10 关键设计决策总结
+## 12.9 关键设计决策总结
 
 | 决策 | 理由 |
 |------|------|

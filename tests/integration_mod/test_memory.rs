@@ -1,9 +1,9 @@
-use agent_os::memory::l0_store::L0Store;
-use agent_os::memory::l1_session::L1Session;
-use agent_os::memory::l2_blackboard::Blackboard;
-use agent_os::memory::l3_projection::ProjectionEngine;
-use agent_os::memory::memory_manager::MemoryManager;
-use agent_os::CoreConfig;
+use glidinghorse::memory::l0_store::L0Store;
+use glidinghorse::memory::l1_session::L1Session;
+use glidinghorse::memory::l2_blackboard::Blackboard;
+use glidinghorse::memory::l3_projection::ProjectionEngine;
+use glidinghorse::memory::memory_manager::MemoryManager;
+use glidinghorse::CoreConfig;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -28,7 +28,7 @@ fn test_memory_pipeline() {
 
     // L2 blackboard
     let json_ld = r#"{"@id":"iri://task/1","@type":"Test"}"#;
-    let config = agent_os::CoreConfig::default();
+    let config = glidinghorse::CoreConfig::default();
     l2.write_node("iri://task/1/node_1", json_ld, &config).unwrap();
     let node = l2.read_node("iri://task/1/node_1").unwrap().unwrap();
     assert_eq!(node.node_type.as_ref().unwrap(), "Test");

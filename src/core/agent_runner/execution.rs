@@ -1,11 +1,10 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use serde_json::{json, Value};
 use tracing::{debug, info, instrument, warn};
 
-use crate::core::agent_instance::{AgentInstance, AgentRole, AgentStatus};
+        use crate::core::agent_instance::{AgentInstance, AgentRole, AgentStatus};
 use crate::core::execution_event::{ExecutionEvent, ExecutionEventKind};
 use crate::core::system_prompt::{SystemPromptBuilder, SystemPromptRegion, build_constitution_prompt};
 use crate::gateway::unified_gateway::ChatMessage;
@@ -489,6 +488,24 @@ impl super::AgentRunner {
                 reasoning_content: None,
             },
         ];
+
+        // Agent 主动感知区域：系统组件产生的环境级感知数据（文件变更、Batch分析、告警等）
+        // 放在 system 之后、历史消息之前，让 LLM 优先看到全局环境状态
+        let perception_text = self.perception_store.take_perception_text(&ctx.task_iri);
+        if !perception_text.is_empty() {
+            info!(
+                "[perception] 注入 {} 字节感知内容",
+                perception_text.len()
+            );
+            messages.push(ChatMessage {
+                role: "system".to_string(),
+                content: format!("# 📡 Agent 主动感知\n\n{}", perception_text),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                reasoning_content: None,
+            });
+        }
 
         // Resume 模式：从 checkpoint 恢复历史消息，放在 system 之后、新 user 消息之前
         // 这样 LLM 先看到历史上下文，再看到继续指令

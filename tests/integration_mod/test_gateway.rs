@@ -1,5 +1,5 @@
-use agent_os::gateway::UnifiedGateway;
-use agent_os::config::GatewaySettings;
+use glidinghorse::gateway::UnifiedGateway;
+use glidinghorse::config::GatewaySettings;
 use std::collections::HashMap;
 
 fn test_gateway_settings() -> GatewaySettings {

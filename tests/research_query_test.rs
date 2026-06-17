@@ -5,19 +5,19 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use agent_os::core::agent_instance::{AgentInstance, AgentRole};
-use agent_os::core::agent_runner::{AgentRunner, TaskContext};
-use agent_os::core::event_bus::EventBus;
-use agent_os::core::sa::SupervisorAgent;
-use agent_os::gateway::unified_gateway::UnifiedGateway;
-use agent_os::memory::l0_store::L0Store;
-use agent_os::memory::l2_blackboard::Blackboard;
-use agent_os::memory::l3_projection::ProjectionEngine;
-use agent_os::memory::memory_manager::MemoryManager;
-use agent_os::templates::template_engine::TemplateEngine;
-use agent_os::tools::skill_registry::SkillRegistry;
-use agent_os::config::settings::AgentSettings;
-use agent_os::CoreConfig;
+use glidinghorse::core::agent_instance::{AgentInstance, AgentRole};
+use glidinghorse::core::agent_runner::{AgentRunner, TaskContext};
+use glidinghorse::core::event_bus::EventBus;
+use glidinghorse::core::sa::SupervisorAgent;
+use glidinghorse::gateway::unified_gateway::UnifiedGateway;
+use glidinghorse::memory::l0_store::L0Store;
+use glidinghorse::memory::l2_blackboard::Blackboard;
+use glidinghorse::memory::l3_projection::ProjectionEngine;
+use glidinghorse::memory::memory_manager::MemoryManager;
+use glidinghorse::templates::template_engine::TemplateEngine;
+use glidinghorse::tools::skill_registry::SkillRegistry;
+use glidinghorse::config::settings::AgentSettings;
+use glidinghorse::CoreConfig;
 
 const OUTPUT: &str = "/tmp/agent_os_research";
 const USER_INPUT: &str = "AI Agent在安防监控场景有哪些好的应用？";
@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let url = std::env::var("DEEPSEEK_API_URL").unwrap_or_else(|_| "https://api.deepseek.com".to_string());
 
     // 基础设施
-    let gateway_settings = agent_os::config::GatewaySettings {
+    let gateway_settings = glidinghorse::config::GatewaySettings {
         base_url: url,
         api_key: key,
         default_model: "deepseek-chat".to_string(),
@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         plan.agent_sequence.iter().map(|r| r.to_string()).collect::<Vec<_>>().join("→"));
 
     // 验证任务分级
-    if matches!(plan.task_complexity, agent_os::core::sa::TaskComplexity::Standard) {
+    if matches!(plan.task_complexity, glidinghorse::core::sa::TaskComplexity::Standard) {
         println!("\n✅ 任务分级正确: 调研类问题 = Standard (PA→DA→CA→AA)");
     } else {
         println!("\n⚠️  任务分级: {:?}", plan.task_complexity);

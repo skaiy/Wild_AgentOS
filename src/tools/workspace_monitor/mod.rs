@@ -6,6 +6,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, info, instrument};
 
 use crate::core::event_bus::{EventBus, EventType};
+use crate::core::perception_store::{PerceptionEntry, PerceptionSource, PerceptionStore};
 use crate::memory::l2_blackboard::Blackboard;
 use crate::tools::hooks::{FunctionHook, HookContext, HookManager, HookPoint, HookResult};
 
@@ -86,6 +87,7 @@ pub struct WorkspaceMonitor {
     pub snapshot_manager: Arc<SnapshotManager>,
     watch_engine: Option<WatchEngine>,
     event_bus: Option<Arc<EventBus>>,
+    perception_store: Option<Arc<PerceptionStore>>,
 }
 
 impl WorkspaceMonitor {
@@ -182,6 +184,7 @@ impl WorkspaceMonitor {
             snapshot_manager,
             watch_engine,
             event_bus: event_bus_for_struct,
+            perception_store: None,
         })
     }
 
@@ -227,6 +230,7 @@ impl WorkspaceMonitor {
         };
 
         let inventory = self.inventory.clone();
+        let perception = self.perception_store.clone();
         // Subscribe before spawning to ensure no events are missed between
         // spawn and subscribe.
         let mut receiver = event_bus.subscribe();
@@ -237,12 +241,36 @@ impl WorkspaceMonitor {
                         match EventType::from_str(&event.event_type) {
                             EventType::WorkspaceFileCreated => {
                                 inventory.read().add_or_update(&event.payload);
+                                // 通知感知区域
+                                if let Some(ref p) = perception {
+                                    let entry = PerceptionEntry::new(
+                                        PerceptionSource::WorkspaceMonitor,
+                                        format!("新文件创建: {}", event.payload),
+                                    ).with_priority(6);
+                                    p.store_global(entry);
+                                }
                             }
                             EventType::WorkspaceFileModified => {
                                 inventory.read().mark_stale(&event.payload);
+                                // 通知感知区域
+                                if let Some(ref p) = perception {
+                                    let entry = PerceptionEntry::new(
+                                        PerceptionSource::WorkspaceMonitor,
+                                        format!("文件外部变更: {}", event.payload),
+                                    ).with_priority(6);
+                                    p.store_global(entry);
+                                }
                             }
                             EventType::WorkspaceFileRemoved => {
                                 inventory.read().remove(&event.payload);
+                                // 通知感知区域
+                                if let Some(ref p) = perception {
+                                    let entry = PerceptionEntry::new(
+                                        PerceptionSource::WorkspaceMonitor,
+                                        format!("文件已删除: {}", event.payload),
+                                    ).with_priority(5);
+                                    p.store_global(entry);
+                                }
                             }
                             _ => {}
                         }
@@ -277,14 +305,47 @@ impl WorkspaceMonitor {
                 };
                 let inv = inv_for_read.read();
                 if let Some(entry) = inv.get_entry(&path) {
-                    if entry.state == FileState::ReadStale {
-                        ctx.data.insert(
-                            "stale_warning".to_string(),
-                            serde_json::Value::String(format!(
-                                "File '{}' is stale (last read version {}), consider re-reading",
+                    match entry.state {
+                        FileState::ReadStale => {
+                            let warning = format!(
+                                "[workspace_monitor] File '{}' is stale (last read version {}), consider re-reading before writing",
                                 path, entry.last_read_version
-                            )),
-                        );
+                            );
+                            ctx.data.insert(
+                                "stale_warning".to_string(),
+                                serde_json::Value::String(warning.clone()),
+                            );
+                            // 同时写入 metadata 以便 ToolGuard pre-injection 将其注入 system prompt
+                            let mut injections = ctx.metadata
+                                .entry("guard_pre_injections".to_string())
+                                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+                            if let Some(arr) = injections.as_array_mut() {
+                                arr.push(serde_json::Value::String(warning));
+                            }
+                        }
+                        FileState::ReadFresh if entry.last_read_version == entry.current_version => {
+                            // File unchanged since last read — inject hint to skip full re-read
+                            ctx.data.insert(
+                                "file_unchanged".to_string(),
+                                serde_json::Value::Bool(true),
+                            );
+                            let hint = format!(
+                                "[workspace_monitor] File '{}' unchanged since last read (v{}). Use mode:diff for incremental changes or mode:force_refresh to re-read.",
+                                path, entry.current_version
+                            );
+                            ctx.data.insert(
+                                "file_unchanged_hint".to_string(),
+                                serde_json::Value::String(hint.clone()),
+                            );
+                            // 同时写入 metadata 以便 ToolGuard pre-injection
+                            let mut injections = ctx.metadata
+                                .entry("guard_pre_injections".to_string())
+                                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+                            if let Some(arr) = injections.as_array_mut() {
+                                arr.push(serde_json::Value::String(hint));
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 HookResult::Continue
@@ -338,6 +399,67 @@ impl WorkspaceMonitor {
             },
         );
         hook_manager.register(Box::new(write_after_hook));
+    }
+
+    /// 设置主动感知存储，使 WorkspaceMonitor 能向 Agent 注入文件状态感知数据
+    pub fn with_perception_store(mut self, store: Arc<PerceptionStore>) -> Self {
+        self.perception_store = Some(store);
+        self
+    }
+
+    /// 生成工作区文件状态摘要文本，用于注入感知区域
+    pub fn generate_perception_text(&self) -> Option<String> {
+        let inv = self.inventory.read();
+        let all = inv.list_all();
+        if all.is_empty() {
+            return None;
+        }
+
+        let total = all.len();
+        let stale: Vec<_> = all.iter().filter(|e| e.state == crate::tools::workspace_monitor::FileState::ReadStale).collect();
+        let written_unread: Vec<_> = all.iter().filter(|e| e.state == crate::tools::workspace_monitor::FileState::WrittenUnread).collect();
+        let discovered: Vec<_> = all.iter().filter(|e| e.state == crate::tools::workspace_monitor::FileState::Discovered).collect();
+
+        let mut parts = Vec::new();
+        parts.push(format!("共 {} 个文件", total));
+
+        if !stale.is_empty() {
+            let names: Vec<&str> = stale.iter().take(5).map(|e| e.path.as_str()).collect();
+            parts.push(format!(
+                "{} 个有外部变更{}",
+                stale.len(),
+                if names.is_empty() { String::new() } else {
+                    format!(": {}", names.join(", "))
+                }
+            ));
+        }
+
+        if !written_unread.is_empty() {
+            let names: Vec<&str> = written_unread.iter().take(5).map(|e| e.path.as_str()).collect();
+            parts.push(format!(
+                "{} 个已写入未重新读取{}",
+                written_unread.len(),
+                if names.is_empty() { String::new() } else {
+                    format!(": {}", names.join(", "))
+                }
+            ));
+        }
+
+        if !discovered.is_empty() {
+            parts.push(format!("{} 个新发现未读取", discovered.len()));
+        }
+
+        Some(format!("{} | {}", total, parts.join(" | ")))
+    }
+
+    /// 向 PerceptionStore 写入当前文件状态的感知摘要
+    pub fn inject_file_perception(&self) {
+        if let Some(ref store) = self.perception_store {
+            if let Some(text) = self.generate_perception_text() {
+                let entry = PerceptionEntry::new(PerceptionSource::WorkspaceMonitor, text);
+                store.store_global(entry);
+            }
+        }
     }
 
     // ── Private ──
@@ -626,5 +748,330 @@ mod tests {
             ws.inventory.read().get_entry(&file_path_str).is_none(),
             "File should be removed from inventory after remove event"
         );
+    }
+
+    #[test]
+    fn test_hook_unchanged_file_detection() {
+        let (ws, dir) = temp_ws_monitor();
+        let file_path = dir.path().join("unchanged.rs");
+        std::fs::write(&file_path, "fn main() {}").unwrap();
+
+        {
+            let inv = ws.inventory.read();
+            inv.add_or_update(&file_path.to_string_lossy()).unwrap();
+            inv.mark_read(&file_path.to_string_lossy(), 0);
+        }
+
+        let hm = HookManager::new();
+        ws.register_hooks(&hm);
+
+        // File is ReadFresh with matching versions — hook should inject file_unchanged
+        let mut ctx = HookContext::new(HookPoint::SkillBefore, "agent_1", "DA");
+        ctx.data.insert("path".to_string(), Value::String(file_path.to_string_lossy().to_string()));
+
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(hm.execute(HookPoint::SkillBefore, &mut ctx));
+        assert_eq!(result, HookResult::Continue);
+
+        assert_eq!(
+            ctx.data.get("file_unchanged").and_then(|v| v.as_bool()),
+            Some(true),
+            "Expected file_unchanged flag for ReadFresh file with matching version"
+        );
+        let hint = ctx.data.get("file_unchanged_hint").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(hint.contains("unchanged"), "Expected unchanged hint: {}", hint);
+    }
+
+    #[test]
+    fn test_hook_stale_warning_for_stale_file() {
+        let (ws, dir) = temp_ws_monitor();
+        let file_path = dir.path().join("stale.rs");
+        std::fs::write(&file_path, "fn stale() {}").unwrap();
+
+        {
+            let inv = ws.inventory.read();
+            inv.add_or_update(&file_path.to_string_lossy()).unwrap();
+            inv.mark_read(&file_path.to_string_lossy(), 0);
+            inv.mark_stale(&file_path.to_string_lossy());
+        }
+
+        let hm = HookManager::new();
+        ws.register_hooks(&hm);
+
+        let mut ctx = HookContext::new(HookPoint::SkillBefore, "agent_1", "DA");
+        ctx.data.insert("path".to_string(), Value::String(file_path.to_string_lossy().to_string()));
+
+        let _ = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(hm.execute(HookPoint::SkillBefore, &mut ctx));
+
+        assert!(
+            ctx.data.get("file_unchanged").is_none(),
+            "Stale file should NOT have file_unchanged flag"
+        );
+        assert!(
+            ctx.data.get("stale_warning").is_some(),
+            "Stale file SHOULD have stale_warning"
+        );
+    }
+
+    // ── PerceptionStore integration ──
+
+    #[tokio::test]
+    async fn test_event_consumer_injects_perception_store_on_create() {
+        let bus = Arc::new(EventBus::new(100));
+        let dir = tempfile::TempDir::new().unwrap();
+        let ps = Arc::new(PerceptionStore::new());
+
+        let config = WorkspaceMonitorConfig {
+            workspace_root: dir.path().to_path_buf(),
+            watch_enabled: false,
+            sled_path: None,
+            ..WorkspaceMonitorConfig::default()
+        };
+
+        let ws = WorkspaceMonitor::initialize(config, None, Some(bus.clone()))
+            .unwrap()
+            .with_perception_store(ps.clone());
+        ws.register_event_consumers();
+
+        let test_file = dir.path().join("percept_create.rs");
+        std::fs::write(&test_file, "fn test() {}").unwrap();
+
+        bus.emit(
+            "iri://test_task",
+            EventType::WorkspaceFileCreated.as_str(),
+            "iri://test_agent",
+            &test_file.to_string_lossy(),
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        assert!(ps.has_new("iri://test_task"), "PerceptionStore should have new entry after create event");
+        let text = ps.take_perception_text("iri://test_task");
+        assert!(text.contains("新文件"), "Perception text should mention file creation: {}", text);
+    }
+
+    #[tokio::test]
+    async fn test_event_consumer_injects_perception_store_on_modify() {
+        let bus = Arc::new(EventBus::new(100));
+        let dir = tempfile::TempDir::new().unwrap();
+        let ps = Arc::new(PerceptionStore::new());
+
+        let config = WorkspaceMonitorConfig {
+            workspace_root: dir.path().to_path_buf(),
+            watch_enabled: false,
+            sled_path: None,
+            ..WorkspaceMonitorConfig::default()
+        };
+
+        let ws = WorkspaceMonitor::initialize(config, None, Some(bus.clone()))
+            .unwrap()
+            .with_perception_store(ps.clone());
+        ws.register_event_consumers();
+
+        let test_file = dir.path().join("percept_modify.rs");
+        std::fs::write(&test_file, "fn old() {}").unwrap();
+        std::fs::write(&test_file, "fn new() {}").unwrap();
+
+        bus.emit(
+            "iri://test_task",
+            EventType::WorkspaceFileModified.as_str(),
+            "iri://test_agent",
+            &test_file.to_string_lossy(),
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        assert!(ps.has_new("iri://test_task"), "PerceptionStore should have new entry after modify event");
+        let text = ps.take_perception_text("iri://test_task");
+        assert!(text.contains("外部变更"), "Perception text should mention external change: {}", text);
+    }
+
+    #[tokio::test]
+    async fn test_event_consumer_injects_perception_store_on_remove() {
+        let bus = Arc::new(EventBus::new(100));
+        let dir = tempfile::TempDir::new().unwrap();
+        let ps = Arc::new(PerceptionStore::new());
+
+        let config = WorkspaceMonitorConfig {
+            workspace_root: dir.path().to_path_buf(),
+            watch_enabled: false,
+            sled_path: None,
+            ..WorkspaceMonitorConfig::default()
+        };
+
+        let ws = WorkspaceMonitor::initialize(config, None, Some(bus.clone()))
+            .unwrap()
+            .with_perception_store(ps.clone());
+        ws.register_event_consumers();
+
+        let test_file = dir.path().join("percept_remove.rs");
+        std::fs::write(&test_file, "fn gone() {}").unwrap();
+
+        bus.emit(
+            "iri://test_task",
+            EventType::WorkspaceFileRemoved.as_str(),
+            "iri://test_agent",
+            &test_file.to_string_lossy(),
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        assert!(ps.has_new("iri://test_task"), "PerceptionStore should have new entry after remove event");
+        let text = ps.take_perception_text("iri://test_task");
+        assert!(text.contains("已删除"), "Perception text should mention file removal: {}", text);
+    }
+
+    #[test]
+    fn test_inject_file_perception_with_stale_files() {
+        let (ws, dir) = temp_ws_monitor();
+        let ps = Arc::new(PerceptionStore::new());
+
+        // Can't use with_perception_store after initialize since it consumes self
+        // We need to build one directly with perception_store set
+        let config = WorkspaceMonitorConfig {
+            workspace_root: dir.path().to_path_buf(),
+            watch_enabled: false,
+            sled_path: None,
+            ..WorkspaceMonitorConfig::default()
+        };
+
+        let ws = WorkspaceMonitor::initialize(config, None, None)
+            .unwrap()
+            .with_perception_store(ps.clone());
+
+        // Add some files to inventory
+        let file1 = dir.path().join("stale1.rs");
+        std::fs::write(&file1, "fn a() {}").unwrap();
+        let file2 = dir.path().join("stale2.rs");
+        std::fs::write(&file2, "fn b() {}").unwrap();
+
+        {
+            let inv = ws.inventory.read();
+            inv.add_or_update(&file1.to_string_lossy()).unwrap();
+            inv.add_or_update(&file2.to_string_lossy()).unwrap();
+            inv.mark_read(&file1.to_string_lossy(), 1);
+            inv.mark_read(&file2.to_string_lossy(), 1);
+            inv.mark_stale(&file1.to_string_lossy());
+            inv.mark_stale(&file2.to_string_lossy());
+        }
+
+        ws.inject_file_perception();
+
+        let text = ps.take_perception_text("iri://task/t");
+        assert!(!text.is_empty(), "Should have perception text after inject");
+        assert!(text.contains("stale"), "Should mention stale files: {}", text);
+    }
+
+    #[test]
+    fn test_generate_perception_text_empty_inventory() {
+        let (ws, _dir) = temp_ws_monitor();
+        let text = ws.generate_perception_text();
+        // Fresh inventory with initial scan may have files
+        // If empty, it returns None; otherwise it should have text
+        let inv = ws.inventory.read();
+        if inv.list_all().is_empty() {
+            assert!(text.is_none(), "Empty inventory should return None");
+        } else {
+            assert!(text.is_some(), "Non-empty inventory should return Some");
+        }
+    }
+
+    #[test]
+    fn test_generate_perception_text_with_state_counts() {
+        let (ws, dir) = temp_ws_monitor();
+
+        let f1 = dir.path().join("active.rs");
+        std::fs::write(&f1, "fn active() {}").unwrap();
+        let f2 = dir.path().join("stale.rs");
+        std::fs::write(&f2, "fn stale() {}").unwrap();
+
+        {
+            let inv = ws.inventory.read();
+            inv.add_or_update(&f1.to_string_lossy()).unwrap();
+            inv.add_or_update(&f2.to_string_lossy()).unwrap();
+            inv.mark_read(&f1.to_string_lossy(), 1);
+            inv.mark_read(&f2.to_string_lossy(), 1);
+            inv.mark_stale(&f2.to_string_lossy());
+        }
+
+        let text = ws.generate_perception_text();
+        assert!(text.is_some(), "Should generate perception text");
+        let t = text.unwrap();
+        assert!(t.contains("共"), "Should mention total file count: {}", t);
+    }
+
+    #[test]
+    fn test_inject_file_perception_no_perception_store_noop() {
+        let (ws, _dir) = temp_ws_monitor();
+        // Should not panic when perception_store is None
+        ws.inject_file_perception();
+    }
+
+    #[test]
+    fn test_with_perception_store_chain() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config = WorkspaceMonitorConfig {
+            workspace_root: dir.path().to_path_buf(),
+            watch_enabled: false,
+            sled_path: None,
+            ..WorkspaceMonitorConfig::default()
+        };
+        let ps = Arc::new(PerceptionStore::new());
+        let ws = WorkspaceMonitor::initialize(config, None, None)
+            .unwrap()
+            .with_perception_store(ps.clone());
+
+        // Verify it's configured
+        ws.inject_file_perception();
+        // Should not panic, meaning perception_store is Some
+        let _ = ws.generate_perception_text();
+    }
+
+    /// Full integration: event consumer → perception store → take → verify
+    #[tokio::test]
+    async fn test_event_to_perception_full_flow() {
+        let bus = Arc::new(EventBus::new(100));
+        let dir = tempfile::TempDir::new().unwrap();
+        let ps = Arc::new(PerceptionStore::new());
+
+        let config = WorkspaceMonitorConfig {
+            workspace_root: dir.path().to_path_buf(),
+            watch_enabled: false,
+            sled_path: None,
+            ..WorkspaceMonitorConfig::default()
+        };
+
+        let ws = WorkspaceMonitor::initialize(config, None, Some(bus.clone()))
+            .unwrap()
+            .with_perception_store(ps.clone());
+        ws.register_event_consumers();
+
+        let test_file = dir.path().join("full_flow.rs");
+        std::fs::write(&test_file, "fn test() {}").unwrap();
+
+        // Emit create event
+        bus.emit(
+            "iri://task_full",
+            EventType::WorkspaceFileCreated.as_str(),
+            "iri://agent",
+            &test_file.to_string_lossy(),
+        )
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // take perception text
+        let text1 = ps.take_perception_text("iri://task_full");
+        assert!(!text1.is_empty(), "Perception should be available after create event");
+        assert!(text1.contains("新文件"), "Should mention new file: {}", text1);
+
+        // Second take should be empty (consumed)
+        let text2 = ps.take_perception_text("iri://task_full");
+        assert!(text2.is_empty(), "Second take should be empty after consumption");
     }
 }

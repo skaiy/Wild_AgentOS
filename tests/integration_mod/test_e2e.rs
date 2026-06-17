@@ -1,20 +1,20 @@
 use std::sync::Arc;
 use std::path::Path;
 
-use agent_os::config::GatewaySettings;
-use agent_os::core::agent_instance::AgentRole;
-use agent_os::core::agent_runner::{AgentRunner, TaskContext};
-use agent_os::core::event_bus::EventBus;
-use agent_os::core::sa::SupervisorAgent;
-use agent_os::gateway::UnifiedGateway;
-use agent_os::memory::l0_store::L0Store;
-use agent_os::memory::l2_blackboard::Blackboard;
-use agent_os::memory::l3_projection::ProjectionEngine;
-use agent_os::memory::memory_manager::MemoryManager;
-use agent_os::templates::template_engine::TemplateEngine;
-use agent_os::tools::skill_registry::SkillRegistry;
-use agent_os::config::AgentSettings;
-use agent_os::CoreConfig;
+use glidinghorse::config::GatewaySettings;
+use glidinghorse::core::agent_instance::AgentRole;
+use glidinghorse::core::agent_runner::{AgentRunner, TaskContext};
+use glidinghorse::core::event_bus::EventBus;
+use glidinghorse::core::sa::SupervisorAgent;
+use glidinghorse::gateway::UnifiedGateway;
+use glidinghorse::memory::l0_store::L0Store;
+use glidinghorse::memory::l2_blackboard::Blackboard;
+use glidinghorse::memory::l3_projection::ProjectionEngine;
+use glidinghorse::memory::memory_manager::MemoryManager;
+use glidinghorse::templates::template_engine::TemplateEngine;
+use glidinghorse::tools::skill_registry::SkillRegistry;
+use glidinghorse::config::AgentSettings;
+use glidinghorse::CoreConfig;
 use tempfile::TempDir;
 
 fn build_system(max_iterations: u32) -> (SupervisorAgent, TempDir) {
@@ -95,7 +95,7 @@ fn build_runner() -> (Arc<AgentRunner>, TempDir) {
 async fn test_e2e_da_single_agent_programming() {
     let (runner, _dir) = build_runner();
 
-    let mut agent = agent_os::core::agent_instance::AgentInstance::new(
+    let mut agent = glidinghorse::core::agent_instance::AgentInstance::new(
         "e2e_da_001".to_string(),
         AgentRole::Do,
     );

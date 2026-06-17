@@ -1,4 +1,6 @@
 use super::*;
+use crate::core::agent_instance::AgentRole;
+use crate::jsonld::JsonLdNode;
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 

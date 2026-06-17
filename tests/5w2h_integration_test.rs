@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::collections::HashMap;
 
-use agent_os::core::five_w2h::{Task5W2H, FillStage, WhenDetail, HowDetail, WhereDetail, HowMuchDetail};
-use agent_os::core::sa::SupervisorAgent;
-use agent_os::memory::l0_store::L0Store;
-use agent_os::memory::l2_blackboard::Blackboard;
-use agent_os::core::event_bus::EventBus;
-use agent_os::perception::proactive_engine::ProactiveEngine;
+use glidinghorse::core::five_w2h::{Task5W2H, FillStage, WhenDetail, HowDetail, WhereDetail, HowMuchDetail};
+use glidinghorse::core::sa::SupervisorAgent;
+use glidinghorse::memory::l0_store::L0Store;
+use glidinghorse::memory::l2_blackboard::Blackboard;
+use glidinghorse::core::event_bus::EventBus;
+use glidinghorse::perception::proactive_engine::ProactiveEngine;
 
 fn setup_test_env() -> (Arc<L0Store>, Arc<Blackboard>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
@@ -141,15 +141,15 @@ fn test_5w2h_frozen_prevents_modification() {
 fn test_task_complexity_via_analyze_task() {
     let (l0, l2, _dir) = setup_test_env();
     
-    use agent_os::core::agent_runner::AgentRunner;
-    use agent_os::templates::template_engine::TemplateEngine;
-    use agent_os::tools::skill_registry::SkillRegistry;
-    use agent_os::gateway::unified_gateway::UnifiedGateway;
-    use agent_os::memory::l3_projection::ProjectionEngine;
-    use agent_os::memory::memory_manager::MemoryManager;
-    use agent_os::config::settings::{GatewaySettings, AgentSettings};
-    use agent_os::core::event_bus::EventBus;
-    use agent_os::CoreConfig;
+    use glidinghorse::core::agent_runner::AgentRunner;
+    use glidinghorse::templates::template_engine::TemplateEngine;
+    use glidinghorse::tools::skill_registry::SkillRegistry;
+    use glidinghorse::gateway::unified_gateway::UnifiedGateway;
+    use glidinghorse::memory::l3_projection::ProjectionEngine;
+    use glidinghorse::memory::memory_manager::MemoryManager;
+    use glidinghorse::config::settings::{GatewaySettings, AgentSettings};
+    use glidinghorse::core::event_bus::EventBus;
+    use glidinghorse::CoreConfig;
     
     let proj = Arc::new(ProjectionEngine::new(l2.clone(), 500));
     let mm = Arc::new(tokio::sync::Mutex::new(MemoryManager::new(l0.clone(), l2.clone(), proj.clone(), CoreConfig::default())));
@@ -188,12 +188,12 @@ fn test_task_complexity_via_analyze_task() {
 #[test]
 fn test_5w2h_jsonld_roundtrip_with_all_features() {
     let mut w2h = Task5W2H::new("完整测试", "验证所有功能")
-        .with_who(agent_os::core::five_w2h::WhoDetail {
+        .with_who(glidinghorse::core::five_w2h::WhoDetail {
             requestor: Some("user:test".to_string()),
             assignees: vec!["agent:pa".to_string()],
             stakeholders: vec![],
             required_role: Some("Do".to_string()),
-            access_level: Some(agent_os::core::five_w2h::AccessLevel::Write),
+            access_level: Some(glidinghorse::core::five_w2h::AccessLevel::Write),
         })
         .with_when(WhenDetail {
             deadline: Some(chrono::Utc::now() + chrono::Duration::hours(24)),

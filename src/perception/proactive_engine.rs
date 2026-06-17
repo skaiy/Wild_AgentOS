@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use tracing::{debug, info, warn};
 
 use crate::core::event_bus::EventBus;
+use crate::core::perception_store::{PerceptionEntry, PerceptionSource, PerceptionStore};
 use crate::memory::l0_store::{L0Entry, L0Store, MesiState};
 use crate::CoreError;
 
@@ -121,6 +122,7 @@ pub struct ProactiveEngine {
     anomaly_history: Vec<(String, DateTime<Utc>)>,
     l0: Arc<L0Store>,
     event_bus: Arc<EventBus>,
+    perception_store: Option<Arc<PerceptionStore>>,
 }
 
 impl ProactiveEngine {
@@ -131,6 +133,7 @@ impl ProactiveEngine {
             anomaly_history: Vec::new(),
             l0,
             event_bus,
+            perception_store: None,
         }
     }
 
@@ -145,7 +148,14 @@ impl ProactiveEngine {
             anomaly_history: Vec::new(),
             l0,
             event_bus,
+            perception_store: None,
         }
+    }
+
+    /// 设置主动感知存储，使 ProactiveEngine 能向 Agent 注入告警感知数据
+    pub fn with_perception_store(mut self, store: Arc<PerceptionStore>) -> Self {
+        self.perception_store = Some(store);
+        self
     }
 
     pub fn check_5w2h_constraints(&self, five_w2h_iri: &str) -> Option<String> {
@@ -424,6 +434,23 @@ impl ProactiveEngine {
         }
     }
 
+    /// 向 PerceptionStore 注入冲突告警
+    fn inject_conflict_perception(&self, conflict_type: &str, path: &str, task_iri: &str) {
+        if let Some(ref store) = self.perception_store {
+            let type_label = match conflict_type {
+                "stale_file_write" => "stale 文件写入",
+                "concurrent_write" => "并发写入冲突",
+                "unread_write" => "未读取写入",
+                _ => "资源冲突",
+            };
+            let entry = PerceptionEntry::new(
+                PerceptionSource::PerceptionEngine,
+                format!("{}: {} (task: {})", type_label, path, task_iri),
+            ).with_priority(8);
+            store.store_global(entry);
+        }
+    }
+
     pub fn on_resource_conflict(&self, conflict: &Value, task_iri: &str) -> InterventionPlan {
         warn!(task = %task_iri, conflict = ?conflict, "Resource conflict");
 
@@ -435,6 +462,9 @@ impl ProactiveEngine {
             .get("path")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
+
+        // 向感知区域注入告警
+        self.inject_conflict_perception(conflict_type, resource_path, task_iri);
 
         let (diagnosis, actions, priority, interrupt) = match conflict_type {
             "stale_file_write" => (
@@ -984,8 +1014,105 @@ mod tests_5w2h {
         assert!(result.is_none(), "Fresh file should have no conflict");
     }
 
+    // ── PerceptionStore integration ──
+
     #[test]
-    fn test_on_resource_conflict_stale_write_plan() {
+    fn test_on_resource_conflict_injects_perception_store_stale_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(L0Store::new(dir.path().to_str().unwrap()).unwrap());
+        let ps = Arc::new(PerceptionStore::new());
+        let engine = ProactiveEngine::new(store, test_event_bus())
+            .with_perception_store(ps.clone());
+
+        let conflict = serde_json::json!({
+            "conflict_type": "stale_file_write",
+            "path": "/path/to/stale.rs",
+            "agent_id": "agent_1",
+        });
+        let plan = engine.on_resource_conflict(&conflict, "iri://task/store_test");
+        assert!(plan.should_interrupt);
+
+        // PerceptionStore should have the conflict entry
+        assert!(ps.has_new("iri://task/store_test"), "PerceptionStore should have entry after conflict");
+        let text = ps.take_perception_text("iri://task/store_test");
+        assert!(text.contains("告警"), "Should contain alert prefix: {}", text);
+        assert!(text.contains("stale"), "Should mention stale file: {}", text);
+    }
+
+    #[test]
+    fn test_on_resource_conflict_injects_perception_store_concurrent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(L0Store::new(dir.path().to_str().unwrap()).unwrap());
+        let ps = Arc::new(PerceptionStore::new());
+        let engine = ProactiveEngine::new(store, test_event_bus())
+            .with_perception_store(ps.clone());
+
+        let conflict = serde_json::json!({
+            "conflict_type": "concurrent_write",
+            "path": "/shared/file.rs",
+            "agent_id": "agent_2",
+        });
+        let _plan = engine.on_resource_conflict(&conflict, "iri://task/concurrent");
+
+        let text = ps.take_perception_text("iri://task/concurrent");
+        assert!(text.contains("并发"), "Should mention concurrent write: {}", text);
+    }
+
+    #[test]
+    fn test_on_resource_conflict_injects_perception_store_unread() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(L0Store::new(dir.path().to_str().unwrap()).unwrap());
+        let ps = Arc::new(PerceptionStore::new());
+        let engine = ProactiveEngine::new(store, test_event_bus())
+            .with_perception_store(ps.clone());
+
+        let conflict = serde_json::json!({
+            "conflict_type": "unread_write",
+            "path": "/path/to/unread.rs",
+        });
+        let _plan = engine.on_resource_conflict(&conflict, "iri://task/unread");
+
+        let text = ps.take_perception_text("iri://task/unread");
+        assert!(text.contains("未读取"), "Should mention unread write: {}", text);
+    }
+
+    #[test]
+    fn test_with_perception_store_noop_when_not_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(L0Store::new(dir.path().to_str().unwrap()).unwrap());
+        // No perception_store set — should not panic
+        let engine = ProactiveEngine::new(store, test_event_bus());
+        let conflict = serde_json::json!({
+            "conflict_type": "stale_file_write",
+            "path": "/path/to/f.rs",
+        });
+        let plan = engine.on_resource_conflict(&conflict, "iri://task/no_ps");
+        assert!(plan.should_interrupt);
+    }
+
+    #[test]
+    fn test_with_perception_store_after_construction() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(L0Store::new(dir.path().to_str().unwrap()).unwrap());
+        let ps = Arc::new(PerceptionStore::new());
+        let engine = ProactiveEngine::with_config(
+            PerceptionConfig::default(),
+            store,
+            test_event_bus(),
+        ).with_perception_store(ps.clone());
+
+        let conflict = serde_json::json!({
+            "conflict_type": "concurrent_write",
+            "path": "/path/to/x.rs",
+        });
+        let _plan = engine.on_resource_conflict(&conflict, "iri://task/chain");
+
+        let text = ps.take_perception_text("iri://task/chain");
+        assert!(!text.is_empty(), "Chain-constructed engine should inject to PerceptionStore");
+    }
+
+    #[test]
+    fn test_on_resource_conflict() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(L0Store::new(dir.path().to_str().unwrap()).unwrap());
         let engine = ProactiveEngine::new(store, test_event_bus());

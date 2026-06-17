@@ -1,4 +1,4 @@
-use agent_os::templates::schemas::{
+use glidinghorse::templates::schemas::{
     AgentTemplate, PromptSegment, SegmentType, TemplateRegistry,
     validate_template, create_pa_template, create_da_template, create_ca_template, create_aa_template,
 };

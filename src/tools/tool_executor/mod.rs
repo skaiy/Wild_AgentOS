@@ -258,22 +258,63 @@ impl ToolExecutor {
             "required": ["query"]
         }), Arc::new(|input: Value| Box::pin(async move { builtins::execute_tool_search(input).await })), all);
         let ws_read = self.workspace_monitor.clone();
-        self.register("file_read", "Read a text file. By default reads the entire file. Use offset/limit only for incremental chunked reading (will be tracked cumulatively).", json!({
+        self.register("file_read", "Read a text file. Reads the entire file by default. On re-read of a changed file, returns a unified diff showing what changed. Use mode:full to force full content, mode:changed_only to get only the new/changed lines.", json!({
             "properties": {
                 "path": {"type":"string", "description": "File path to read"},
                 "offset": {"type":"integer", "description": "Line offset to start from (0-indexed). Omit to read from beginning."},
-                "limit": {"type":"integer", "description": "Number of lines to read. Omit to read all remaining lines from offset."},
-                "mode": {"type":"string", "description": "Read mode: auto (default) | full | force_refresh | diff. diff returns only new content since last tracked read."}
+                "limit": {"type":"integer", "description": "Number of lines to return. Omit to read all remaining lines from offset."},
+                "mode": {"type":"string", "description": "Read mode: auto (default=use diff if previously read) | full | force_refresh | diff | changed_only"}
             },
             "required": ["path"]
         }), Arc::new(move |input: Value| {
             let ws = ws_read.clone();
             Box::pin(async move {
+                let mode = input.get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("auto")
+                    .to_string();
                 let result = builtins::execute_file_read(input).await?;
                 if let Ok(guard) = ws.read() {
                     if let Some(ref wm) = *guard {
                         if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
-                            wm.read_file(path, crate::tools::workspace_monitor::ReadMode::Full).ok();
+                            let read_mode = match mode.as_str() {
+                                "force_refresh" => crate::tools::workspace_monitor::ReadMode::ForceRefresh,
+                                "diff" => crate::tools::workspace_monitor::ReadMode::Diff,
+                                "changed_only" => crate::tools::workspace_monitor::ReadMode::ChangedOnly,
+                                _ => {
+                                    // auto: use diff if file is already cached, else full
+                                    let inv = wm.inventory.read();
+                                    let entry = inv.get_entry(path);
+                                    match entry {
+                                        Some(e) if e.read_count > 0 => crate::tools::workspace_monitor::ReadMode::Diff,
+                                        _ => crate::tools::workspace_monitor::ReadMode::Full,
+                                    }
+                                }
+                            };
+                            if let Ok(read_result) = wm.read_file(path, read_mode) {
+                                let mut result = result;
+                                if let Some(diff) = &read_result.unified_diff {
+                                    result.as_object_mut().map(|obj| {
+                                        obj.insert("unified_diff".to_string(), Value::String(diff.clone()));
+                                    });
+                                }
+                                if let Some(changed) = &read_result.changed_lines {
+                                    result.as_object_mut().map(|obj| {
+                                        obj.insert("changed_lines".to_string(), Value::Array(
+                                            changed.iter().map(|l| Value::String(l.clone())).collect()
+                                        ));
+                                    });
+                                }
+                                if !read_result.changed && read_result.from_cache {
+                                    result.as_object_mut().map(|obj| {
+                                        obj.insert("from_cache".to_string(), Value::Bool(true));
+                                        obj.insert("message".to_string(), Value::String(
+                                            "File unchanged since last read. Use mode:force_refresh to force re-read.".to_string()
+                                        ));
+                                    });
+                                }
+                                return Ok(result);
+                            }
                         }
                     }
                 }
@@ -298,6 +339,52 @@ impl ToolExecutor {
                     }
                 }
                 Ok(result)
+            })
+        }), all);
+        let ws_status = self.workspace_monitor.clone();
+        self.register("workspace_status", "View workspace file status summary: stale files, written-unread files, counts by state and language.", json!({
+            "properties": {},
+            "required": []
+        }), Arc::new(move |_: Value| {
+            let ws = ws_status.clone();
+            Box::pin(async move {
+                if let Ok(guard) = ws.read() {
+                    if let Some(ref wm) = *guard {
+                        let inv = wm.inventory.read();
+                        let all = inv.list_all();
+                        let total = all.len();
+
+                        let stale = inv.list_by_state(FileState::ReadStale);
+                        let written_unread = inv.list_by_state(FileState::WrittenUnread);
+                        let discovered = inv.list_by_state(FileState::Discovered);
+                        let fresh = inv.list_by_state(FileState::ReadFresh);
+
+                        // Group by language
+                        let mut lang_map: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                        for entry in &all {
+                            *lang_map.entry(entry.language.clone()).or_insert(0) += 1;
+                        }
+                        let mut by_language: Vec<serde_json::Value> = lang_map.into_iter()
+                            .map(|(lang, count)| json!({"language": lang, "count": count}))
+                            .collect();
+                        by_language.sort_by(|a, b| {
+                            b["count"].as_u64().unwrap_or(0).cmp(&a["count"].as_u64().unwrap_or(0))
+                        });
+
+                        return Ok(json!({
+                            "total_files": total,
+                            "stale_count": stale.len(),
+                            "stale_files": stale.iter().take(20).map(|e| json!(e.path)).collect::<Vec<_>>(),
+                            "written_unread_count": written_unread.len(),
+                            "written_unread_files": written_unread.iter().take(20).map(|e| json!(e.path)).collect::<Vec<_>>(),
+                            "discovered_count": discovered.len(),
+                            "fresh_count": fresh.len(),
+                            "by_language": by_language,
+                        }));
+                    }
+                }
+                // Fallback if no workspace_monitor available
+                Ok(json!({"total_files": 0, "stale_count": 0, "written_unread_count": 0, "message": "Workspace monitor not available"}))
             })
         }), all);
         let ws_list = self.workspace_monitor.clone();

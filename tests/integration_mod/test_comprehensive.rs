@@ -2,21 +2,21 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use agent_os::core::agent_instance::{AgentRole, AgentStatus};
-use agent_os::core::sa::{SupervisorAgent, TaskComplexity};
-use agent_os::core::event_bus::EventBus;
-use agent_os::gateway::UnifiedGateway;
-use agent_os::memory::l0_store::L0Store;
-use agent_os::memory::l1_session::L1Session;
-use agent_os::memory::l2_blackboard::Blackboard;
-use agent_os::memory::l3_projection::ProjectionEngine;
-use agent_os::memory::memory_manager::MemoryManager;
-use agent_os::templates::template_engine::TemplateEngine;
-use agent_os::tools::skill_registry::SkillRegistry;
-use agent_os::config::GatewaySettings;
-use agent_os::config::settings::LoggingSettings;
-use agent_os::utils::init_logging;
-use agent_os::CoreConfig;
+use glidinghorse::core::agent_instance::{AgentRole, AgentStatus};
+use glidinghorse::core::sa::{SupervisorAgent, TaskComplexity};
+use glidinghorse::core::event_bus::EventBus;
+use glidinghorse::gateway::UnifiedGateway;
+use glidinghorse::memory::l0_store::L0Store;
+use glidinghorse::memory::l1_session::L1Session;
+use glidinghorse::memory::l2_blackboard::Blackboard;
+use glidinghorse::memory::l3_projection::ProjectionEngine;
+use glidinghorse::memory::memory_manager::MemoryManager;
+use glidinghorse::templates::template_engine::TemplateEngine;
+use glidinghorse::tools::skill_registry::SkillRegistry;
+use glidinghorse::config::GatewaySettings;
+use glidinghorse::config::settings::LoggingSettings;
+use glidinghorse::utils::init_logging;
+use glidinghorse::CoreConfig;
 use serde_json::json;
 
 static LOGGING_INITIALIZED: std::sync::Once = std::sync::Once::new();
@@ -27,7 +27,7 @@ fn init_test_logging() {
             level: "debug".to_string(),
             format: "text".to_string(),
             console_output: true,
-            file_output: agent_os::config::settings::FileOutputSettings {
+            file_output: glidinghorse::config::settings::FileOutputSettings {
                 enabled: true,
                 path: "./logs".to_string(),
                 prefix: "test_agent_os".to_string(),
@@ -35,12 +35,12 @@ fn init_test_logging() {
                 max_files: 10,
             },
             filters: vec![
-                agent_os::config::settings::LogFilter {
-                    module: "agent_os::core".to_string(),
+                glidinghorse::config::settings::LogFilter {
+                    module: "glidinghorse::core".to_string(),
                     level: "debug".to_string(),
                 },
-                agent_os::config::settings::LogFilter {
-                    module: "agent_os::gateway".to_string(),
+                glidinghorse::config::settings::LogFilter {
+                    module: "glidinghorse::gateway".to_string(),
                     level: "debug".to_string(),
                 },
             ],
@@ -71,7 +71,7 @@ struct TestInfra {
     skills: Arc<SkillRegistry>,
     templates: Arc<TemplateEngine>,
     gateway: Arc<UnifiedGateway>,
-    runner: Arc<agent_os::core::agent_runner::AgentRunner>,
+    runner: Arc<glidinghorse::core::agent_runner::AgentRunner>,
 }
 
 fn setup_infra() -> TestInfra {
@@ -85,9 +85,9 @@ fn setup_infra() -> TestInfra {
     let tmpl = Arc::new(TemplateEngine::new(Path::new("src/templates/templates"))
         .unwrap_or_else(|_| TemplateEngine::new(Path::new("/nonexistent")).unwrap()));
     let gateway = Arc::new(UnifiedGateway::new(&test_gateway_settings()).unwrap());
-    let runner = Arc::new(agent_os::core::agent_runner::AgentRunner::new(
+    let runner = Arc::new(glidinghorse::core::agent_runner::AgentRunner::new(
         gateway.clone(), skills.clone(), l2.clone(), l0.clone(), mm.clone(), tmpl.clone(),
-        agent_os::config::AgentSettings::default(),
+        glidinghorse::config::AgentSettings::default(),
     ));
     TestInfra { _l0_dir: l0_dir, l0, l2, proj, mm, skills, templates: tmpl, gateway, runner }
 }
@@ -132,7 +132,7 @@ fn test_memory_full_pipeline() {
     l1.add_summary("assistant", "Applied the fix and verified", None);
     assert_eq!(l1.turn_count(), 2);
 
-    let config = agent_os::CoreConfig::default();
+    let config = glidinghorse::CoreConfig::default();
     infra.l2.write_node("iri://task/test_mem/node_1", r#"{"@id":"iri://task/test_mem/node_1","@type":"TestNode","summary":"test"}"#, &config).unwrap();
     let node = infra.l2.read_node("iri://task/test_mem/node_1").unwrap().unwrap();
     assert_eq!(node.node_type.as_ref().unwrap(), "TestNode");

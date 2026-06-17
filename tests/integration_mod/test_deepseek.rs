@@ -1,6 +1,6 @@
 use std::sync::Arc;
-use agent_os::gateway::UnifiedGateway;
-use agent_os::config::GatewaySettings;
+use glidinghorse::gateway::UnifiedGateway;
+use glidinghorse::config::GatewaySettings;
 
 fn get_gateway() -> Arc<UnifiedGateway> {
     let api_key = std::env::var("AGENT_OS_GATEWAY_API_KEY")
@@ -28,7 +28,7 @@ fn get_gateway() -> Arc<UnifiedGateway> {
 async fn test_deepseek_chat_completion() {
     let gateway = get_gateway();
 
-    let msg = agent_os::gateway::unified_gateway::ChatMessage {
+    let msg = glidinghorse::gateway::unified_gateway::ChatMessage {
         role: "user".to_string(),
         content: "Say 'Hello from Agent OS' and nothing else.".to_string(),
         name: None,
@@ -53,7 +53,7 @@ async fn test_deepseek_chat_completion() {
 async fn test_deepseek_sa_workflow() {
     let gateway = get_gateway();
 
-    let msg = agent_os::gateway::unified_gateway::ChatMessage {
+    let msg = glidinghorse::gateway::unified_gateway::ChatMessage {
         role: "user".to_string(),
         content: "Classify this task as simple, standard, or emergency: \
                   'Build a web application with user authentication and database'. \
@@ -79,7 +79,7 @@ async fn test_deepseek_sa_workflow() {
 async fn test_deepseek_with_tools() {
     let gateway = get_gateway();
 
-    let msg = agent_os::gateway::unified_gateway::ChatMessage {
+    let msg = glidinghorse::gateway::unified_gateway::ChatMessage {
         role: "user".to_string(),
         content: "What is 2+2?".to_string(),
         name: None,

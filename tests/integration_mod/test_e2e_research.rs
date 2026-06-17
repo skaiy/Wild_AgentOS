@@ -1,21 +1,21 @@
 use std::sync::Arc;
 
-use agent_os::config::GatewaySettings;
-use agent_os::config::settings::LoggingSettings;
-use agent_os::core::agent_instance::AgentRole;
-use agent_os::core::event_bus::EventBus;
-use agent_os::core::sa::{SupervisorAgent, TaskComplexity};
-use agent_os::core::validation::ValidationEngine;
-use agent_os::gateway::UnifiedGateway;
-use agent_os::memory::l0_store::L0Store;
-use agent_os::memory::l2_blackboard::Blackboard;
-use agent_os::memory::l3_projection::ProjectionEngine;
-use agent_os::memory::memory_manager::MemoryManager;
-use agent_os::templates::template_engine::TemplateEngine;
-use agent_os::tools::skill_registry::SkillRegistry;
-use agent_os::config::AgentSettings;
-use agent_os::utils::init_logging;
-use agent_os::CoreConfig;
+use glidinghorse::config::GatewaySettings;
+use glidinghorse::config::settings::LoggingSettings;
+use glidinghorse::core::agent_instance::AgentRole;
+use glidinghorse::core::event_bus::EventBus;
+use glidinghorse::core::sa::{SupervisorAgent, TaskComplexity};
+use glidinghorse::core::validation::ValidationEngine;
+use glidinghorse::gateway::UnifiedGateway;
+use glidinghorse::memory::l0_store::L0Store;
+use glidinghorse::memory::l2_blackboard::Blackboard;
+use glidinghorse::memory::l3_projection::ProjectionEngine;
+use glidinghorse::memory::memory_manager::MemoryManager;
+use glidinghorse::templates::template_engine::TemplateEngine;
+use glidinghorse::tools::skill_registry::SkillRegistry;
+use glidinghorse::config::AgentSettings;
+use glidinghorse::utils::init_logging;
+use glidinghorse::CoreConfig;
 use tempfile::TempDir;
 use serde_json::Value;
 
@@ -27,7 +27,7 @@ fn init_e2e_logging() {
             level: "debug".to_string(),
             format: "text".to_string(),
             console_output: true,
-            file_output: agent_os::config::settings::FileOutputSettings {
+            file_output: glidinghorse::config::settings::FileOutputSettings {
                 enabled: true,
                 path: "./logs".to_string(),
                 prefix: "e2e_research".to_string(),
@@ -35,27 +35,27 @@ fn init_e2e_logging() {
                 max_files: 10,
             },
             filters: vec![
-                agent_os::config::settings::LogFilter {
-                    module: "agent_os::core".to_string(),
+                glidinghorse::config::settings::LogFilter {
+                    module: "glidinghorse::core".to_string(),
                     level: "debug".to_string(),
                 },
-                agent_os::config::settings::LogFilter {
-                    module: "agent_os::gateway".to_string(),
+                glidinghorse::config::settings::LogFilter {
+                    module: "glidinghorse::gateway".to_string(),
                     level: "debug".to_string(),
                 },
-                agent_os::config::settings::LogFilter {
-                    module: "agent_os::memory".to_string(),
+                glidinghorse::config::settings::LogFilter {
+                    module: "glidinghorse::memory".to_string(),
                     level: "info".to_string(),
                 },
-                agent_os::config::settings::LogFilter {
-                    module: "agent_os::tools".to_string(),
+                glidinghorse::config::settings::LogFilter {
+                    module: "glidinghorse::tools".to_string(),
                     level: "info".to_string(),
                 },
-                agent_os::config::settings::LogFilter {
+                glidinghorse::config::settings::LogFilter {
                     module: "sled".to_string(),
                     level: "warn".to_string(),
                 },
-                agent_os::config::settings::LogFilter {
+                glidinghorse::config::settings::LogFilter {
                     module: "sled::pagecache".to_string(),
                     level: "warn".to_string(),
                 },
@@ -108,7 +108,7 @@ fn build_system(max_iterations: u32) -> (SupervisorAgent, TempDir) {
     let tmpl = Arc::new(TemplateEngine::new(&templates_dir).unwrap());
     let skills = Arc::new(SkillRegistry::new());
     let agent_settings = AgentSettings::default();
-    let runner = Arc::new(agent_os::core::agent_runner::AgentRunner::new(
+    let runner = Arc::new(glidinghorse::core::agent_runner::AgentRunner::new(
         gateway, skills.clone(), l2.clone(), l0, mm, tmpl.clone(), agent_settings,
     ));
     let sa = SupervisorAgent::new(

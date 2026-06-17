@@ -1,9 +1,9 @@
-use agent_os::config::settings::ToolResultRouterSettings;
-use agent_os::tools::result_router::router::ResultRouter;
-use agent_os::tools::result_router::summary;
-use agent_os::tools::result_router::graphify::GraphifyEngine;
-use agent_os::tools::result_router::micro_tools::MicroToolGenerator;
-use agent_os::tools::result_router::{RouteDecision, SchemaAnalysis};
+use glidinghorse::config::settings::ToolResultRouterSettings;
+use glidinghorse::tools::result_router::router::ResultRouter;
+use glidinghorse::tools::result_router::summary;
+use glidinghorse::tools::result_router::graphify::GraphifyEngine;
+use glidinghorse::tools::result_router::micro_tools::MicroToolGenerator;
+use glidinghorse::tools::result_router::{RouteDecision, SchemaAnalysis};
 use serde_json::json;
 
 #[test]

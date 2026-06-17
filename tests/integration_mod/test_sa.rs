@@ -1,18 +1,18 @@
 use std::sync::Arc;
 use std::collections::HashMap;
 
-use agent_os::core::sa::{SupervisorAgent, TaskComplexity};
-use agent_os::core::agent_instance::{AgentRole, AgentInstance, AgentStatus};
-use agent_os::core::event_bus::EventBus;
-use agent_os::gateway::UnifiedGateway;
-use agent_os::memory::l0_store::L0Store;
-use agent_os::memory::l2_blackboard::Blackboard;
-use agent_os::memory::l3_projection::ProjectionEngine;
-use agent_os::memory::memory_manager::MemoryManager;
-use agent_os::templates::template_engine::TemplateEngine;
-use agent_os::tools::skill_registry::SkillRegistry;
-use agent_os::config::GatewaySettings;
-use agent_os::CoreConfig;
+use glidinghorse::core::sa::{SupervisorAgent, TaskComplexity};
+use glidinghorse::core::agent_instance::{AgentRole, AgentInstance, AgentStatus};
+use glidinghorse::core::event_bus::EventBus;
+use glidinghorse::gateway::UnifiedGateway;
+use glidinghorse::memory::l0_store::L0Store;
+use glidinghorse::memory::l2_blackboard::Blackboard;
+use glidinghorse::memory::l3_projection::ProjectionEngine;
+use glidinghorse::memory::memory_manager::MemoryManager;
+use glidinghorse::templates::template_engine::TemplateEngine;
+use glidinghorse::tools::skill_registry::SkillRegistry;
+use glidinghorse::config::GatewaySettings;
+use glidinghorse::CoreConfig;
 use std::path::Path;
 
 fn test_gateway_settings() -> GatewaySettings {
@@ -36,9 +36,9 @@ fn make_sa() -> SupervisorAgent {
         .unwrap_or_else(|_| TemplateEngine::new(Path::new("/nonexistent")).unwrap()));
     let gateway = Arc::new(UnifiedGateway::new(&test_gateway_settings()).unwrap());
     let skills = Arc::new(SkillRegistry::new());
-    let runner = Arc::new(agent_os::core::agent_runner::AgentRunner::new(
+    let runner = Arc::new(glidinghorse::core::agent_runner::AgentRunner::new(
         gateway, skills.clone(), l2, l0, mm, templates.clone(),
-        agent_os::config::AgentSettings::default(),
+        glidinghorse::config::AgentSettings::default(),
     ));
     let event_bus = Arc::new(EventBus::new(100));
 

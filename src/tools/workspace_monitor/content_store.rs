@@ -16,6 +16,9 @@ pub enum ReadMode {
     Full,
     /// Diff mode: return unified diff if file changed.
     Diff,
+    /// Return only changed lines (with context) instead of the full file.
+    /// Falls back to Diff if context can't be computed.
+    ChangedOnly,
     /// Force re-read ignoring all caches.
     ForceRefresh,
 }
@@ -29,6 +32,8 @@ pub struct ReadResult {
     pub changed: bool,
     pub changed_ranges: Option<Vec<(usize, usize)>>,
     pub unified_diff: Option<String>,
+    /// When ReadMode::ChangedOnly, only the changed lines (with 3 context lines).
+    pub changed_lines: Option<Vec<String>>,
     pub from_cache: bool,
     pub version: u64,
 }
@@ -108,6 +113,7 @@ impl ContentStore {
                 changed: true,
                 changed_ranges: None,
                 unified_diff: None,
+                changed_lines: None,
                 from_cache: false,
                 version: new_version,
             });
@@ -127,6 +133,7 @@ impl ContentStore {
                     changed: false,
                     changed_ranges: None,
                     unified_diff: None,
+                    changed_lines: None,
                     from_cache: true,
                     version: cached.version,
                 });
@@ -147,6 +154,7 @@ impl ContentStore {
                     changed: false,
                     changed_ranges: None,
                     unified_diff: None,
+                    changed_lines: None,
                     from_cache: true,
                     version: cached.version,
                 });
@@ -157,7 +165,8 @@ impl ContentStore {
             self.store_version_in_sled(path, &disk_content, new_version);
             drop(version_index);
 
-            let (changed_ranges, unified_diff) = if mode == ReadMode::Diff {
+            let is_diff_or_changed = mode == ReadMode::Diff || mode == ReadMode::ChangedOnly;
+            let (changed_ranges, unified_diff, changed_lines) = if is_diff_or_changed {
                 let ranges = DiffEngine::changed_ranges(&cached.lines, &disk_lines);
                 let diff = DiffEngine::unified_diff(
                     &cached.lines,
@@ -166,9 +175,14 @@ impl ContentStore {
                     cached.version,
                     new_version,
                 );
-                (Some(ranges), Some(diff))
+                let changed_lines = if mode == ReadMode::ChangedOnly {
+                    Some(Self::extract_changed_lines(&disk_lines, &ranges))
+                } else {
+                    None
+                };
+                (Some(ranges), Some(diff), changed_lines)
             } else {
-                (None, None)
+                (None, None, None)
             };
 
             let mut cache = self.lines_cache.lock();
@@ -186,6 +200,7 @@ impl ContentStore {
                 changed: true,
                 changed_ranges,
                 unified_diff,
+                changed_lines,
                 from_cache: false,
                 version: new_version,
             });
@@ -211,9 +226,43 @@ impl ContentStore {
             changed: true,
             changed_ranges: None,
             unified_diff: None,
+            changed_lines: None,
             from_cache: false,
             version: new_version,
         })
+    }
+
+    /// Extract only the changed/inserted lines (with 3 lines of context)
+    /// from a list of change ranges. Used for ReadMode::ChangedOnly.
+    fn extract_changed_lines(
+        all_lines: &[String],
+        ranges: &[(usize, usize)],
+    ) -> Vec<String> {
+        if ranges.is_empty() {
+            return Vec::new();
+        }
+        let mut result = Vec::new();
+        let mut last_end: usize = 0;
+        for &(start, end) in ranges {
+            // Context lines before change
+            let ctx_start = if start >= 3 { start - 3 } else { 0 };
+            if ctx_start > last_end {
+                result.push("... (snip) ...".to_string());
+            }
+            for i in ctx_start..start {
+                if let Some(line) = all_lines.get(i) {
+                    result.push(format!(" {}", line));
+                }
+            }
+            // Changed lines
+            for i in start..end.min(all_lines.len()) {
+                if let Some(line) = all_lines.get(i) {
+                    result.push(format!("+{}", line));
+                }
+            }
+            last_end = end;
+        }
+        result
     }
 
     /// Invalidate a specific file from the cache.
@@ -288,7 +337,7 @@ fn hash_content(content: &str) -> String {
 
 impl ReadMode {
     fn is_diff(&self) -> bool {
-        matches!(self, ReadMode::Diff)
+        matches!(self, ReadMode::Diff | ReadMode::ChangedOnly)
     }
 }
 
@@ -386,5 +435,76 @@ mod tests {
         assert!(r2.changed);
         assert!(r2.version > r1.version);
         assert!(!r2.from_cache);
+    }
+
+    #[test]
+    fn test_diff_mode_returns_changed_ranges() {
+        let dir = TempDir::new().unwrap();
+        let path = create_test_file(&dir, "test.txt", "line1\nline2\nline3\nline4\nline5");
+
+        let store = ContentStore::new(100, 65536, None);
+        let r1 = store.read_file(&path, ReadMode::Full).unwrap();
+        assert_eq!(r1.version, 1);
+
+        // Modify middle lines
+        create_test_file(&dir, "test.txt", "line1\nline2_modified\nline3\nline4_modified\nline5");
+
+        let r2 = store.read_file(&path, ReadMode::Diff).unwrap();
+        assert_eq!(r2.version, 2);
+        assert!(r2.changed);
+        assert!(r2.changed_ranges.is_some());
+        assert!(r2.unified_diff.is_some());
+        assert!(r2.unified_diff.as_ref().unwrap().contains("line2_modified"));
+        assert!(r2.changed_lines.is_none()); // ChangedOnly mode only
+    }
+
+    #[test]
+    fn test_changed_only_mode() {
+        let dir = TempDir::new().unwrap();
+        let path = create_test_file(&dir, "test.txt", "keep1\nkeep2\nchange_this\nkeep3\nkeep4");
+
+        let store = ContentStore::new(100, 65536, None);
+        let _ = store.read_file(&path, ReadMode::Full).unwrap();
+
+        // Modify one line
+        create_test_file(&dir, "test.txt", "keep1\nkeep2\nCHANGED\nkeep3\nkeep4");
+
+        let r2 = store.read_file(&path, ReadMode::ChangedOnly).unwrap();
+        assert!(r2.changed);
+        assert!(r2.changed_lines.is_some());
+        let changed = r2.changed_lines.unwrap();
+        // Should contain the changed line (with + prefix) and some context
+        let all_text = changed.join(" ");
+        assert!(all_text.contains("CHANGED"), "ChangedOnly mode should include the modified line");
+    }
+
+    #[test]
+    fn test_unchanged_file_cache_hit() {
+        let dir = TempDir::new().unwrap();
+        let path = create_test_file(&dir, "test.txt", "stable content");
+
+        let store = ContentStore::new(100, 65536, None);
+        let r1 = store.read_file(&path, ReadMode::Full).unwrap();
+        assert_eq!(r1.version, 1);
+
+        // Read again with no changes — should be cache hit
+        let r2 = store.read_file(&path, ReadMode::Full).unwrap();
+        assert!(r2.from_cache);
+        assert!(!r2.changed);
+        assert_eq!(r2.version, r1.version);
+    }
+
+    #[test]
+    fn test_extract_changed_lines_basic() {
+        let lines: Vec<String> = (1..=20).map(|i| format!("line_{}", i)).collect();
+        let ranges = vec![(4, 6), (14, 16)];
+
+        let extracted = ContentStore::extract_changed_lines(&lines, &ranges);
+
+        // Should have context before changes and the changes themselves
+        let all = extracted.join("\n");
+        assert!(all.contains("+line_5"), "Should contain changed line 5");
+        assert!(all.contains("+line_15"), "Should contain changed line 15");
+        assert!(all.contains("..."), "Should contain snip markers between changes");
     }
 }
