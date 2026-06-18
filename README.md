@@ -356,7 +356,6 @@ Star ⭐ if you find this useful — join us in building the infrastructure for 
 
 </div>
 
-## Star History
 
 <a href="https://www.star-history.com/?repos=doiito%2Fgliding_horse&type=date&legend=top-left">
  <picture>

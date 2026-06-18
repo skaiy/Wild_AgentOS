@@ -481,15 +481,11 @@ impl SupervisorAgent {
                 "Emergency: DA → CA → AA (skip PA)".to_string(),
             ),
             TaskComplexity::Recursive => {
-                let cycles = self.max_pdca_cycles.max(1) as usize;
-                let mut seq = Vec::with_capacity(cycles * 4);
-                for _ in 0..cycles {
-                    seq.push(AgentRole::Plan);
-                    seq.push(AgentRole::Do);
-                    seq.push(AgentRole::Check);
-                    seq.push(AgentRole::Act);
-                }
-                (seq, vec![], format!("Recursive: {} PDCA cycles PA→DA→CA→AA", cycles))
+                // Recursive: 只执行 1 轮 SA 级 PDCA。
+                // DA 内部通过 execute_recursive_sub_cycle 进行微观递归
+                // 分解子任务，无需 SA 级多轮重放。
+                let seq = vec![AgentRole::Plan, AgentRole::Do, AgentRole::Check, AgentRole::Act];
+                (seq, vec![], "Recursive: 1 PDCA with DA-internal sub-cycles".to_string())
             },
         };
 
@@ -549,15 +545,11 @@ impl SupervisorAgent {
                 "Emergency: DA → CA → AA (skip PA)".to_string(),
             ),
             TaskComplexity::Recursive => {
-                let cycles = self.max_pdca_cycles.max(1) as usize;
-                let mut seq = Vec::with_capacity(cycles * 4);
-                for _ in 0..cycles {
-                    seq.push(AgentRole::Plan);
-                    seq.push(AgentRole::Do);
-                    seq.push(AgentRole::Check);
-                    seq.push(AgentRole::Act);
-                }
-                (seq, vec![], format!("Recursive: {} PDCA cycles PA→DA→CA→AA", cycles))
+                // Recursive: 只执行 1 轮 SA 级 PDCA（同 Standard）。
+                // DA 内部通过 execute_recursive_sub_cycle 进行微观递归
+                // 分解子任务，无需 SA 级多轮重放。
+                let seq = vec![AgentRole::Plan, AgentRole::Do, AgentRole::Check, AgentRole::Act];
+                (seq, vec![], "Recursive: 1 PDCA with DA-internal sub-cycles".to_string())
             },
         };
 
@@ -1817,11 +1809,17 @@ impl SupervisorAgent {
                     }
                 }
 
-                // 多轮 PDCA 提前退出检查：如果 AA 步骤失败或明确完成，跳过剩余循环
-                if step.role == AgentRole::Act && (result.status == "failed" || result.status == "partial_success") {
+                // 多轮 PDCA 提前退出检查：AA 评估是 PDCA 循环的终审，
+                // 无论通过还是失败，都应该终止后续循环，避免重复执行。
+                if step.role == AgentRole::Act {
                     let has_remaining = (i + 1) < order.len();
                     if has_remaining {
-                        info!(step_id = %step.step_id, status = %result.status, "AA 未通过，跳过剩余 PDCA 循环");
+                        let reason = match result.status.as_str() {
+                            "success" => "AA 通过，任务已完成",
+                            "failed" | "partial_success" => "AA 未通过",
+                            _ => "AA 已评估",
+                        };
+                        info!(step_id = %step.step_id, status = %result.status, "{}，跳过剩余 PDCA 循环", reason);
                         for skip_idx in (i + 1)..order.len() {
                             skip_nodes.insert(dag.graph[order[skip_idx]].def.id.clone());
                         }
@@ -1924,6 +1922,10 @@ impl SupervisorAgent {
             return Ok("递归深度已达上限".to_string());
         }
 
+        self.emit_sa_thought(task_iri,
+            &format!("▶ 递归子循环 (depth {}/{})", current_depth, max_depth),
+            "recursive_sub_cycle_start").await;
+
         let sub_task = SubTask::new(
             &format!("从 DA 结果中分解子任务 (depth={})", current_depth),
             parent_step_id,
@@ -1936,6 +1938,10 @@ impl SupervisorAgent {
             max_depth,
             "开始递归子循环"
         );
+
+        self.emit_sa_thought(task_iri,
+            &format!("正在分解 DA 结果，识别子任务... (depth {}/{})", current_depth, max_depth),
+            "recursive_decompose").await;
 
         let decompose_prompt = format!(
             r#"你是一个任务分解专家。以下是一个 DA (Do Agent) 的执行结果摘要，请分析其中是否有需要进一步执行的子任务。
@@ -2032,8 +2038,15 @@ impl SupervisorAgent {
 
         if !parsed.has_sub_tasks || parsed.sub_tasks.is_empty() {
             info!(depth = current_depth, "DA 结果无需进一步分解");
+            self.emit_sa_thought(task_iri,
+                &format!("子任务分解完成：无需进一步分解 (depth {}/{})", current_depth, max_depth),
+                "recursive_no_tasks").await;
             return Ok("无需进一步分解".to_string());
         }
+
+        self.emit_sa_thought(task_iri,
+            &format!("识别到 {} 个子任务 (depth {}/{})", parsed.sub_tasks.len(), current_depth, max_depth),
+            "recursive_tasks_found").await;
 
         let mut sub_summaries = Vec::new();
 
@@ -2074,7 +2087,17 @@ impl SupervisorAgent {
                 success_criteria: sub_def.success_criteria.clone(),
             };
 
+            let total = parsed.sub_tasks.len();
+            self.emit_sa_thought(task_iri,
+                &format!("▶ 执行子任务 {}/{}: {} (depth {})", idx + 1, total, sub_def.objective, current_depth),
+                "recursive_sub_task_start").await;
+
             let sub_result = self.dispatch_agent(AgentRole::Do, sub_ctx, cycle_id, Some(sub_step)).await?;
+
+            self.emit_sa_thought(task_iri,
+                &format!("{}/{} 子任务完成 [{}]: {}", idx + 1, total,
+                    sub_result.status, sub_def.objective),
+                "recursive_sub_task_end").await;
 
             if sub_result.status == "success" || sub_result.status == "partial_success" {
                 let icon = if sub_result.status == "success" { "✅" } else { "⚠️" };
@@ -2082,6 +2105,9 @@ impl SupervisorAgent {
 
                 if current_depth < max_depth && sub_result.status == "success" {
                     // 只有完全成功的子任务才继续深层递归；partial_success 在上层递归中继续
+                    self.emit_sa_thought(task_iri,
+                        &format!("进入深层递归 (depth {}/{})", current_depth + 1, max_depth),
+                        "recursive_deeper").await;
                     match self.execute_recursive_sub_cycle(
                         &sub_result.summary,
                         task_iri,
@@ -2105,6 +2131,9 @@ impl SupervisorAgent {
             }
         }
 
+        self.emit_sa_thought(task_iri,
+            &format!("递归子循环完成 (depth {}/{})", current_depth, max_depth),
+            "recursive_sub_cycle_end").await;
         Ok(sub_summaries.join("\n\n"))
         })
     }

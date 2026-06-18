@@ -683,7 +683,6 @@ impl App {
                 let _cs = self.proj.cache_stats();
             }
             self.l3_count = self.proj.list_frames().len() as u64;
-            }
             self.l1_count = self.mm.try_lock()
                 .map(|g| g.l1_session_count())
                 .unwrap_or(self.l1_count);

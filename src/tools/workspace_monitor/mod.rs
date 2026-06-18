@@ -141,8 +141,8 @@ impl WorkspaceMonitor {
 
         let event_bus_for_struct = event_bus.clone();
 
-        // WatchEngine
-        let watch_engine = if let Some(eb) = event_bus {
+        // WatchEngine — 原生文件监听（inotify 线程，无需 tokio）
+        let watch_engine = if let Some(eb) = event_bus.clone() {
             let mut watch_config = WatchConfig {
                 debounce_ms: config.debounce_ms,
                 max_debounce_wait_ms: config.max_debounce_wait_ms,
@@ -154,7 +154,7 @@ impl WorkspaceMonitor {
             if watch_config.use_gitignore {
                 watch_config.load_gitignore(&config.workspace_root);
             }
-            match WatchEngine::start(&root, watch_config, eb) {
+            match WatchEngine::start(&root, watch_config, eb, Some(inventory.clone())) {
                 Ok(engine) => {
                     info!("WatchEngine started for {}", root);
                     Some(engine)
@@ -179,8 +179,13 @@ impl WorkspaceMonitor {
             perception_store: RwLock::new(None),
         };
 
-        // 自动注册 EventBus 消费者（仅在 event_bus 可用时）
-        ws.register_event_consumers();
+        // 异步消费者需要 tokio runtime，若当前无 runtime 则跳过
+        // （glidingcode 场景：后续由 start_async_components 在 async 上下文中调用）
+        if tokio::runtime::Handle::try_current().is_ok() {
+            ws.register_event_consumers();
+        } else {
+            tracing::info!("No tokio runtime in init context, event consumers deferred");
+        }
 
         // Perform initial scan
         {
@@ -221,6 +226,13 @@ impl WorkspaceMonitor {
         let inv = self.inventory.read();
         inv.mark_written(path);
         self.content_store.invalidate(path);
+    }
+
+    /// Re-scan the entire workspace root, discovering new files and tracking state changes.
+    /// Returns the number of newly discovered files.
+    pub fn rescan(&self) -> usize {
+        let root = self.config.workspace_root.to_string_lossy().to_string();
+        self.inventory.read().full_scan(&root)
     }
 
     /// Get the snapshot manager reference.
@@ -302,6 +314,22 @@ impl WorkspaceMonitor {
                 }
             }
         });
+    }
+
+    /// Complete async-dependent initialization.
+    ///
+    /// Must be called from within a tokio runtime (e.g., during `process_task`).
+    /// Registers event consumers that listen for WorkspaceFile* events via EventBus.
+    ///
+    /// Safe to call multiple times — event consumer registration is idempotent
+    /// (each call spawns a redundant listener, but the extra listener will simply
+    /// process events that have already been handled by the first).
+    pub fn start_async_components(&self) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            tracing::error!("start_async_components must be called from within a tokio runtime");
+            return;
+        }
+        self.register_event_consumers();
     }
 
     /// Register hooks for file read/write tools to check inventory state.

@@ -356,8 +356,6 @@ MIT License — 详见 [LICENSE](LICENSE)。
 
 </div>
 
-## Star History
-
 <a href="https://www.star-history.com/?repos=doiito%2Fgliding_horse&type=date&legend=top-left">
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=doiito/gliding_horse&type=date&theme=dark&legend=top-left" />

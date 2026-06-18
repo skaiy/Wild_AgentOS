@@ -4,9 +4,11 @@ use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
 use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer};
+use parking_lot::RwLock;
 use tracing::{debug, error, warn};
 
 use crate::core::event_bus::EventBus;
+use crate::tools::workspace_monitor::inventory::FileInventory;
 
 /// Configuration for the WatchEngine.
 #[derive(Debug, Clone)]
@@ -109,6 +111,8 @@ pub struct WatchEngine {
     polling_handle: Option<tokio::task::AbortHandle>,
     /// Configuration.
     config: WatchConfig,
+    /// Reference to inventory for direct updates from the watcher callback.
+    inventory: Option<Arc<RwLock<FileInventory>>>,
 }
 
 impl WatchEngine {
@@ -119,6 +123,7 @@ impl WatchEngine {
         root: &str,
         config: WatchConfig,
         event_bus: Arc<EventBus>,
+        inventory: Option<Arc<RwLock<FileInventory>>>,
     ) -> Result<Self, String> {
         let root_path = Path::new(root);
 
@@ -132,11 +137,13 @@ impl WatchEngine {
                 debouncer: None,
                 polling_handle: None,
                 config,
+                inventory,
             });
         }
 
-        // Attempt native watching
-        let debouncer = match Self::try_start_native(root, &config, event_bus.clone()) {
+        // Attempt native watching — runs on its own thread (notify), no tokio needed.
+        let inv_for_callback = inventory.clone();
+        let debouncer = match Self::try_start_native(root, &config, event_bus.clone(), inv_for_callback) {
             Ok(d) => {
                 debug!(root = %root, "WatchEngine: native watching started");
                 Some(d)
@@ -147,6 +154,7 @@ impl WatchEngine {
                     debouncer: None,
                     polling_handle: Some(Self::start_polling(root, &config, event_bus)),
                     config,
+                    inventory,
                 });
             }
         };
@@ -155,6 +163,7 @@ impl WatchEngine {
             debouncer,
             polling_handle: None,
             config,
+            inventory,
         })
     }
 
@@ -174,6 +183,7 @@ impl WatchEngine {
         root: &str,
         config: &WatchConfig,
         event_bus: Arc<EventBus>,
+        inventory: Option<Arc<RwLock<FileInventory>>>,
     ) -> Result<Debouncer<notify::RecommendedWatcher>, String> {
         let debounce = Duration::from_millis(config.debounce_ms);
         let eb = event_bus.clone();
@@ -183,6 +193,18 @@ impl WatchEngine {
         let mut debouncer = new_debouncer(
             debounce,
             move |result: DebounceEventResult| {
+                // 直接从 watcher 线程更新 inventory（无需 tokio::spawn）
+                if let Some(ref inv) = inventory {
+                    if let Ok(events) = &result {
+                        for event in events {
+                            if let Some(path) = event.path.to_str() {
+                                if !Self::is_path_excluded(path, &exclude) {
+                                    inv.read().mark_stale(path);
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Err(e) = Self::handle_debounced_events(result, &eb, &exclude) {
                     error!(error = %e, "WatchEngine: event handler error");
                 }
@@ -358,7 +380,7 @@ mod tests {
     fn test_start_nonexistent_dir() {
         let config = WatchConfig::default();
         let event_bus = Arc::new(EventBus::new(100));
-        let result = WatchEngine::start("/nonexistent_path_xyz", config, event_bus);
+        let result = WatchEngine::start("/nonexistent_path_xyz", config, event_bus, None);
         assert!(result.is_err());
     }
 
@@ -369,7 +391,7 @@ mod tests {
             ..Default::default()
         };
         let event_bus = Arc::new(EventBus::new(100));
-        let result = WatchEngine::start("/tmp", config, event_bus);
+        let result = WatchEngine::start("/tmp", config, event_bus, None);
         assert!(result.is_ok());
         let engine = result.unwrap();
         assert!(!engine.is_native());

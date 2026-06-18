@@ -44,6 +44,7 @@ pub struct CodeCliEngine {
     context_limit: u64,
     skills: Arc<SkillRegistry>,
     mcp_client: Option<McpClient>,
+    workspace_monitor: Option<Arc<WorkspaceMonitor>>,
 }
 
 impl CodeCliEngine {
@@ -121,8 +122,9 @@ impl CodeCliEngine {
                 workspace_root,
                 ..Default::default()
             };
-            // 同步上下文（无 tokio runtime），传 None 避免 tokio::spawn 失败
-            match WorkspaceMonitor::initialize(ws_config, None, None) {
+            // 同步上下文中初始化：WatchEngine 原生监听（inotify 线程）无需 tokio，
+            // 异步消费者推迟到 start_async_components 在 runtime 中调用。
+            match WorkspaceMonitor::initialize(ws_config, None, Some(event_bus.clone())) {
                 Ok(ws) => {
                     ws.register_hooks(&runner.hook_manager);
                     info!(root = %config.workspace, "WorkspaceMonitor 已初始化");
@@ -207,6 +209,7 @@ impl CodeCliEngine {
             context_limit,
             skills: skills_for_engine,
             mcp_client,
+            workspace_monitor,
         })
     }
 
@@ -261,6 +264,11 @@ impl CodeCliEngine {
     }
 
     pub async fn process_task(&mut self, user_input: &str) -> anyhow::Result<(String, TaskResult)> {
+        // 首次进入 async 上下文时完成 WorkspaceMonitor 的异步初始化
+        if let Some(ref wm) = self.workspace_monitor {
+            wm.start_async_components();
+        }
+
         let task_id = uuid::Uuid::new_v4().to_string();
         let task_iri = format!("iri://task/{}", task_id);
 
