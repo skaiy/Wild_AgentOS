@@ -189,13 +189,13 @@ fn markdown_to_owned_lines(content: &str) -> Vec<Line<'static>> {
                 .spans
                 .into_iter()
                 .map(|span| {
-                    // SAFETY: ratatui-core::Style and ratatui::Style have identical
-                    // field layout once underline-color is disabled in Cargo.toml.
-                    // Both are {fg, bg, add_modifier, sub_modifier} with the same
-                    // Color / Modifier representations.
+                    // tui-markdown uses ratatui_core::Style (separate crate) which is
+                    // layout-compatible with ratatui::Style when underline-color is
+                    // disabled (our build: default-features=false). Transmute is safe
+                    // because both structs have {fg, bg, add_modifier, sub_modifier}
+                    // with identical Color/Modifier representations.
                     let style = span.style;
-                    let style: ratatui::style::Style =
-                        unsafe { std::mem::transmute(style) };
+                    let style: ratatui::style::Style = unsafe { std::mem::transmute(style) };
                     Span::styled(span.content.into_owned(), style)
                 })
                 .collect();
@@ -650,7 +650,39 @@ impl App {
             orig_hook(info);
         }));
 
+        // Signal handler: catch SIGTERM/SIGINT for graceful shutdown.
+        // SIGKILL (OOM killer) can't be caught — the only defence is reducing
+        // memory pressure (see checkpoint truncation below).
+        let sigquit = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let sigquit_clone = sigquit.clone();
+        self.rt.spawn(async move {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut term = match signal(SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let mut int = match signal(SignalKind::interrupt()) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            // Wait for EITHER signal
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = int.recv() => {}
+            }
+            sigquit_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+            // Best-effort terminal restore from signal context (may fail, that's OK)
+            let _ = disable_raw_mode();
+            let mut stdout = std::io::stdout();
+            let _ = execute!(stdout, LeaveAlternateScreen, crossterm::event::DisableMouseCapture);
+        });
+
         loop {
+            // Check signal-triggered quit (SIGTERM / SIGINT)
+            if sigquit.load(std::sync::atomic::Ordering::SeqCst) {
+                self.should_quit = true;
+            }
+
             // Drain incoming status events from the background processing task
             self.drain_events();
 
@@ -670,6 +702,7 @@ impl App {
                     Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                         // Sender dropped — the background task panicked or was cancelled
                         self.result_rx = None;
+                        self.status_rx = None; // drop mpsc receiver → kills zombie event listener
                         self.is_processing = false;
                         self.current_phase = "Idle".into();
                     }
@@ -1043,6 +1076,7 @@ impl App {
                 });
             }
         }
+        self.status_rx = None; // drop mpsc receiver → kills zombie event listener
         self.is_processing = false;
         self.current_phase = "Idle".into();
         self.scroll_offset = 0;
@@ -1624,8 +1658,9 @@ impl App {
 
         // Pre-wrap long lines so Paragraph::wrap does not add extra visual
         // rows that would break the 1:1 line_map ↔ screen-row mapping.
-        // 文本填满 inner 宽度，不给间隙留残留空间
-        let content_w = (area.width.saturating_sub(2)).max(20) as usize;
+        // 预留 1 列给右侧滚动条（即使不显示也预留，避免滚动条出现/消失时文字残留）
+        // 文本填满 inner width - 1，最右列始终留给 scrollbar
+        let content_w = (area.width.saturating_sub(3)).max(20) as usize;
         {
             let old_lines = std::mem::take(&mut all_lines);
             let old_map = std::mem::take(&mut line_map);
@@ -1668,7 +1703,7 @@ impl App {
             area,
         );
 
-        // 滚动条覆盖右边框列，text 填满 inner 无间隙 → 无残留空间
+        // 滚动条独占最右列（text 已预留 1 列不写入）
         if all_lines_cnt > vh {
             let mut sb_state = ScrollbarState::new(all_lines_cnt)
                 .position(start_line)
@@ -1736,7 +1771,7 @@ impl App {
         lines.push(Line::from(vec![Span::styled(fw("Session ID"), Style::default().fg(Color::DarkGray))]));
         lines.push(Line::from(vec![Span::styled(fw(sid), Style::default().fg(Color::Cyan))]));
         lines.push(Line::from(vec![Span::styled(
-            fw(&format!("Turns:{} Tools:{}", self.session_turn_count, self.session_tool_call_count)),
+            fw(&format!("Turns:{:>5} Tools:{:>5}", self.session_turn_count, self.session_tool_call_count)),
             Style::default().fg(Color::White),
         )]));
         lines.push(Line::from(vec![Span::styled(
@@ -1752,7 +1787,7 @@ impl App {
             Style::default().fg(Color::Yellow),
         )]));
         lines.push(Line::from(vec![Span::styled(
-            fw(&format!("Total:{} P:{} C:{}",
+            fw(&format!("Total:{:>8}  P:{:>8}  C:{:>8}",
                 fmt_k(self.total_tokens), fmt_k(self.prompt_tok), fmt_k(self.completion_tok))),
             Style::default().fg(Color::White),
         )]));
@@ -1769,7 +1804,7 @@ impl App {
         };
         let fg = if ctx_pct > 50.0 { Color::Red } else if ctx_pct > 30.0 { Color::Yellow } else { Color::White };
         lines.push(Line::from(vec![
-            Span::styled(fw(&format!("Ctx:{}/{} ({})  ↑{}↓{}",
+            Span::styled(fw(&format!("Ctx:{:>8}/{:>8} ({:>5})  ↑{:>8}↓{:>8}",
                 fmt_k(self.last_prompt_tok),
                 fmt_k_short(self.context_limit),
                 ctx_label,
