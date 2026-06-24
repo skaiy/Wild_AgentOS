@@ -71,7 +71,16 @@ impl AgentOSService {
         );
 
         let unified_graph = Arc::new(
-            UnifiedGraphStore::new().map_err(|e| format!("UnifiedGraph init failed: {}", e))?
+            if let Ok(kg_path) = std::env::var("AGENT_OS_KG_PATH") {
+                std::fs::create_dir_all(&kg_path)
+                    .map_err(|e| format!("Failed to create KG directory {}: {}", kg_path, e))?;
+                tracing::info!("Initializing persistent Oxigraph KG store at {}", kg_path);
+                UnifiedGraphStore::new_persistent(&kg_path)
+                    .map_err(|e| format!("UnifiedGraph persistent init failed (path={}): {}", kg_path, e))?
+            } else {
+                UnifiedGraphStore::new()
+                    .map_err(|e| format!("UnifiedGraph init failed: {}", e))?
+            }
         );
 
         let blackboard = Arc::new(
