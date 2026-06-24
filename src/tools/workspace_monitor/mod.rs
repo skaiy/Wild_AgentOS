@@ -41,8 +41,8 @@ pub struct WorkspaceMonitorConfig {
     pub debounce_ms: u64,
     /// Maximum debounce wait in ms.
     pub max_debounce_wait_ms: u64,
-    /// Optional sled database path for persistent storage.
-    pub sled_path: Option<PathBuf>,
+    /// Optional redb database path for persistent storage.
+    pub db_path: Option<PathBuf>,
 }
 
 impl Default for WorkspaceMonitorConfig {
@@ -68,7 +68,7 @@ impl Default for WorkspaceMonitorConfig {
             poll_interval_ms: 5000,
             debounce_ms: 500,
             max_debounce_wait_ms: 5000,
-            sled_path: None,
+            db_path: None,
         }
     }
 }
@@ -94,7 +94,7 @@ impl WorkspaceMonitor {
     /// Initialize the workspace monitor with the given config.
     ///
     /// Sets up:
-    /// 1. Sled database (if path configured)
+    /// 1. redb database (if path configured)
     /// 2. ContentStore with version storage
     /// 3. FileInventory with L2 Blackboard sync
     /// 4. SnapshotManager for rollback support
@@ -107,31 +107,30 @@ impl WorkspaceMonitor {
     ) -> Result<Self, String> {
         let root = config.workspace_root.to_string_lossy().to_string();
 
-        // Initialize sled database
-        let (meta_db, content_db) = Self::open_sled_databases(&config)?;
-        let meta_db = meta_db.map(Arc::new);
-        let content_db = content_db.map(Arc::new);
+        // Initialize redb database
+        let (meta_db, content_db) = Self::open_databases(&config)?;
+        let meta_db = meta_db;
+        let content_db = content_db;
 
         // ContentStore
         let content_store = Arc::new(ContentStore::new(
             config.content_cache_capacity,
             config.content_store_max_bytes,
-            content_db.clone().map(|db| (*db).clone()),
+            content_db,
         ));
 
         // FileInventory
         let inventory = Arc::new(RwLock::new(FileInventory::new(
             blackboard.clone(),
-            meta_db.clone().map(|db| (*db).clone()),
+            meta_db,
             config.exclude_patterns.clone(),
         )));
 
-        // SnapshotManager
+        // SnapshotManager (in-memory redb)
         let snap_db = Arc::new(
-            sled::Config::new()
-                .temporary(true)
-                .open()
-                .map_err(|e| format!("Failed to open snapshot sled DB: {}", e))?,
+            redb::Builder::new()
+                .create_with_backend(redb::backends::InMemoryBackend::new())
+                .map_err(|e| format!("Failed to open snapshot redb: {}", e))?,
         );
         let snapshot_manager = Arc::new(SnapshotManager::new(
             snap_db,
@@ -512,28 +511,22 @@ impl WorkspaceMonitor {
 
     // ── Private ──
 
-    fn open_sled_databases(
+    fn open_databases(
         config: &WorkspaceMonitorConfig,
-    ) -> Result<(Option<sled::Db>, Option<sled::Db>), String> {
-        match &config.sled_path {
+    ) -> Result<(Option<redb::Database>, Option<redb::Database>), String> {
+        match &config.db_path {
             Some(path) => {
                 std::fs::create_dir_all(path)
-                    .map_err(|e| format!("Failed to create sled directory: {}", e))?;
+                    .map_err(|e| format!("Failed to create database directory: {}", e))?;
 
                 let meta_path = path.join("metadata");
                 let content_path = path.join("content");
 
-                let meta_db = sled::Config::new()
-                    .path(&meta_path)
-                    .cache_capacity(64 * 1024 * 1024)
-                    .open()
-                    .map_err(|e| format!("Failed to open metadata sled DB: {}", e))?;
+                let meta_db = redb::Database::create(&meta_path)
+                    .map_err(|e| format!("Failed to open metadata redb: {}", e))?;
 
-                let content_db = sled::Config::new()
-                    .path(&content_path)
-                    .cache_capacity(128 * 1024 * 1024)
-                    .open()
-                    .map_err(|e| format!("Failed to open content sled DB: {}", e))?;
+                let content_db = redb::Database::create(&content_path)
+                    .map_err(|e| format!("Failed to open content redb: {}", e))?;
 
                 Ok((Some(meta_db), Some(content_db)))
             }
@@ -555,7 +548,7 @@ mod tests {
         let config = WorkspaceMonitorConfig {
             workspace_root: dir.path().to_path_buf(),
             watch_enabled: false,
-            sled_path: None,
+            db_path: None,
             ..WorkspaceMonitorConfig::default()
         };
         let ws = WorkspaceMonitor::initialize(config, None, None).unwrap();
@@ -623,7 +616,7 @@ mod tests {
         let config = WorkspaceMonitorConfig {
             workspace_root: dir.path().to_path_buf(),
             watch_enabled: false,
-            sled_path: None,
+            db_path: None,
             ..WorkspaceMonitorConfig::default()
         };
 
@@ -656,7 +649,7 @@ mod tests {
         let config = WorkspaceMonitorConfig {
             workspace_root: dir.path().to_path_buf(),
             watch_enabled: false,
-            sled_path: None,
+            db_path: None,
             ..WorkspaceMonitorConfig::default()
         };
 
@@ -728,7 +721,7 @@ mod tests {
         let config = WorkspaceMonitorConfig {
             workspace_root: dir.path().to_path_buf(),
             watch_enabled: false,
-            sled_path: None,
+            db_path: None,
             ..WorkspaceMonitorConfig::default()
         };
 
@@ -875,7 +868,7 @@ mod tests {
         let config = WorkspaceMonitorConfig {
             workspace_root: dir.path().to_path_buf(),
             watch_enabled: false,
-            sled_path: None,
+            db_path: None,
             ..WorkspaceMonitorConfig::default()
         };
 
@@ -911,7 +904,7 @@ mod tests {
         let config = WorkspaceMonitorConfig {
             workspace_root: dir.path().to_path_buf(),
             watch_enabled: false,
-            sled_path: None,
+            db_path: None,
             ..WorkspaceMonitorConfig::default()
         };
 
@@ -948,7 +941,7 @@ mod tests {
         let config = WorkspaceMonitorConfig {
             workspace_root: dir.path().to_path_buf(),
             watch_enabled: false,
-            sled_path: None,
+            db_path: None,
             ..WorkspaceMonitorConfig::default()
         };
 
@@ -985,7 +978,7 @@ mod tests {
         let config = WorkspaceMonitorConfig {
             workspace_root: dir.path().to_path_buf(),
             watch_enabled: false,
-            sled_path: None,
+            db_path: None,
             ..WorkspaceMonitorConfig::default()
         };
 
@@ -1067,7 +1060,7 @@ mod tests {
         let config = WorkspaceMonitorConfig {
             workspace_root: dir.path().to_path_buf(),
             watch_enabled: false,
-            sled_path: None,
+            db_path: None,
             ..WorkspaceMonitorConfig::default()
         };
         let ps = Arc::new(PerceptionStore::new());
@@ -1091,7 +1084,7 @@ mod tests {
         let config = WorkspaceMonitorConfig {
             workspace_root: dir.path().to_path_buf(),
             watch_enabled: false,
-            sled_path: None,
+            db_path: None,
             ..WorkspaceMonitorConfig::default()
         };
 

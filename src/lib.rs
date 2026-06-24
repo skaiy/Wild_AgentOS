@@ -17,6 +17,9 @@ pub mod methodology;
 pub mod knowledge_graph;
 pub mod root_cause;
 
+#[cfg(feature = "ontology")]
+pub mod ontology;
+
 pub use core::{
     AgentRunner, AgentInstance, SupervisorAgent,
     agent_runner::{TaskContext, TaskResult},

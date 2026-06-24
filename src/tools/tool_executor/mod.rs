@@ -16,6 +16,8 @@ use crate::tools::builtin::hooks::HookRunner;
 use crate::tools::builtin::permissions::{PermissionMode, PermissionOutcome, PermissionPolicy};
 use crate::tools::builtin::rag;
 use crate::tools::builtin::knowledge;
+#[cfg(feature = "ontology")]
+use crate::tools::builtin::ontology_tools;
 use crate::knowledge_graph::code_ast::CodeAstExtractor;
 use crate::knowledge_graph::extractor::KnowledgeExtractor;
 use crate::knowledge_graph::ontology::OntologyManager;
@@ -726,6 +728,40 @@ impl ToolExecutor {
                 }
             })
         }), all);
+
+        // ========== 本体工具 (ontology) ==========
+        #[cfg(feature = "ontology")]
+        {
+            self.register("ontology_validate_turtle", "Validate Turtle RDF syntax. Returns number of valid triples.", json!({
+                "properties": {
+                    "ttl": {"type":"string","description":"Turtle content to validate"}
+                },
+                "required": ["ttl"]
+            }), Arc::new(|input: Value| Box::pin(async move { ontology_tools::execute_ontology_validate_turtle(input).await })), all);
+
+            self.register("ontology_lint_turtle", "Lint Turtle content for best practices (labels, comments, domain/range).", json!({
+                "properties": {
+                    "ttl": {"type":"string","description":"Turtle content to lint"}
+                },
+                "required": ["ttl"]
+            }), Arc::new(|input: Value| Box::pin(async move { ontology_tools::execute_ontology_lint_turtle(input).await })), all);
+
+            self.register("ontology_diff_turtle", "Diff two Turtle documents and report added/removed triples.", json!({
+                "properties": {
+                    "old_ttl": {"type":"string","description":"Original Turtle content"},
+                    "new_ttl": {"type":"string","description":"New Turtle content"}
+                },
+                "required": ["old_ttl","new_ttl"]
+            }), Arc::new(|input: Value| Box::pin(async move { ontology_tools::execute_ontology_diff_turtle(input).await })), all);
+
+            self.register("ontology_validate_shacl", "Validate RDF data against SHACL shapes.", json!({
+                "properties": {
+                    "shapes_ttl": {"type":"string","description":"SHACL shapes in Turtle format"},
+                    "data_ttl": {"type":"string","description":"Optional data Turtle to validate. If omitted, validates loaded store."}
+                },
+                "required": ["shapes_ttl"]
+            }), Arc::new(|input: Value| Box::pin(async move { ontology_tools::execute_ontology_validate_shacl(input).await })), all);
+        }
     }
 
     /// Register a tool with role whitelist. 空 = 所有角色可用.

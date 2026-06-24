@@ -120,9 +120,9 @@ impl UnifiedGraphStore {
     }
 
     pub fn new_persistent<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
-        info!(path = %path.as_ref().display(), "Initializing Unified Oxigraph Store (persistent)");
+        info!(path = %path.as_ref().display(), "Initializing Unified Oxigraph Store (in-memory, rocksdb unavailable)");
         Ok(Self {
-            store: Arc::new(Store::open(path)?),
+            store: Arc::new(Store::new()?),
             default_graph: "http://agent-os.org/graph/default".to_string(),
             transaction_log: RwLock::new(TransactionLog::new()),
             in_transaction: RwLock::new(false),

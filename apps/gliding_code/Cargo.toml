@@ -8,7 +8,7 @@ name = "glidingcode"
 path = "src/main.rs"
 
 [dependencies]
-glidinghorse = { path = "../.." }
+glidinghorse = { path = "../..", features = ["ontology"] }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

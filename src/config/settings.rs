@@ -248,8 +248,7 @@ impl LoggingSettings {
                 LogFilter { module: "glidinghorse::gateway".to_string(), level: "debug".to_string() },
                 LogFilter { module: "glidinghorse::memory".to_string(), level: "info".to_string() },
                 LogFilter { module: "glidinghorse::tools".to_string(), level: "info".to_string() },
-                LogFilter { module: "sled".to_string(), level: "warn".to_string() },
-                LogFilter { module: "sled::pagecache".to_string(), level: "warn".to_string() },
+                LogFilter { module: "redb".to_string(), level: "warn".to_string() },
             ],
             sensitive_fields: vec![
                 "api_key".to_string(),
@@ -848,14 +847,13 @@ mod tests {
         assert!(settings.console_output);
         assert!(settings.file_output.enabled);
         assert_eq!(settings.file_output.prefix, "test_prefix");
-        assert!(settings.filters.iter().any(|f| f.module == "sled" && f.level == "warn"));
-        assert!(settings.filters.iter().any(|f| f.module == "sled::pagecache" && f.level == "warn"));
+        assert!(settings.filters.iter().any(|f| f.module == "redb" && f.level == "warn"));
         assert!(settings.filters.iter().any(|f| f.module == "glidinghorse::core" && f.level == "debug"));
         assert!(settings.filters.iter().any(|f| f.module == "glidinghorse::memory" && f.level == "info"));
     }
 
     #[test]
-    fn test_logging_settings_default_has_sled_in_init() {
+    fn test_logging_settings_default_has_redb_in_init() {
         let settings = LoggingSettings::default();
         assert_eq!(settings.level, "info");
     }

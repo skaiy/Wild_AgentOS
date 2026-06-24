@@ -25,6 +25,16 @@ impl KnowledgeBridge {
         })
     }
 
+    /// Bridge backed by an OO `SharedGraphStore` (feature-gated).
+    #[cfg(feature = "ontology")]
+    pub fn with_shared_graph_store(shared: &crate::ontology::SharedGraphStore) -> Result<Self, String> {
+        let store = KnowledgeGraphStore::with_shared_graph_store(shared)?;
+        Ok(Self {
+            store,
+            bridge_graph: "graph:bridge".to_string(),
+        })
+    }
+
     fn relation_to_iri(relation: &BridgeRelationType) -> &'static str {
         match relation {
             BridgeRelationType::HasSkill => "https://agentos.ontology/bridge/hasSkill",

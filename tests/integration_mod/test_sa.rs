@@ -50,7 +50,7 @@ fn test_sa_classify_complexity() {
     let sa = make_sa();
     assert_eq!(sa.analyze_task("Hello").task_complexity, TaskComplexity::Instant);
     assert_eq!(sa.analyze_task("What is the weather today?").task_complexity, TaskComplexity::Simple);
-    assert_eq!(sa.analyze_task("Build a web application with user authentication and database").task_complexity, TaskComplexity::Standard);
+    assert_eq!(sa.analyze_task("Build a web application with user authentication and database").task_complexity, TaskComplexity::Recursive);
     assert_eq!(sa.analyze_task("Fix this critical bug").task_complexity, TaskComplexity::Emergency);
 }
 

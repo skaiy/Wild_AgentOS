@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use lru::LruCache;
 use parking_lot::{Mutex, RwLock};
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use sha2::{Digest, Sha256};
 use tracing::{debug, warn};
 
@@ -47,14 +48,17 @@ struct CachedContent {
     version: u64,
 }
 
-/// Content cache with LRU eviction, SHA-256 change detection, and sled version store.
+/// Version store table: key = "version:{path}:v{version}", value = serialized content.
+const VERSION_STORE: TableDefinition<&str, &[u8]> = TableDefinition::new("version_store");
+
+/// Content cache with LRU eviction, SHA-256 change detection, and redb version store.
 pub struct ContentStore {
     /// In-memory LRU: file path → cached content (mtime-keyed).
     lines_cache: Mutex<LruCache<String, CachedContent>>,
     /// Path → current version number.
     version_index: RwLock<HashMap<String, u64>>,
-    /// Sled database for storing historical versions (path → versioned content).
-    version_store: Option<sled::Db>,
+    /// redb database for storing historical versions (path → versioned content).
+    version_store: Option<Database>,
     /// Maximum cache size in bytes (approximate).
     max_cache_bytes: usize,
 }
@@ -64,18 +68,18 @@ impl ContentStore {
     ///
     /// * `cache_capacity` - Number of files to hold in LRU cache.
     /// * `max_cache_bytes` - Approximate maximum cache memory usage.
-    /// * `sled_db` - Optional sled database for historical version storage.
+    /// * `db` - Optional redb database for historical version storage.
     pub fn new(
         cache_capacity: usize,
         max_cache_bytes: usize,
-        sled_db: Option<sled::Db>,
+        db: Option<Database>,
     ) -> Self {
         Self {
             lines_cache: Mutex::new(LruCache::new(
                 std::num::NonZeroUsize::new(cache_capacity.max(1)).unwrap(),
             )),
             version_index: RwLock::new(HashMap::new()),
-            version_store: sled_db,
+            version_store: db,
             max_cache_bytes,
         }
     }
@@ -102,7 +106,7 @@ impl ContentStore {
         if mode == ReadMode::ForceRefresh {
             let new_version = current_version + 1;
             version_index.insert(path.to_string(), new_version);
-            self.store_version_in_sled(path, &disk_content, new_version);
+            self.store_version(path, &disk_content, new_version);
             drop(version_index);
             self.invalidate_cache(path);
 
@@ -162,7 +166,7 @@ impl ContentStore {
 
             let new_version = current_version + 1;
             version_index.insert(path.to_string(), new_version);
-            self.store_version_in_sled(path, &disk_content, new_version);
+            self.store_version(path, &disk_content, new_version);
             drop(version_index);
 
             let is_diff_or_changed = mode == ReadMode::Diff || mode == ReadMode::ChangedOnly;
@@ -208,7 +212,7 @@ impl ContentStore {
 
         let new_version = current_version + 1;
         version_index.insert(path.to_string(), new_version);
-        self.store_version_in_sled(path, &disk_content, new_version);
+        self.store_version(path, &disk_content, new_version);
         drop(version_index);
 
         let mut cache = self.lines_cache.lock();
@@ -298,13 +302,14 @@ impl ContentStore {
         debug!("ContentStore: all caches cleared");
     }
 
-    /// Retrieve a specific version of file content from sled.
+    /// Retrieve a specific version of file content from redb.
     pub fn get_version_content(&self, path: &str, version: u64) -> Option<String> {
         let db = self.version_store.as_ref()?;
         let key = format!("version:{}:v{}", path, version);
-        db.get(key.as_bytes())
-            .ok()?
-            .map(|ivec| String::from_utf8_lossy(&ivec).to_string())
+        let read_txn = db.begin_read().ok()?;
+        let table = read_txn.open_table(VERSION_STORE).ok()?;
+        let guard = table.get(key.as_str()).ok()??;
+        Some(String::from_utf8_lossy(guard.value()).to_string())
     }
 
     // ── Private helpers ──
@@ -314,14 +319,25 @@ impl ContentStore {
         cache.pop(path);
     }
 
-    fn store_version_in_sled(&self, path: &str, content: &str, version: u64) {
+    fn store_version(&self, path: &str, content: &str, version: u64) {
         if let Some(ref db) = self.version_store {
             let key = format!("version:{}:v{}", path, version);
-            if let Err(e) = db.insert(key.as_bytes(), content.as_bytes()) {
-                warn!(
+            match db.begin_write() {
+                Ok(write_txn) => {
+                    if let Ok(mut table) = write_txn.open_table(VERSION_STORE) {
+                        if let Err(e) = table.insert(key.as_str(), content.as_bytes()) {
+                            warn!(
+                                path = %path, version = version, error = %e,
+                                "ContentStore: failed to store version in redb"
+                            );
+                        }
+                    }
+                    let _ = write_txn.commit();
+                }
+                Err(e) => warn!(
                     path = %path, version = version, error = %e,
-                    "ContentStore: failed to store version in sled"
-                );
+                    "ContentStore: failed to begin redb write transaction"
+                ),
             }
         }
     }

@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, warn};
 use walkdir::WalkDir;
@@ -109,16 +110,19 @@ fn classify_language(ext: &str) -> &'static str {
 /// Shared workspace RDF constant.
 pub const WORKSPACE_GRAPH: &str = "iri://workspace";
 
-/// FileInventory — thin facade over L2 Blackboard (RDF) with sled hot cache.
+/// Inventory cache table: key = file path (str), value = serialized FileEntry.
+const INVENTORY_CACHE: TableDefinition<&str, &[u8]> = TableDefinition::new("inventory_cache");
+
+/// FileInventory — thin facade over L2 Blackboard (RDF) with redb hot cache.
 ///
 /// The authority data source is L2 (Oxigraph RDF named graph `iri://workspace`).
-/// Sled serves as a hot cache for fast metadata lookups.
+/// redb serves as a hot cache for fast metadata lookups.
 pub struct FileInventory {
     /// L2 Blackboard (RDF triple store) for authority data.
     blackboard: Option<Arc<Blackboard>>,
-    /// Sled hot cache: path → serialized FileEntry.
-    cache: Option<sled::Db>,
-    /// In-memory cache for fastest access (no sled deserialization).
+    /// redb hot cache: path → serialized FileEntry.
+    cache: Option<Database>,
+    /// In-memory cache for fastest access (no redb deserialization).
     mem_cache: RwLock<HashMap<String, FileEntry>>,
     /// Exclude patterns for scanning.
     exclude_patterns: Vec<String>,
@@ -128,22 +132,28 @@ impl FileInventory {
     /// Create a new FileInventory.
     ///
     /// * `blackboard` - Optional L2 Blackboard for RDF storage.
-    /// * `sled_db` - Optional sled database for hot cache.
+    /// * `db` - Optional redb database for hot cache.
     /// * `exclude_patterns` - Glob patterns to exclude from scanning (e.g., "node_modules/").
     pub fn new(
         blackboard: Option<Arc<Blackboard>>,
-        sled_db: Option<sled::Db>,
+        db: Option<Database>,
         exclude_patterns: Vec<String>,
     ) -> Self {
         let mut mem_cache = HashMap::new();
 
-        // Pre-warm from sled if available
-        if let Some(ref db) = sled_db {
-            for result in db.iter() {
-                if let Ok((key, value)) = result {
-                    let path = String::from_utf8_lossy(&key).to_string();
-                    if let Ok(entry) = serde_json::from_slice::<FileEntry>(&value) {
-                        mem_cache.insert(path, entry);
+        // Pre-warm from redb if available
+        if let Some(ref database) = db {
+            if let Ok(read_txn) = database.begin_read() {
+                if let Ok(table) = read_txn.open_table(INVENTORY_CACHE) {
+                    if let Ok(iter) = table.iter() {
+                        for result in iter {
+                            if let Ok((key, value)) = result {
+                                let path = key.value().to_string();
+                                if let Ok(entry) = serde_json::from_slice::<FileEntry>(value.value()) {
+                                    mem_cache.insert(path, entry);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -151,7 +161,7 @@ impl FileInventory {
 
         Self {
             blackboard,
-            cache: sled_db,
+            cache: db,
             mem_cache: RwLock::new(mem_cache),
             exclude_patterns,
         }
@@ -488,11 +498,16 @@ impl FileInventory {
             mem.insert(entry.path.clone(), entry.clone());
         }
 
-        // Sled persistence
+        // redb persistence
         if let Some(ref db) = self.cache {
             if let Ok(encoded) = serde_json::to_vec(entry) {
-                if let Err(e) = db.insert(entry.path.as_bytes(), encoded) {
-                    warn!(path = %entry.path, error = %e, "FileInventory: sled insert failed");
+                if let Ok(write_txn) = db.begin_write() {
+                    if let Ok(mut table) = write_txn.open_table(INVENTORY_CACHE) {
+                        if let Err(e) = table.insert(entry.path.as_str(), encoded.as_slice()) {
+                            warn!(path = %entry.path, error = %e, "FileInventory: redb insert failed");
+                        }
+                    }
+                    let _ = write_txn.commit();
                 }
             }
         }
@@ -504,15 +519,25 @@ impl FileInventory {
             mem.remove(path);
         }
         if let Some(ref db) = self.cache {
-            let _ = db.remove(path.as_bytes());
+            if let Ok(write_txn) = db.begin_write() {
+                if let Ok(mut table) = write_txn.open_table(INVENTORY_CACHE) {
+                    let _ = table.remove(path);
+                }
+                let _ = write_txn.commit();
+            }
         }
     }
 
     fn persist_to_cache(&self, entry: &FileEntry) {
         if let Some(ref db) = self.cache {
             if let Ok(encoded) = serde_json::to_vec(entry) {
-                if let Err(e) = db.insert(entry.path.as_bytes(), encoded) {
-                    warn!(path = %entry.path, error = %e, "FileInventory: sled persist failed");
+                if let Ok(write_txn) = db.begin_write() {
+                    if let Ok(mut table) = write_txn.open_table(INVENTORY_CACHE) {
+                        if let Err(e) = table.insert(entry.path.as_str(), encoded.as_slice()) {
+                            warn!(path = %entry.path, error = %e, "FileInventory: redb persist failed");
+                        }
+                    }
+                    let _ = write_txn.commit();
                 }
             }
         }

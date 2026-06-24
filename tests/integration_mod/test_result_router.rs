@@ -19,7 +19,8 @@ fn test_router_small_result_passthrough() {
 fn test_router_medium_result_summarize() {
     let settings = ToolResultRouterSettings::default();
     let router = ResultRouter::new(&settings);
-    let result = "x".repeat(3000);
+    // threshold_small=16384, micro_tool_threshold=16384 → need >= 16384 for Summarize
+    let result = "x".repeat(20_000);
     let decision = router.route(&result, "test_tool", "call_2");
     assert!(matches!(decision, RouteDecision::Summarize { .. }));
 }
@@ -28,10 +29,12 @@ fn test_router_medium_result_summarize() {
 fn test_router_large_json_graphify() {
     let settings = ToolResultRouterSettings::default();
     let router = ResultRouter::new(&settings);
-    let items: Vec<serde_json::Value> = (0..300)
+    // Must exceed threshold_large (32768) and be structured JSON → Graphify
+    let items: Vec<serde_json::Value> = (0..1200)
         .map(|i| json!({"id": format!("item_{}", i), "name": format!("item_{}", i), "value": i * 10}))
         .collect();
     let result = serde_json::to_string(&items).unwrap();
+    assert!(result.len() > 32768, "result size {} should exceed threshold_large", result.len());
     let decision = router.route(&result, "test_tool", "call_3");
     assert!(matches!(decision, RouteDecision::Graphify { .. }));
 }
@@ -40,7 +43,8 @@ fn test_router_large_json_graphify() {
 fn test_router_large_text_summarize() {
     let settings = ToolResultRouterSettings::default();
     let router = ResultRouter::new(&settings);
-    let result = "line\n".repeat(2000);
+    // Must exceed threshold_large (32768) and not be structured JSON → Summarize
+    let result = "line\n".repeat(8000);
     let decision = router.route(&result, "test_tool", "call_4");
     assert!(matches!(decision, RouteDecision::Summarize { .. }));
 }
@@ -134,8 +138,8 @@ fn test_micro_tools_read_full() {
 fn test_config_default_values() {
     let settings = ToolResultRouterSettings::default();
     assert!(settings.enabled);
-    assert_eq!(settings.threshold_small, 2048);
-    assert_eq!(settings.threshold_large, 8192);
+    assert_eq!(settings.threshold_small, 16384);
+    assert_eq!(settings.threshold_large, 32768);
     assert_eq!(settings.preview_size, 2000);
     assert_eq!(settings.max_graph_entities, 500);
     assert_eq!(settings.max_micro_tools, 5);
@@ -148,10 +152,12 @@ fn test_full_pipeline_json_graphify() {
     let settings = ToolResultRouterSettings::default();
     let router = ResultRouter::new(&settings);
 
-    let items: Vec<serde_json::Value> = (0..300)
+    // Must exceed threshold_large (32768) and be structured JSON → Graphify
+    let items: Vec<serde_json::Value> = (0..1200)
         .map(|i| json!({"id": format!("item_{}", i), "name": format!("item_{}", i), "value": i * 10}))
         .collect();
     let result_str = serde_json::to_string(&items).unwrap();
+    assert!(result_str.len() > 32768, "result size {} should exceed threshold_large", result_str.len());
 
     let decision = router.route(&result_str, "test_tool", "pipeline_1");
     assert!(matches!(decision, RouteDecision::Graphify { .. }));
@@ -192,7 +198,8 @@ fn test_full_pipeline_text_summarize() {
     let settings = ToolResultRouterSettings::default();
     let router = ResultRouter::new(&settings);
 
-    let result_str = "line\n".repeat(2000);
+    // Must exceed threshold_large (32768) and not be structured JSON → Summarize
+    let result_str = "line\n".repeat(8000);
     let decision = router.route(&result_str, "test_tool", "pipeline_2");
     assert!(matches!(decision, RouteDecision::Summarize { .. }));
 

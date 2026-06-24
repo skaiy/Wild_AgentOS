@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, warn};
 
@@ -35,13 +36,16 @@ pub struct RollbackResult {
     pub failed: Vec<String>,
 }
 
+/// Snapshot metadata table: key = "snapshot:{id}", value = serialized WorkspaceSnapshot.
+const SNAPSHOTS: TableDefinition<&str, &[u8]> = TableDefinition::new("snapshots");
+
 /// Manages workspace-level snapshots for rollback operations.
 ///
-/// Snapshots store file path → content hash mappings in sled.
+/// Snapshots store file path → content hash mappings in redb.
 /// Actual file content is stored in the ContentStore's version store.
 pub struct SnapshotManager {
-    /// Sled DB for snapshot metadata.
-    db: Arc<sled::Db>,
+    /// redb for snapshot metadata.
+    db: Arc<Database>,
     /// Reference to the content store for retrieving file contents by hash.
     content_store: Arc<crate::tools::workspace_monitor::ContentStore>,
     /// Reference to the file inventory.
@@ -53,19 +57,25 @@ pub struct SnapshotManager {
 impl SnapshotManager {
     /// Create a new SnapshotManager.
     pub fn new(
-        db: Arc<sled::Db>,
+        db: Arc<Database>,
         content_store: Arc<crate::tools::workspace_monitor::ContentStore>,
         inventory: Arc<RwLock<FileInventory>>,
     ) -> Self {
         let mut index = HashMap::new();
 
-        // Pre-warm index from sled
-        for result in db.iter() {
-            if let Ok((key, value)) = result {
-                let key_str = String::from_utf8_lossy(&key).to_string();
-                if key_str.starts_with("snapshot:") {
-                    if let Ok(snapshot) = serde_json::from_slice::<WorkspaceSnapshot>(&value) {
-                        index.insert(snapshot.snapshot_id.clone(), snapshot);
+        // Pre-warm index from redb
+        if let Ok(read_txn) = db.begin_read() {
+            if let Ok(table) = read_txn.open_table(SNAPSHOTS) {
+                if let Ok(iter) = table.iter() {
+                    for result in iter {
+                        if let Ok((key, value)) = result {
+                            let key_str = key.value().to_string();
+                            if key_str.starts_with("snapshot:") {
+                                if let Ok(snapshot) = serde_json::from_slice::<WorkspaceSnapshot>(value.value()) {
+                                    index.insert(snapshot.snapshot_id.clone(), snapshot);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -115,8 +125,13 @@ impl SnapshotManager {
 
         let key = format!("snapshot:{}", snapshot_id);
         if let Ok(encoded) = serde_json::to_vec(&snapshot) {
-            if let Err(e) = self.db.insert(key.as_bytes(), encoded) {
-                warn!(snapshot_id = %snapshot_id, error = %e, "SnapshotManager: failed to store snapshot");
+            if let Ok(write_txn) = self.db.begin_write() {
+                if let Ok(mut table) = write_txn.open_table(SNAPSHOTS) {
+                    if let Err(e) = table.insert(key.as_str(), encoded.as_slice()) {
+                        warn!(snapshot_id = %snapshot_id, error = %e, "SnapshotManager: failed to store snapshot");
+                    }
+                }
+                let _ = write_txn.commit();
             }
         }
 
@@ -135,7 +150,7 @@ impl SnapshotManager {
     /// Roll back the entire workspace to a given snapshot state.
     ///
     /// 1. Reads the snapshot record.
-    /// 2. For each file in the snapshot, retrieves content from sled version store by hash.
+    /// 2. For each file in the snapshot, retrieves content from redb version store by hash.
     /// 3. Writes content back to disk.
     /// 4. Files existing on disk but not in the snapshot are optionally deleted.
     #[instrument(skip(self))]
@@ -238,7 +253,12 @@ impl SnapshotManager {
         let mut index = self.index.write();
         for snap in to_remove {
             let key = format!("snapshot:{}", snap.snapshot_id);
-            let _ = self.db.remove(key.as_bytes());
+            if let Ok(write_txn) = self.db.begin_write() {
+                if let Ok(mut table) = write_txn.open_table(SNAPSHOTS) {
+                    let _ = table.remove(key.as_str());
+                }
+                let _ = write_txn.commit();
+            }
             index.remove(&snap.snapshot_id);
         }
 
@@ -250,11 +270,13 @@ impl SnapshotManager {
 
     /// Find content for a given hash from all version entries.
     fn find_content_by_hash(&self, target_hash: &str) -> Option<String> {
-        // Scan version store for matching content
-        let prefix = "version:";
-        for result in self.db.scan_prefix(prefix.as_bytes()) {
+        // Scan version store for matching content via range scan
+        let read_txn = self.db.begin_read().ok()?;
+        let table = read_txn.open_table(SNAPSHOTS).ok()?;
+        let iter = table.iter().ok()?;
+        for result in iter {
             if let Ok((_key, value)) = result {
-                let content = String::from_utf8_lossy(&value).to_string();
+                let content = String::from_utf8_lossy(value.value()).to_string();
                 let content_hash = {
                     use sha2::Digest;
                     let mut hasher = sha2::Sha256::new();
@@ -274,12 +296,14 @@ impl SnapshotManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use redb::backends::InMemoryBackend;
+    use redb::Builder;
 
     #[test]
     fn test_snapshot_lifecycle() {
-        let db = Arc::new(sled::Config::new().temporary(true).open().unwrap());
+        let db = Arc::new(Builder::new().create_with_backend(InMemoryBackend::new()).unwrap());
         let content_store = Arc::new(crate::tools::workspace_monitor::ContentStore::new(
-            100, 65536, Some(sled::Config::new().temporary(true).open().unwrap()),
+            100, 65536, Some(Builder::new().create_with_backend(InMemoryBackend::new()).unwrap()),
         ));
         let inventory = Arc::new(RwLock::new(
             crate::tools::workspace_monitor::FileInventory::new(None, None, vec![]),
@@ -300,7 +324,7 @@ mod tests {
 
     #[test]
     fn test_prune_snapshots() {
-        let db = Arc::new(sled::Config::new().temporary(true).open().unwrap());
+        let db = Arc::new(Builder::new().create_with_backend(InMemoryBackend::new()).unwrap());
         let content_store = Arc::new(crate::tools::workspace_monitor::ContentStore::new(
             100, 65536, None,
         ));
@@ -323,7 +347,7 @@ mod tests {
 
     #[test]
     fn test_rollback_nonexistent() {
-        let db = Arc::new(sled::Config::new().temporary(true).open().unwrap());
+        let db = Arc::new(Builder::new().create_with_backend(InMemoryBackend::new()).unwrap());
         let content_store = Arc::new(crate::tools::workspace_monitor::ContentStore::new(
             100, 65536, None,
         ));

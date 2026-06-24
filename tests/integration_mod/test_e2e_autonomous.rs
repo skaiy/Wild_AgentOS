@@ -50,11 +50,7 @@ fn init_e2e_logging() {
                     level: "info".to_string(),
                 },
                 glidinghorse::config::settings::LogFilter {
-                    module: "sled".to_string(),
-                    level: "warn".to_string(),
-                },
-                glidinghorse::config::settings::LogFilter {
-                    module: "sled::pagecache".to_string(),
+                    module: "redb".to_string(),
                     level: "warn".to_string(),
                 },
             ],

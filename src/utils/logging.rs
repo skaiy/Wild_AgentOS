@@ -22,9 +22,7 @@ pub fn init_logging(settings: &LoggingSettings) -> LoggingGuard {
     let level = parse_level(&settings.level);
     let mut env_filter = EnvFilter::from_default_env()
         .add_directive(level.into())
-        .add_directive("sled=warn".parse().unwrap_or_default())
-        .add_directive("sled::pagecache=warn".parse().unwrap_or_default())
-        .add_directive("sled::segment=warn".parse().unwrap_or_default());
+        .add_directive("redb=warn".parse().unwrap_or_default());
     
     for filter in &settings.filters {
         let directive_str = format!("{}={}", filter.module, filter.level.to_lowercase());

@@ -27,6 +27,22 @@ impl KnowledgeGraphStore {
         })
     }
 
+    /// Expose the inner `Arc<Store>` for GH ↔ OO store sharing.
+    pub fn store_arc(&self) -> &Arc<Store> {
+        &self.store
+    }
+
+    /// Create from an OO `SharedGraphStore` (integration point).
+    #[cfg(feature = "ontology")]
+    pub fn with_shared_graph_store(
+        shared: &crate::ontology::SharedGraphStore,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            store: Arc::clone(shared.inner()),
+            default_graph: "graph:world".to_string(),
+        })
+    }
+
     pub fn with_graph(graph_name: &str) -> Result<Self, String> {
         let store = Store::new().map_err(|e| format!("创建 Oxigraph Store 失败: {}", e))?;
         Ok(Self {

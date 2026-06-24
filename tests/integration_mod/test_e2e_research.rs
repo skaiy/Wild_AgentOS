@@ -52,11 +52,7 @@ fn init_e2e_logging() {
                     level: "info".to_string(),
                 },
                 glidinghorse::config::settings::LogFilter {
-                    module: "sled".to_string(),
-                    level: "warn".to_string(),
-                },
-                glidinghorse::config::settings::LogFilter {
-                    module: "sled::pagecache".to_string(),
+                    module: "redb".to_string(),
                     level: "warn".to_string(),
                 },
             ],
@@ -376,12 +372,12 @@ fn test_sa_research_task_classification() {
     let (sa, _dir) = build_system(10);
 
     let research_tasks = vec![
-        ("Research the latest developments in quantum computing", TaskComplexity::Exploratory),
-        ("调研大语言模型在代码生成领域的最新进展", TaskComplexity::Standard),
-        ("AI Agent在安防监控场景有哪些好的应用？", TaskComplexity::Standard),
+        ("Research the latest advances in quantum computing", TaskComplexity::Exploratory),
+        ("调研大语言模型在代码领域的最新进展", TaskComplexity::Standard),
+        ("AI Agent在安防监控场景有哪些好的用例？", TaskComplexity::Standard),
         ("对比分析 React 和 Vue 的优缺点", TaskComplexity::Exploratory),
-        ("Explore different approaches to building microservices", TaskComplexity::Exploratory),
-        ("Compare different database solutions for e-commerce platforms", TaskComplexity::Exploratory),
+        ("Explore different methods for microservices", TaskComplexity::Exploratory),
+        ("Compare different database solutions for e-commerce", TaskComplexity::Exploratory),
         ("研究并探索多种 AI Agent 架构模式", TaskComplexity::Exploratory),
     ];
 

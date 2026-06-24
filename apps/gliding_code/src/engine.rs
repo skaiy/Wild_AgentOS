@@ -221,7 +221,7 @@ impl CodeCliEngine {
     pub fn rebuild_with_model(&mut self, model: String) -> anyhow::Result<()> {
         let model_name = model.clone();
         self.config = self.config.clone_with_model(model);
-        // 更新 gateway 的模型配置 + 上下文窗口上限（不重建 Engine，避免 sled 文件锁冲突）
+        // 更新 gateway 的模型配置 + 上下文窗口上限（不重建 Engine，避免 redb 文件锁冲突）
         self.sa.set_model(&model_name);
         self.context_limit = Self::resolve_context_limit(&self.config);
         Ok(())

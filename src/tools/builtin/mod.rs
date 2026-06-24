@@ -7,6 +7,9 @@ pub mod file_ops;
 pub mod mcp;
 pub mod sandbox;
 
+#[cfg(feature = "ontology")]
+pub mod ontology_tools;
+
 pub use permissions::{
     PermissionMode,
     PermissionContext,
@@ -36,4 +39,12 @@ pub use knowledge::{
     execute_knowledge_delete,
     execute_knowledge_search,
     execute_knowledge_update,
+};
+
+#[cfg(feature = "ontology")]
+pub use ontology_tools::{
+    execute_ontology_validate_turtle,
+    execute_ontology_lint_turtle,
+    execute_ontology_diff_turtle,
+    execute_ontology_validate_shacl,
 };

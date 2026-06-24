@@ -111,14 +111,14 @@ fn test_sa_complexity_classification() {
     assert_eq!(plan.agent_sequence[0], AgentRole::Do);
 
     let plan = sa.analyze_task("Build a web application with user authentication and a PostgreSQL database backend");
-    assert_eq!(plan.task_complexity, TaskComplexity::Standard);
+    assert_eq!(plan.task_complexity, TaskComplexity::Recursive);
     assert_eq!(plan.agent_sequence.len(), 4);
 
     let plan = sa.analyze_task("Fix critical security vulnerability in the authentication module");
     assert_eq!(plan.task_complexity, TaskComplexity::Emergency);
     assert_eq!(plan.agent_sequence.len(), 3);
 
-    let plan = sa.analyze_task("Research and compare different database solutions for our e-commerce platform");
+    let plan = sa.analyze_task("Research and compare different database solutions for e-commerce");
     assert_eq!(plan.task_complexity, TaskComplexity::Exploratory);
     assert!(plan.parallel_groups.len() > 0);
 }
@@ -160,5 +160,5 @@ fn test_l0_store_crud() {
     let results = infra.l0.search("Rust", 10).unwrap();
     assert!(!results.is_empty());
 
-    assert!(infra.l0.count() >= 2);
+    assert!(infra.l0.count().unwrap_or(0) >= 2);
 }

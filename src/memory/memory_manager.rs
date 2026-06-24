@@ -386,7 +386,7 @@ impl MemoryManager {
     /// 获取记忆系统统计信息
     pub fn stats(&self) -> serde_json::Value {
         serde_json::json!({
-            "l0_entries": self.l0.count(),
+            "l0_entries": self.l0.count().unwrap_or(0),
             "l2_nodes": self.l2.node_count(),
             "l2_bytes": self.l2.total_bytes(),
             "active_sessions": self.session_count(),

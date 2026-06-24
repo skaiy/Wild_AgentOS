@@ -1,30 +1,40 @@
-use std::sync::Arc;
 use std::cell::RefCell;
+use std::sync::Arc;
 
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use glidinghorse::core::agent_runner::TaskResult;
 use glidinghorse::core::event_bus::EventBus;
 use glidinghorse::core::execution_event::{ExecutionEvent, ExecutionEventKind};
 use glidinghorse::gateway::unified_gateway::ChatMessage;
-use serde_json::Value;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
+    ScrollbarState, Wrap,
+};
 use ratatui::Frame;
 use ratatui::Terminal;
+use serde_json::Value;
 use tokio::sync::mpsc;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::config::CliConfig;
 use crate::log_buffer::LogBuffer;
 
 #[derive(Clone, Copy, PartialEq)]
-enum MessageRole { User, Assistant, System, Error }
+enum MessageRole {
+    User,
+    Assistant,
+    System,
+    Error,
+}
 
 struct Message {
     role: MessageRole,
@@ -87,6 +97,9 @@ pub struct App {
     /// 最后一次 API 调用的 token 数（单次，非累计）
     last_prompt_tok: u64,
     last_completion_tok: u64,
+    /// 上一次渲染时的值，用于计算 delta
+    prev_last_prompt_tok: u64,
+    prev_last_completion_tok: u64,
     /// 模型上下文窗口上限（用于计算占比）
     context_limit: u64,
     /// Checkpoint 恢复的 token 基数（resume 模式下使用）
@@ -208,7 +221,9 @@ fn mermaid_block_lines(mb: &MermaidBlock) -> Vec<Line<'static>> {
     let mut buf = Vec::new();
     buf.push(Line::from(Span::styled(
         "  Mermaid Diagram",
-        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
     )));
     if let Some(ref svg) = mb.svg {
         buf.push(Line::from(Span::styled(
@@ -224,7 +239,9 @@ fn mermaid_block_lines(mb: &MermaidBlock) -> Vec<Line<'static>> {
     for src_line in mb.source.lines() {
         buf.push(Line::from(Span::styled(
             format!("       {}", src_line),
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::DIM),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::DIM),
         )));
     }
     buf
@@ -273,15 +290,25 @@ fn pad_to_width(s: &str, width: usize) -> String {
 /// ratatui's Paragraph wrapping does not need to add extra visual rows (which
 /// would break the 1:1 mapping between line_map entries and screen rows).
 fn prewrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'static>> {
-    struct Chunk { text: String, width: usize, style: Style }
+    struct Chunk {
+        text: String,
+        width: usize,
+        style: Style,
+    }
     let total: usize = line.spans.iter().map(|s| s.content.as_ref().width()).sum();
-    if total <= max_width { return vec![line]; }
+    if total <= max_width {
+        return vec![line];
+    }
 
     // Flatten spans into grapheme chunks with their display width and style.
     let mut chunks: Vec<Chunk> = Vec::new();
     for span in line.spans {
         for g in span.content.as_ref().graphemes(true) {
-            chunks.push(Chunk { text: g.to_string(), width: g.width(), style: span.style });
+            chunks.push(Chunk {
+                text: g.to_string(),
+                width: g.width(),
+                style: span.style,
+            });
         }
     }
 
@@ -294,7 +321,9 @@ fn prewrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'static>> {
             w += chunks[j].width;
             j += 1;
         }
-        if j == i { j = i + 1; } // single grapheme wider than max_width — force it
+        if j == i {
+            j = i + 1;
+        } // single grapheme wider than max_width — force it
 
         // Merge consecutive chunks with the same style into one Span.
         let mut spans: Vec<Span<'static>> = Vec::new();
@@ -307,7 +336,9 @@ fn prewrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'static>> {
             }
             buf.push_str(&chunks[k].text);
         }
-        if !buf.is_empty() { spans.push(Span::styled(buf, cur_style)); }
+        if !buf.is_empty() {
+            spans.push(Span::styled(buf, cur_style));
+        }
         out.push(Line::from(spans));
         i = j;
     }
@@ -334,17 +365,24 @@ fn action_color(action: &str) -> Color {
         "TOOL_CALL" => Color::LightYellow,
         "TOOL_RESULT" => Color::DarkGray,
         "ERROR" => Color::Red,
-        _ => Color::DarkGray,  // THOUGHT etc.
+        _ => Color::DarkGray, // THOUGHT etc.
     }
 }
 
 fn tool_color(tool: &str) -> Color {
-    if tool.starts_with("web_") { Color::Blue }
-    else if tool.starts_with("file_") || tool == "file_read" { Color::Green }
-    else if tool.starts_with("bash") || tool == "command" { Color::Cyan }
-    else if tool == "glob" || tool == "grep" || tool.starts_with("ast_") { Color::Magenta }
-    else if tool.starts_with("write") || tool.starts_with("edit") { Color::Yellow }
-    else { Color::White }
+    if tool.starts_with("web_") {
+        Color::Blue
+    } else if tool.starts_with("file_") || tool == "file_read" {
+        Color::Green
+    } else if tool.starts_with("bash") || tool == "command" {
+        Color::Cyan
+    } else if tool == "glob" || tool == "grep" || tool.starts_with("ast_") {
+        Color::Magenta
+    } else if tool.starts_with("write") || tool.starts_with("edit") {
+        Color::Yellow
+    } else {
+        Color::White
+    }
 }
 
 /// Try to parse an execution‑event line and return styled spans for
@@ -354,9 +392,7 @@ fn tool_color(tool: &str) -> Color {
 /// Uses `AGENT:` as anchor instead of exact emoji matching — any non‑whitespace
 /// icon preceding `AGENT:` is accepted, making the parser tolerant of emoji
 /// encoding variations.
-fn parse_execution_event_line(
-    text: &str,
-) -> Option<(Vec<Span<'static>>, &str)> {
+fn parse_execution_event_line(text: &str) -> Option<(Vec<Span<'static>>, &str)> {
     // Find "AGENT:" — anything before it is the icon
     let agent_pos = text.find("AGENT:")?;
     if agent_pos == 0 {
@@ -387,9 +423,20 @@ fn parse_execution_event_line(
     let mut prefix_spans = Vec::new();
     prefix_spans.push(Span::styled(icon.to_string(), Style::default().fg(rc)));
     prefix_spans.push(Span::raw(" "));
-    prefix_spans.push(Span::styled("AGENT:", Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)));
-    prefix_spans.push(Span::styled(role.to_string(), Style::default().fg(rc).add_modifier(Modifier::BOLD)));
-    prefix_spans.push(Span::styled(format!(":{}", action), Style::default().fg(ac).add_modifier(Modifier::BOLD)));
+    prefix_spans.push(Span::styled(
+        "AGENT:",
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+    ));
+    prefix_spans.push(Span::styled(
+        role.to_string(),
+        Style::default().fg(rc).add_modifier(Modifier::BOLD),
+    ));
+    prefix_spans.push(Span::styled(
+        format!(":{}", action),
+        Style::default().fg(ac).add_modifier(Modifier::BOLD),
+    ));
 
     Some((prefix_spans, rest))
 }
@@ -406,7 +453,9 @@ fn parse_phase_line(text: &str) -> Option<(Vec<Span<'static>>, &str)> {
     if after_icon.is_empty() {
         return None;
     }
-    let role_end = after_icon.find(|c: char| !c.is_ascii_uppercase()).unwrap_or(after_icon.len());
+    let role_end = after_icon
+        .find(|c: char| !c.is_ascii_uppercase())
+        .unwrap_or(after_icon.len());
     let role = &after_icon[..role_end];
     if !["SA", "PA", "DA", "CA", "AA"].contains(&role) {
         return None;
@@ -416,7 +465,10 @@ fn parse_phase_line(text: &str) -> Option<(Vec<Span<'static>>, &str)> {
     let spans = vec![
         Span::styled(icon.to_string(), Style::default().fg(rc)),
         Span::raw(" "),
-        Span::styled(role.to_string(), Style::default().fg(rc).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            role.to_string(),
+            Style::default().fg(rc).add_modifier(Modifier::BOLD),
+        ),
     ];
     Some((spans, rest))
 }
@@ -425,36 +477,63 @@ fn parse_phase_line(text: &str) -> Option<(Vec<Span<'static>>, &str)> {
 fn agent_id_to_role(agent_id: &str) -> &str {
     // agent_id 格式: cycle_role_uuid，role 用 AgentRole::Display (PA/DA/CA/AA)
     // 形如: "cycle_1_PA_550e8400-e29b-41d4-a716-446655440000"
-    if agent_id.contains("_PA_") { "PA" }
-    else if agent_id.contains("_DA_") { "DA" }
-    else if agent_id.contains("_CA_") { "CA" }
-    else if agent_id.contains("_AA_") { "AA" }
-    else if agent_id.contains("SA") || agent_id.contains("sa") || agent_id.contains("supervisor") { "SA" }
-    else { "?" }
+    if agent_id.contains("_PA_") {
+        "PA"
+    } else if agent_id.contains("_DA_") {
+        "DA"
+    } else if agent_id.contains("_CA_") {
+        "CA"
+    } else if agent_id.contains("_AA_") {
+        "AA"
+    } else if agent_id.contains("SA") || agent_id.contains("sa") || agent_id.contains("supervisor")
+    {
+        "SA"
+    } else {
+        "?"
+    }
 }
 
 /// Return phase only for major-phase events (SA/PA/DA/CA/AA).
 fn detect_phase(et: &str) -> Option<String> {
-    if et == "TASK_START" || et.contains("CYCLE_STARTED") || et.contains("SA_STARTED") { Some("SA".into()) }
-    else if et.contains("Plan_STARTED") || et == "PA_STARTED" { Some("PA".into()) }
-    else if et.contains("Plan_COMPLETED") || et == "PA_COMPLETED" { Some("PA".into()) }
-    else if et.contains("Do_STARTED") || et == "DA_STARTED" { Some("DA".into()) }
-    else if et.contains("Do_COMPLETED") || et == "DA_COMPLETED" { Some("DA".into()) }
-    else if et.contains("Check_STARTED") || et == "CA_STARTED" { Some("CA".into()) }
-    else if et.contains("Check_COMPLETED") || et == "CA_COMPLETED" { Some("CA".into()) }
-    else if et.contains("Act_STARTED") || et == "AA_STARTED" { Some("AA".into()) }
-    else if et.contains("Act_COMPLETED") || et == "AA_COMPLETED" { Some("AA".into()) }
-    else { None }
+    if et == "TASK_START" || et.contains("CYCLE_STARTED") || et.contains("SA_STARTED") {
+        Some("SA".into())
+    } else if et.contains("Plan_STARTED") || et == "PA_STARTED" {
+        Some("PA".into())
+    } else if et.contains("Plan_COMPLETED") || et == "PA_COMPLETED" {
+        Some("PA".into())
+    } else if et.contains("Do_STARTED") || et == "DA_STARTED" {
+        Some("DA".into())
+    } else if et.contains("Do_COMPLETED") || et == "DA_COMPLETED" {
+        Some("DA".into())
+    } else if et.contains("Check_STARTED") || et == "CA_STARTED" {
+        Some("CA".into())
+    } else if et.contains("Check_COMPLETED") || et == "CA_COMPLETED" {
+        Some("CA".into())
+    } else if et.contains("Act_STARTED") || et == "AA_STARTED" {
+        Some("AA".into())
+    } else if et.contains("Act_COMPLETED") || et == "AA_COMPLETED" {
+        Some("AA".into())
+    } else {
+        None
+    }
 }
 
 fn event_icon(et: &str) -> (&'static str, Color) {
-    if et == "CYCLE_STARTED" || et == "TASK_START" { ("\u{25B6}", Color::Blue) }
-    else if et.contains("COMPLETED") || et == "COMPLETE" { ("\u{2714}", Color::Green) }
-    else if et.contains("_STARTED") { ("\u{25B6}", Color::Cyan) }
-    else if et.contains("ERROR") || et.contains("BLOCKED") { ("\u{2716}", Color::Red) }
-    else if et.contains("SKIPPED") { ("\u{229D}", Color::DarkGray) }
-    else if et.contains("ABORTED") || et.contains("FROZEN") { ("\u{2744}", Color::Yellow) }
-    else { ("\u{2022}", Color::DarkGray) }
+    if et == "CYCLE_STARTED" || et == "TASK_START" {
+        ("\u{25B6}", Color::Blue)
+    } else if et.contains("COMPLETED") || et == "COMPLETE" {
+        ("\u{2714}", Color::Green)
+    } else if et.contains("_STARTED") {
+        ("\u{25B6}", Color::Cyan)
+    } else if et.contains("ERROR") || et.contains("BLOCKED") {
+        ("\u{2716}", Color::Red)
+    } else if et.contains("SKIPPED") {
+        ("\u{229D}", Color::DarkGray)
+    } else if et.contains("ABORTED") || et.contains("FROZEN") {
+        ("\u{2744}", Color::Yellow)
+    } else {
+        ("\u{2022}", Color::DarkGray)
+    }
 }
 
 /// RAII guard: restores terminal on Drop no matter how run() exits.
@@ -486,7 +565,8 @@ impl App {
         let l2_bb = engine.l2_bb();
         let proj = engine.proj();
         let mm = engine.mm();
-        let (prompt_tokens, completion_tokens, last_prompt_tokens, last_completion_tokens) = engine.token_arcs();
+        let (prompt_tokens, completion_tokens, last_prompt_tokens, last_completion_tokens) =
+            engine.token_arcs();
         let event_bus = engine.event_bus();
         let model_name = engine.model().to_string();
         let workspace_path = std::path::Path::new(engine.workspace())
@@ -533,6 +613,8 @@ impl App {
             completion_tok: 0,
             last_prompt_tok: 0,
             last_completion_tok: 0,
+            prev_last_prompt_tok: 0,
+            prev_last_completion_tok: 0,
             context_limit,
             resume_prompt_base: 0,
             resume_completion_base: 0,
@@ -571,15 +653,21 @@ impl App {
                 app.current_task_iri = Some(task_iri.clone());
 
                 // Parse session_messages_json into TUI Messages
-                if let Ok(msgs) = serde_json::from_str::<Vec<ChatMessage>>(&cp.session_messages_json) {
+                if let Ok(msgs) =
+                    serde_json::from_str::<Vec<ChatMessage>>(&cp.session_messages_json)
+                {
                     // 保存恢复的历史消息用于传递给 AgentRunner
                     app.resumed_messages = Some(msgs.clone());
                     app.is_resume_session = true;
-                    
+
                     // 恢复 turn/tool 计数
-                    app.session_turn_count = msgs.iter().filter(|m| m.role == "assistant").count() as u32;
-                    app.session_tool_call_count = msgs.iter().filter(|m| m.role == "tool" || m.tool_call_id.is_some()).count() as u32;
-                    
+                    app.session_turn_count =
+                        msgs.iter().filter(|m| m.role == "assistant").count() as u32;
+                    app.session_tool_call_count = msgs
+                        .iter()
+                        .filter(|m| m.role == "tool" || m.tool_call_id.is_some())
+                        .count() as u32;
+
                     for msg in &msgs {
                         let role = match msg.role.as_str() {
                             "user" => MessageRole::User,
@@ -599,8 +687,14 @@ impl App {
 
                 // 恢复 token 计数（从 agent_state_json）
                 if let Ok(state) = serde_json::from_str::<serde_json::Value>(&cp.agent_state_json) {
-                    let p = state.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let c = state.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let p = state
+                        .get("prompt_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let c = state
+                        .get("completion_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
                     app.prompt_tok = p;
                     app.completion_tok = c;
                     app.total_tokens = p + c;
@@ -610,8 +704,13 @@ impl App {
                 }
 
                 // Only show resume banner if we actually restored messages
-                if app.messages.iter().any(|m| matches!(m.role, MessageRole::User | MessageRole::Assistant)) {
-                    let phase_label = glidinghorse::core::checkpoint::parse_checkpoint_phase(&cp.name);
+                if app
+                    .messages
+                    .iter()
+                    .any(|m| matches!(m.role, MessageRole::User | MessageRole::Assistant))
+                {
+                    let phase_label =
+                        glidinghorse::core::checkpoint::parse_checkpoint_phase(&cp.name);
                     let turn_str = serde_json::from_str::<serde_json::Value>(&cp.agent_state_json)
                         .ok()
                         .and_then(|v| v.get("turn").and_then(|t| t.as_u64()))
@@ -644,11 +743,19 @@ impl App {
     pub fn run(&mut self) -> anyhow::Result<()> {
         // 清理前一次崩溃残留的终端状态（SIGKILL 导致 Drop/Panic Hook 未执行）
         let _ = disable_raw_mode();
-        let _ = execute!(std::io::stdout(), LeaveAlternateScreen, crossterm::event::DisableMouseCapture);
+        let _ = execute!(
+            std::io::stdout(),
+            LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture
+        );
 
         enable_raw_mode()?;
         let mut stdout = std::io::stdout();
-        execute!(stdout, EnterAlternateScreen, crossterm::event::EnableMouseCapture)?;
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            crossterm::event::EnableMouseCapture
+        )?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -693,7 +800,11 @@ impl App {
             // Best-effort terminal restore from signal context (may fail, that's OK)
             let _ = disable_raw_mode();
             let mut stdout = std::io::stdout();
-            let _ = execute!(stdout, LeaveAlternateScreen, crossterm::event::DisableMouseCapture);
+            let _ = execute!(
+                stdout,
+                LeaveAlternateScreen,
+                crossterm::event::DisableMouseCapture
+            );
         });
 
         loop {
@@ -739,12 +850,18 @@ impl App {
                 let _cs = self.proj.cache_stats();
             }
             self.l3_count = self.proj.list_frames().len() as u64;
-            self.l1_count = self.mm.try_lock()
+            self.l1_count = self
+                .mm
+                .try_lock()
                 .map(|g| g.l1_session_count())
                 .unwrap_or(self.l1_count);
             // 读取 token 计数
-            let current_prompt = self.prompt_tokens.load(std::sync::atomic::Ordering::Relaxed);
-            let current_completion = self.completion_tokens.load(std::sync::atomic::Ordering::Relaxed);
+            let current_prompt = self
+                .prompt_tokens
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let current_completion = self
+                .completion_tokens
+                .load(std::sync::atomic::Ordering::Relaxed);
             if self.is_resume_session {
                 self.prompt_tok = self.resume_prompt_base + current_prompt;
                 self.completion_tok = self.resume_completion_base + current_completion;
@@ -754,11 +871,19 @@ impl App {
                 self.prompt_tok = current_prompt;
                 self.completion_tok = current_completion;
             }
-            // 最后一次 API 调用的 token 数（非累计）
-            self.last_prompt_tok = self.last_prompt_tokens.load(std::sync::atomic::Ordering::Relaxed);
-            self.last_completion_tok = self.last_completion_tokens.load(std::sync::atomic::Ordering::Relaxed);
+            // 保存旧值用于计算 delta，再更新为最新值
+            self.prev_last_prompt_tok = self.last_prompt_tok;
+            self.prev_last_completion_tok = self.last_completion_tok;
+            self.last_prompt_tok = self
+                .last_prompt_tokens
+                .load(std::sync::atomic::Ordering::Relaxed);
+            self.last_completion_tok = self
+                .last_completion_tokens
+                .load(std::sync::atomic::Ordering::Relaxed);
             let _ = terminal.draw(|f| self.ui(f));
-            if self.should_quit { break; }
+            if self.should_quit {
+                break;
+            }
 
             // 同样，event 错误也吞掉。Windows 标题栏交互可能让 poll/read 返回 Err，
             // 如果 ? 传播出去会跳过 disable_raw_mode + LeaveAlternateScreen → 窗口闪退。
@@ -787,12 +912,12 @@ impl App {
                                     crossterm::event::MouseButton::Left,
                                 )
                                 | crossterm::event::MouseEventKind::Up(
-                                crossterm::event::MouseButton::Left,
-                            ) => {
-                                if column <= 4 {
-                                    self.handle_expand_click(row, column);
+                                    crossterm::event::MouseButton::Left,
+                                ) => {
+                                    if column <= 4 {
+                                        self.handle_expand_click(row, column);
+                                    }
                                 }
-                            }
                                 _ => {}
                             }
                         }
@@ -865,7 +990,9 @@ impl App {
 
     fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         if self.is_processing {
-            if code == KeyCode::Esc || (modifiers == KeyModifiers::CONTROL && code == KeyCode::Char('c')) {
+            if code == KeyCode::Esc
+                || (modifiers == KeyModifiers::CONTROL && code == KeyCode::Char('c'))
+            {
                 self.should_quit = true;
                 return;
             }
@@ -890,7 +1017,8 @@ impl App {
                     let ti = task_iri.clone();
                     let inp = input;
                     self.rt.spawn(async move {
-                        bus.emit(&ti, "USER_SUPPLEMENTARY_INPUT", "code_cli", &inp).await;
+                        bus.emit(&ti, "USER_SUPPLEMENTARY_INPUT", "code_cli", &inp)
+                            .await;
                     });
                 }
                 return;
@@ -925,9 +1053,7 @@ impl App {
                         .skip(1)
                         .find(|(_, ch)| ch.is_whitespace())
                         .map(|(idx, _)| idx)
-                        .or_else(|| {
-                            if before.is_empty() { None } else { Some(0) }
-                        })
+                        .or_else(|| if before.is_empty() { None } else { Some(0) })
                     {
                         let end = Self::next_char_boundary(before, pos);
                         self.input.drain(end..self.cursor_position);
@@ -1025,10 +1151,13 @@ impl App {
                 loop {
                     match receiver.recv().await {
                         Ok(ev) => {
-                            if stx.send(StatusEvent {
-                                event_type: ev.event_type,
-                                payload: ev.payload,
-                            }).is_err() {
+                            if stx
+                                .send(StatusEvent {
+                                    event_type: ev.event_type,
+                                    payload: ev.payload,
+                                })
+                                .is_err()
+                            {
                                 break;
                             }
                         }
@@ -1038,7 +1167,9 @@ impl App {
                 }
             });
 
-            let result = guard.process_task_with_iri_and_messages(&input2, &task_iri_bg, resumed).await;
+            let result = guard
+                .process_task_with_iri_and_messages(&input2, &task_iri_bg, resumed)
+                .await;
             let _ = result_tx.send(result.map(|tr| (task_iri_bg, tr)));
         });
 
@@ -1063,14 +1194,17 @@ impl App {
                     "partial" => ("\u{26A0}\u{FE0F}", MessageRole::Assistant),
                     _ => ("\u{274C}", MessageRole::Error),
                 };
-                let output_text = tr.output
+                let output_text = tr
+                    .output
                     .as_ref()
                     .and_then(|v| v.as_str())
                     .unwrap_or(&tr.summary);
                 let summary = format!(
                     "{} **{}** | Turns: {} | Tools: {}\n\n{}",
-                    icon, tr.status.to_uppercase(),
-                    tr.turn_count, tr.tool_call_count,
+                    icon,
+                    tr.status.to_uppercase(),
+                    tr.turn_count,
+                    tr.tool_call_count,
                     output_text,
                 );
                 let mermaid_blocks = extract_mermaid_blocks(&summary);
@@ -1117,15 +1251,25 @@ impl App {
             // Sidebar: only show major phase events (SA/PA/DA/CA/AA start/end)
             let is_major_phase = matches!(
                 ev.event_type.as_str(),
-                "TASK_START" | "CYCLE_STARTED" | "COMPLETE"
-                    | "Plan_STARTED" | "Plan_COMPLETED"
-                    | "Do_STARTED" | "Do_COMPLETED"
-                    | "Check_STARTED" | "Check_COMPLETED"
-                    | "Act_STARTED" | "Act_COMPLETED"
-                    | "PA_STARTED" | "PA_COMPLETED"
-                    | "DA_STARTED" | "DA_COMPLETED"
-                    | "CA_STARTED" | "CA_COMPLETED"
-                    | "AA_STARTED" | "AA_COMPLETED"
+                "TASK_START"
+                    | "CYCLE_STARTED"
+                    | "COMPLETE"
+                    | "Plan_STARTED"
+                    | "Plan_COMPLETED"
+                    | "Do_STARTED"
+                    | "Do_COMPLETED"
+                    | "Check_STARTED"
+                    | "Check_COMPLETED"
+                    | "Act_STARTED"
+                    | "Act_COMPLETED"
+                    | "PA_STARTED"
+                    | "PA_COMPLETED"
+                    | "DA_STARTED"
+                    | "DA_COMPLETED"
+                    | "CA_STARTED"
+                    | "CA_COMPLETED"
+                    | "AA_STARTED"
+                    | "AA_COMPLETED"
             );
 
             if is_major_phase {
@@ -1159,7 +1303,8 @@ impl App {
             }
 
             // Messages panel: show phase transitions + execution details
-            if let Some((role, msg, full_raw)) = self.format_ui_message(&ev.event_type, &ev.payload) {
+            if let Some((role, msg, full_raw)) = self.format_ui_message(&ev.event_type, &ev.payload)
+            {
                 let can_expand = full_raw.is_some();
                 self.messages.push(Message {
                     role,
@@ -1285,13 +1430,21 @@ impl App {
                 let total = obj.get("total_lines").and_then(|n| n.as_u64()).unwrap_or(0);
                 let ret = obj.get("returned").and_then(|n| n.as_u64()).unwrap_or(0);
                 // Show a preview of the first few lines
-                let preview: String = obj.get("lines")
+                let preview: String = obj
+                    .get("lines")
                     .and_then(|l| l.as_array())
                     .map(|arr| {
                         arr.iter()
                             .take(3)
                             .filter_map(|v| v.as_str())
-                            .map(|s| { let t = s.trim(); if t.len() > 60 { width_truncate(t, 60) } else { t.to_string() } })
+                            .map(|s| {
+                                let t = s.trim();
+                                if t.len() > 60 {
+                                    width_truncate(t, 60)
+                                } else {
+                                    t.to_string()
+                                }
+                            })
                             .collect::<Vec<_>>()
                             .join(" ")
                     })
@@ -1320,18 +1473,26 @@ impl App {
     /// Format an event bus event into a clean human-readable message for the
     /// messages panel. Returns `(role, summary_text, optional_full_raw)` or
     /// `None` if the event should be silently consumed.
-    fn format_ui_message(&self, event_type: &str, payload: &str) -> Option<(MessageRole, String, Option<String>)> {
+    fn format_ui_message(
+        &self,
+        event_type: &str,
+        payload: &str,
+    ) -> Option<(MessageRole, String, Option<String>)> {
         let max_cols = 160usize;
 
         // ── Phase transition events ──────────────────────────────────────────
         match event_type {
-            "TASK_START" | "CYCLE_STARTED" => return Some((MessageRole::System, "▶ SA".into(), None)),
+            "TASK_START" | "CYCLE_STARTED" => {
+                return Some((MessageRole::System, "▶ SA".into(), None))
+            }
             s if s == "Plan_STARTED" => return Some((MessageRole::System, "🔄 PA".into(), None)),
             s if s == "Plan_COMPLETED" => return Some((MessageRole::System, "✅ PA".into(), None)),
             s if s == "Do_STARTED" => return Some((MessageRole::System, "🔄 DA".into(), None)),
             s if s == "Do_COMPLETED" => return Some((MessageRole::System, "✅ DA".into(), None)),
             s if s == "Check_STARTED" => return Some((MessageRole::System, "🔄 CA".into(), None)),
-            s if s == "Check_COMPLETED" => return Some((MessageRole::System, "✅ CA".into(), None)),
+            s if s == "Check_COMPLETED" => {
+                return Some((MessageRole::System, "✅ CA".into(), None))
+            }
             s if s == "Act_STARTED" => return Some((MessageRole::System, "🔄 AA".into(), None)),
             s if s == "Act_COMPLETED" => return Some((MessageRole::System, "✅ AA".into(), None)),
             "COMPLETE" => return Some((MessageRole::System, format!("✅ SA {}", payload), None)),
@@ -1361,28 +1522,49 @@ impl App {
             }
             ExecutionEventKind::ToolCall(tc) => {
                 let summary = Self::summarize_tool_args(&tc.tool_name, &tc.arguments_json)
-                    .unwrap_or_else(|| width_truncate(&tc.arguments_json, max_cols.saturating_sub(40)));
+                    .unwrap_or_else(|| {
+                        width_truncate(&tc.arguments_json, max_cols.saturating_sub(40))
+                    });
                 let fp = Self::extract_file_path_from_args(&tc.arguments_json);
                 let content = if let Some(ref p) = fp {
-                    format!("⚡ AGENT:{}:TOOL_CALL **{}** {} `{}`", short_role, tc.tool_name, summary, p)
+                    format!(
+                        "⚡ AGENT:{}:TOOL_CALL **{}** {} `{}`",
+                        short_role, tc.tool_name, summary, p
+                    )
                 } else {
-                    format!("⚡ AGENT:{}:TOOL_CALL **{}** {}", short_role, tc.tool_name, summary)
+                    format!(
+                        "⚡ AGENT:{}:TOOL_CALL **{}** {}",
+                        short_role, tc.tool_name, summary
+                    )
                 };
-                Some((MessageRole::System, content, Some(tc.arguments_json.clone())))
+                Some((
+                    MessageRole::System,
+                    content,
+                    Some(tc.arguments_json.clone()),
+                ))
             }
             ExecutionEventKind::ToolResult(tr) => {
                 let preview = Self::summarize_tool_result(&tr.tool_name, &tr.result)
                     .unwrap_or_else(|| width_truncate(&tr.result, max_cols.saturating_sub(40)));
                 let fp = Self::extract_file_path_from_args(&tr.result);
                 let content = if let Some(ref p) = fp {
-                    format!("◆ AGENT:{}:TOOL_RESULT **{}** → {} `{}`", short_role, tr.tool_name, preview, p)
+                    format!(
+                        "◆ AGENT:{}:TOOL_RESULT **{}** → {} `{}`",
+                        short_role, tr.tool_name, preview, p
+                    )
                 } else {
-                    format!("◆ AGENT:{}:TOOL_RESULT **{}** → {}", short_role, tr.tool_name, preview)
+                    format!(
+                        "◆ AGENT:{}:TOOL_RESULT **{}** → {}",
+                        short_role, tr.tool_name, preview
+                    )
                 };
                 Some((MessageRole::System, content, Some(tr.result.clone())))
             }
             ExecutionEventKind::Error(err) => {
-                let content = format!("❌ AGENT:{}:ERROR **{}**: {}", short_role, err.error_type, err.message);
+                let content = format!(
+                    "❌ AGENT:{}:ERROR **{}**: {}",
+                    short_role, err.error_type, err.message
+                );
                 Some((MessageRole::Error, content, None))
             }
             _ => None,
@@ -1405,7 +1587,9 @@ impl App {
 
         match parts[0] {
             "/exit" | "/quit" => self.should_quit = true,
-            "/help" => self.add_msg(MessageRole::System, "\
+            "/help" => self.add_msg(
+                MessageRole::System,
+                "\
 **Commands**\n\
 `/model <name>`  - Switch model\n\
 `/apikey <key>`  - Set API key\n\
@@ -1423,25 +1607,39 @@ impl App {
 `Ctrl+W` - Delete word\n\
 `\u{2190} \u{2192}`    - Move cursor\n\
 `Home`   - Line start\n\
-`End`    - Line end".to_string()),
+`End`    - Line end"
+                    .to_string(),
+            ),
             "/model" if parts.len() > 1 => {
                 if self.is_processing {
-                    self.add_msg(MessageRole::Error, "Cannot change model while processing".to_string());
+                    self.add_msg(
+                        MessageRole::Error,
+                        "Cannot change model while processing".to_string(),
+                    );
                     return;
                 }
                 let new_model = parts[1].trim().to_string();
-                let result = self.engine.blocking_lock().rebuild_with_model(new_model.clone());
+                let result = self
+                    .engine
+                    .blocking_lock()
+                    .rebuild_with_model(new_model.clone());
                 match result {
                     Ok(_) => {
                         self.model_name = new_model;
-                        self.add_msg(MessageRole::System, format!("Model: **{}**", self.model_name));
+                        self.add_msg(
+                            MessageRole::System,
+                            format!("Model: **{}**", self.model_name),
+                        );
                     }
                     Err(e) => self.add_msg(MessageRole::Error, format!("Error: {}", e)),
                 }
             }
             "/apikey" if parts.len() > 1 => {
                 if self.is_processing {
-                    self.add_msg(MessageRole::Error, "Cannot change API key while processing".to_string());
+                    self.add_msg(
+                        MessageRole::Error,
+                        "Cannot change API key while processing".to_string(),
+                    );
                     return;
                 }
                 let new_key = parts[1].trim().to_string();
@@ -1453,22 +1651,35 @@ impl App {
             }
             "/apiurl" if parts.len() > 1 => {
                 if self.is_processing {
-                    self.add_msg(MessageRole::Error, "Cannot change API URL while processing".to_string());
+                    self.add_msg(
+                        MessageRole::Error,
+                        "Cannot change API URL while processing".to_string(),
+                    );
                     return;
                 }
                 let new_url = parts[1].trim().to_string();
-                let result = self.engine.blocking_lock().rebuild_with_api_url(new_url.clone());
+                let result = self
+                    .engine
+                    .blocking_lock()
+                    .rebuild_with_api_url(new_url.clone());
                 match result {
                     Ok(_) => self.add_msg(MessageRole::System, format!("API URL: **{}**", new_url)),
                     Err(e) => self.add_msg(MessageRole::Error, format!("Error: {}", e)),
                 }
             }
-            "/clear" => { self.messages.clear(); self.status_events.clear(); }
+            "/clear" => {
+                self.messages.clear();
+                self.status_events.clear();
+            }
             "/stats" => {
                 let (key_masked, api_url) = {
                     let engine = self.engine.blocking_lock();
                     let key_masked = if engine.api_key().len() > 8 {
-                        format!("{}...{}", &engine.api_key()[..4], &engine.api_key()[engine.api_key().len()-4..])
+                        format!(
+                            "{}...{}",
+                            &engine.api_key()[..4],
+                            &engine.api_key()[engine.api_key().len() - 4..]
+                        )
                     } else {
                         "***".to_string()
                     };
@@ -1480,7 +1691,10 @@ impl App {
                 );
                 self.add_msg(MessageRole::System, msg);
             }
-            _ => self.add_msg(MessageRole::Error, format!("Unknown: `{}`. Try `/help`.", parts[0])),
+            _ => self.add_msg(
+                MessageRole::Error,
+                format!("Unknown: `{}`. Try `/help`.", parts[0]),
+            ),
         }
     }
 
@@ -1519,15 +1733,31 @@ impl App {
 
     fn render_status_bar(&self, f: &mut Frame, area: Rect) {
         let pc = match self.current_phase.as_str() {
-            "SA" => Color::Blue, "PA" => Color::Cyan,
-            "DA" => Color::Magenta, "CA" => Color::Yellow,
-            "AA" => Color::Green, _ => Color::DarkGray,
+            "SA" => Color::Blue,
+            "PA" => Color::Cyan,
+            "DA" => Color::Magenta,
+            "CA" => Color::Yellow,
+            "AA" => Color::Green,
+            _ => Color::DarkGray,
         };
-        let sc = if self.is_processing { Color::Yellow } else { Color::Green };
-        let dot = if self.is_processing { "\u{25CF}" } else { "\u{25CB}" };
+        let sc = if self.is_processing {
+            Color::Yellow
+        } else {
+            Color::Green
+        };
+        let dot = if self.is_processing {
+            "\u{25CF}"
+        } else {
+            "\u{25CB}"
+        };
 
         // Fixed prefix width: dot + Ready/Running + separators + Model + Phase
-        let status_w = if self.is_processing { " Running " } else { " Ready " }.width();
+        let status_w = if self.is_processing {
+            " Running "
+        } else {
+            " Ready "
+        }
+        .width();
         let prefix_w = 1 + 1 + status_w + 1 + 8 + self.model_name.width() + 2 + 8 + 6 + 2 + 12;
         let max_path_w = (area.width as usize).saturating_sub(prefix_w);
         let workspace_display = width_truncate(&self.workspace_path, max_path_w);
@@ -1537,13 +1767,28 @@ impl App {
             Paragraph::new(Line::from(vec![
                 Span::styled(dot, Style::default().fg(sc).add_modifier(Modifier::BOLD)),
                 Span::raw(" "),
-                Span::styled(if self.is_processing { " Running " } else { " Ready " }, Style::default().fg(sc)),
+                Span::styled(
+                    if self.is_processing {
+                        " Running "
+                    } else {
+                        " Ready "
+                    },
+                    Style::default().fg(sc),
+                ),
                 Span::styled("|", Style::default().fg(Color::DarkGray)),
                 Span::raw(" Model: "),
-                Span::styled(&self.model_name, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    &self.model_name,
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" |", Style::default().fg(Color::DarkGray)),
                 Span::raw(" Phase: "),
-                Span::styled(format!("{:<6}", self.current_phase), Style::default().fg(pc).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{:<6}", self.current_phase),
+                    Style::default().fg(pc).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" |", Style::default().fg(Color::DarkGray)),
                 Span::raw(" Workspace: "),
                 Span::styled(workspace_display, Style::default().fg(Color::Green)),
@@ -1580,8 +1825,14 @@ impl App {
             };
             all_lines.push(Line::from(vec![
                 Span::styled(expand_marker, Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("[{}] ", msg.timestamp), Style::default().fg(Color::DarkGray)),
-                Span::styled(prefix, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("[{}] ", msg.timestamp),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    prefix,
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
             ]));
             line_map.push((idx, msg.can_expand));
 
@@ -1625,13 +1876,27 @@ impl App {
                                     if let Some(tool_end) = body.find("**") {
                                         let tool_name = &body[..tool_end];
                                         let after_tool = &body[tool_end + 2..];
-                                        spans.push(Span::styled(tool_name.to_string(), Style::default().fg(tool_color(tool_name)).add_modifier(Modifier::BOLD)));
-                                        spans.push(Span::styled(after_tool.to_string(), Style::default().fg(Color::White)));
+                                        spans.push(Span::styled(
+                                            tool_name.to_string(),
+                                            Style::default()
+                                                .fg(tool_color(tool_name))
+                                                .add_modifier(Modifier::BOLD),
+                                        ));
+                                        spans.push(Span::styled(
+                                            after_tool.to_string(),
+                                            Style::default().fg(Color::White),
+                                        ));
                                     } else {
-                                        spans.push(Span::styled(rest.to_string(), Style::default().fg(Color::White)));
+                                        spans.push(Span::styled(
+                                            rest.to_string(),
+                                            Style::default().fg(Color::White),
+                                        ));
                                     }
                                 } else {
-                                    spans.push(Span::styled(rest.to_string(), Style::default().fg(Color::White)));
+                                    spans.push(Span::styled(
+                                        rest.to_string(),
+                                        Style::default().fg(Color::White),
+                                    ));
                                 }
                             }
                             all_lines.push(Line::from(spans));
@@ -1648,7 +1913,10 @@ impl App {
                     let mut spans = spans;
                     if !rest.is_empty() {
                         spans.push(Span::raw(" "));
-                        spans.push(Span::styled(rest.to_string(), Style::default().fg(Color::White)));
+                        spans.push(Span::styled(
+                            rest.to_string(),
+                            Style::default().fg(Color::White),
+                        ));
                     }
                     all_lines.push(Line::from(spans));
                     line_map.push((idx, false));
@@ -1712,10 +1980,15 @@ impl App {
         *self.panel_start.borrow_mut() = start_line;
 
         f.render_widget(Clear, area);
-        let block = Block::default().borders(Borders::ALL)
+        let block = Block::default()
+            .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray))
             .title(format!(" Messages ({}) [{}%] ", self.messages.len(), pct))
-            .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+            .title_style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
         f.render_widget(
             Paragraph::new(Text::from(visible))
                 .block(block.clone())
@@ -1736,7 +2009,10 @@ impl App {
                 .style(Style::default().fg(Color::DarkGray));
             f.render_stateful_widget(
                 scrollbar,
-                area.inner(Margin { vertical: 1, horizontal: 0 }),
+                area.inner(Margin {
+                    vertical: 1,
+                    horizontal: 0,
+                }),
                 &mut sb_state,
             );
         }
@@ -1787,27 +2063,49 @@ impl App {
 
         let mut lines: Vec<Line<'static>> = Vec::with_capacity(content_h);
 
-        lines.push(Line::from(vec![Span::styled(fw("Session ID"), Style::default().fg(Color::DarkGray))]));
-        lines.push(Line::from(vec![Span::styled(fw(sid), Style::default().fg(Color::Cyan))]));
         lines.push(Line::from(vec![Span::styled(
-            fw(&format!("Turns:{:>5} Tools:{:>5}", self.session_turn_count, self.session_tool_call_count)),
+            fw("Session ID"),
+            Style::default().fg(Color::DarkGray),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            fw(sid),
+            Style::default().fg(Color::Cyan),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            fw(&format!(
+                "Turns:{:>5} Tools:{:>5}",
+                self.session_turn_count, self.session_tool_call_count
+            )),
             Style::default().fg(Color::White),
         )]));
         lines.push(Line::from(vec![Span::styled(
-            fw(&format!("L1: {}", self.mem_ratio(self.l1_count, self.max_l1_mb))),
+            fw(&format!(
+                "L1: {}",
+                self.mem_ratio(self.l1_count, self.max_l1_mb)
+            )),
             Style::default().fg(Color::Yellow),
         )]));
         lines.push(Line::from(vec![Span::styled(
-            fw(&format!("L2: {}", self.fmt_l2(self.l2_count, self.max_l2_mb))),
+            fw(&format!(
+                "L2: {}",
+                self.fmt_l2(self.l2_count, self.max_l2_mb)
+            )),
             Style::default().fg(Color::Yellow),
         )]));
         lines.push(Line::from(vec![Span::styled(
-            fw(&format!("L3: {}", self.mem_ratio(self.l3_count, self.max_l3_mb))),
+            fw(&format!(
+                "L3: {}",
+                self.mem_ratio(self.l3_count, self.max_l3_mb)
+            )),
             Style::default().fg(Color::Yellow),
         )]));
         lines.push(Line::from(vec![Span::styled(
-            fw(&format!("Total:{:>8}  P:{:>8}  C:{:>8}",
-                fmt_k(self.total_tokens), fmt_k(self.prompt_tok), fmt_k(self.completion_tok))),
+            fw(&format!(
+                "Total:{:>8}  P:{:>8}  C:{:>8}",
+                fmt_k(self.total_tokens),
+                fmt_k(self.prompt_tok),
+                fmt_k(self.completion_tok)
+            )),
             Style::default().fg(Color::White),
         )]));
         // 当前上下文用量 = 最后一次 API 调用的 prompt 体量
@@ -1821,17 +2119,43 @@ impl App {
         } else {
             format!("{:.0}%", ctx_pct)
         };
-        let fg = if ctx_pct > 50.0 { Color::Red } else if ctx_pct > 30.0 { Color::Yellow } else { Color::White };
-        lines.push(Line::from(vec![
-            Span::styled(fw(&format!("Ctx:{:>8}/{:>8} ({:>5})  ↑{:>8}↓{:>8}",
+        // 计算 prompt/completion delta（与上一帧的变化），用箭头表示增减方向
+        let p_delta = self.last_prompt_tok as i64 - self.prev_last_prompt_tok as i64;
+        let c_delta = self.last_completion_tok as i64 - self.prev_last_completion_tok as i64;
+        let (p_arrow, p_val) = if p_delta > 0 {
+            ("↑", fmt_k(p_delta as u64))
+        } else if p_delta < 0 {
+            ("↓", fmt_k((-p_delta) as u64))
+        } else {
+            (" ", String::new())
+        };
+        let (c_arrow, c_val) = if c_delta > 0 {
+            ("↑", fmt_k(c_delta as u64))
+        } else if c_delta < 0 {
+            ("↓", fmt_k((-c_delta) as u64))
+        } else {
+            (" ", String::new())
+        };
+        let fg = if ctx_pct > 50.0 {
+            Color::Red
+        } else if ctx_pct > 30.0 {
+            Color::Yellow
+        } else {
+            Color::White
+        };
+        lines.push(Line::from(vec![Span::styled(
+            fw(&format!(
+                "Ctx:{:>8}/{:>8} ({:>5})  {:>1}{:>8} {:>1}{:>8}",
                 fmt_k(self.last_prompt_tok),
                 fmt_k_short(self.context_limit),
                 ctx_label,
-                fmt_k(self.last_prompt_tok),
-                fmt_k(self.last_completion_tok))),
-                Style::default().fg(fg),
-            ),
-        ]));
+                p_arrow,
+                p_val,
+                c_arrow,
+                c_val
+            )),
+            Style::default().fg(fg),
+        )]));
 
         // 用空行填充剩余空间，确保 Clear + 固定宽度占位符消除字符残留
         while lines.len() < content_h {
@@ -1842,11 +2166,18 @@ impl App {
         f.render_widget(Clear, area);
         f.render_widget(
             Paragraph::new(Text::from(lines))
-            // 左侧紧邻 messages 面板的右边框，不再重复绘制左边框
-            .block(Block::default().borders(Borders::ALL.difference(Borders::LEFT))
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Stats ")
-                .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
+                // 左侧紧邻 messages 面板的右边框，不再重复绘制左边框
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL.difference(Borders::LEFT))
+                        .border_style(Style::default().fg(Color::DarkGray))
+                        .title(" Stats ")
+                        .title_style(
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                ),
             area,
         );
     }
@@ -1856,13 +2187,22 @@ impl App {
         let max = (area.height.saturating_sub(2)).max(1) as usize;
         // 固定宽度填充，防止 ratatui diff 字符残留
         let fw = |s: &str| -> String { pad_to_width(s, cw) };
-        let mut items: Vec<ListItem> = self.status_events.iter().rev().take(max).map(|ev| {
-            let (ic, clr) = event_icon(&ev.event_type);
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("{} ", ic), Style::default().fg(clr)),
-                Span::styled(fw(&format!("{} {}", ev.event_type, ev.payload)), Style::default().fg(Color::DarkGray)),
-            ]))
-        }).collect();
+        let mut items: Vec<ListItem> = self
+            .status_events
+            .iter()
+            .rev()
+            .take(max)
+            .map(|ev| {
+                let (ic, clr) = event_icon(&ev.event_type);
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{} ", ic), Style::default().fg(clr)),
+                    Span::styled(
+                        fw(&format!("{} {}", ev.event_type, ev.payload)),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]))
+            })
+            .collect();
 
         // 用空行填充到固定高度，避免帧间内容变化导致字符残留
         while items.len() < max {
@@ -1871,11 +2211,17 @@ impl App {
 
         f.render_widget(Clear, area);
         f.render_widget(
-            List::new(items).block(Block::default()
-                .borders(Borders::ALL.difference(Borders::LEFT))
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Events ")
-                .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
+            List::new(items).block(
+                Block::default()
+                    .borders(Borders::ALL.difference(Borders::LEFT))
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(" Events ")
+                    .title_style(
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+            ),
             area,
         );
     }
@@ -1896,10 +2242,17 @@ impl App {
             Paragraph::new(full_text.as_str())
                 .style(style)
                 .wrap(Wrap { trim: false })
-                .block(Block::default().borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray))
-                    .title(title)
-                    .title_style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM))),
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::DarkGray))
+                        .title(title)
+                        .title_style(
+                            Style::default()
+                                .fg(Color::DarkGray)
+                                .add_modifier(Modifier::DIM),
+                        ),
+                ),
             area,
         );
 
@@ -1912,10 +2265,7 @@ impl App {
         let col = visual_pos % content_w;
         let content_h = (area.height.saturating_sub(2)).max(1) as usize;
         let row = row.min(content_h.saturating_sub(1));
-        f.set_cursor_position((
-            area.x + 1 + col as u16,
-            area.y + 1 + row as u16,
-        ));
+        f.set_cursor_position((area.x + 1 + col as u16, area.y + 1 + row as u16));
     }
 
     fn render_log_panel(&self, f: &mut Frame, area: Rect) {
@@ -1928,7 +2278,11 @@ impl App {
             .title(" Log ")
             .borders(Borders::TOP)
             .border_style(Style::default().fg(Color::DarkGray))
-            .title_style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM));
+            .title_style(
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            );
         let inner = block.inner(area);
         f.render_widget(block, area);
 
@@ -2030,7 +2384,13 @@ fn strip_log_prefix(s: &str) -> String {
     let s = strip_ansi_escapes(s);
     // ISO 时间戳 + 可选 <module> + 空格 + LEVEL → 提取 LEVEL 之后的内容
     // 例如: "2026-06-12T11:14:14.6382504333<module>    WARN     [tool] ..."
-    if let Some(level_end) = s.rfind("WARN").or_else(|| s.rfind("INFO")).or_else(|| s.rfind("ERRO")).or_else(|| s.rfind("DEBG")).or_else(|| s.rfind("TRACE")) {
+    if let Some(level_end) = s
+        .rfind("WARN")
+        .or_else(|| s.rfind("INFO"))
+        .or_else(|| s.rfind("ERRO"))
+        .or_else(|| s.rfind("DEBG"))
+        .or_else(|| s.rfind("TRACE"))
+    {
         let after_level = &s[level_end + 4..].trim_start();
         if !after_level.is_empty() {
             return after_level.to_string();
@@ -2099,7 +2459,8 @@ fn extract_expand_content(raw: &str) -> String {
             }
 
             if let Some(serde_json::Value::Array(arr)) = obj.get("lines") {
-                let joined: Vec<String> = arr.iter()
+                let joined: Vec<String> = arr
+                    .iter()
                     .filter_map(|v| v.as_str().map(String::from))
                     .collect();
                 if !joined.is_empty() {
@@ -2111,7 +2472,8 @@ fn extract_expand_content(raw: &str) -> String {
                 return s.clone();
             }
 
-            serde_json::to_string_pretty(&serde_json::Value::Object(obj.clone())).unwrap_or_else(|_| raw.to_string())
+            serde_json::to_string_pretty(&serde_json::Value::Object(obj.clone()))
+                .unwrap_or_else(|_| raw.to_string())
         }
         Some(other) => serde_json::to_string_pretty(&other).unwrap_or_else(|_| raw.to_string()),
         None => raw.to_string(),

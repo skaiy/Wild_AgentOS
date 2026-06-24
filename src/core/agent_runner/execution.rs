@@ -1232,7 +1232,7 @@ impl super::AgentRunner {
                     }
 
                     info!("AgentRunner 完成: {} turns, {} tools", turn, tc);
-                    debug!("[L0] L0 entries: {}", self.l0_store.count());
+                    debug!("[L0] L0 entries: {}", self.l0_store.count().unwrap_or(0));
 
                     let final_summary = parsed.summary.clone()
                         .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content));
