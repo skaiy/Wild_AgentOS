@@ -36,7 +36,7 @@ fn test_gateway_default_model() {
 
 #[test]
 fn test_gateway_set_model_mapping() {
-    let mut gateway = UnifiedGateway::new(&test_gateway_settings()).unwrap();
+    let gateway = UnifiedGateway::new(&test_gateway_settings()).unwrap();
     gateway.set_model_mapping("custom_task".to_string(), "deepseek-v4-pro".to_string());
     assert_eq!(gateway.get_model("custom_task"), "deepseek-v4-pro");
 }

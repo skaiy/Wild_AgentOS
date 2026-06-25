@@ -17,9 +17,10 @@
 
 [**中文**] · [**English**](README.md) · [**设计细节 →**](docs/DESIGN_DETAIL.zh.md)
 [**medium URL**](https://medium.com/@doiito-sun)
-[**中文思否博客地址**](https://segmentfault.com/u/chenwendejiezi_bn4i4z/articles)
-[**中文CSDN博客地址**](https://blog.csdn.net/2604_96270735)
-[**B站播客地址**](https://space.bilibili.com/1547455799/lists)
+[**中文稀土掘金**](https://juejin.cn/column/7647868075887165450)
+[**中文思否博客**](https://segmentfault.com/u/doiito/articles)
+[**中文CSDN博客**](https://blog.csdn.net/2604_96270735)
+[**B站播客**](https://space.bilibili.com/1547455799/lists)
 
 </div>
 

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use tonic::{Request, Response, Status};
-use tokio_stream::{Stream, StreamExt};
+use tokio_stream::Stream;
 use tokio::sync::{mpsc, RwLock};
 
 use crate::batch::manager::BatchAgentManager;
@@ -607,7 +607,7 @@ impl seapp::se_kernel_service_server::SeKernelService for AgentOSService {
         let sa_settings = settings.clone();
         let prompt = req.prompt.clone();
         let task_iri_for_task = task_iri.clone();
-        let tx_for_task = tx.clone();
+        let _tx_for_task = tx.clone();
         let event_bus_for_task = self.event_bus.clone();
 
         tokio::spawn(async move {

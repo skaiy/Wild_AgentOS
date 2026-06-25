@@ -91,7 +91,6 @@ fn classify_language(ext: &str) -> &'static str {
         "java" => "java",
         "c" | "h" => "c",
         "cpp" | "hpp" | "cc" | "cxx" => "cpp",
-        "rs" => "rust",
         "rb" => "ruby",
         "php" => "php",
         "swift" => "swift",
@@ -340,7 +339,7 @@ impl FileInventory {
         } else {
             // Entry doesn't exist yet — add a minimal placeholder
             drop(mem);
-            let mut minimal = FileEntry {
+            let minimal = FileEntry {
                 path: path.to_string(),
                 file_size: 0,
                 file_ext: Path::new(path)

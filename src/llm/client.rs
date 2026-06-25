@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tracing::info;
 
 use crate::gateway::unified_gateway::{
-    ChatCompletionResponse, ChatMessage, ResponseToolCall, UnifiedGateway,
+    ChatCompletionResponse, ChatMessage, UnifiedGateway,
 };
 use crate::llm::message::Message;
 use crate::llm::response_parser::{self, LLMResponse, ToolCall};

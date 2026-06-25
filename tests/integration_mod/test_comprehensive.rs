@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use glidinghorse::core::agent_instance::{AgentRole, AgentStatus};
+use glidinghorse::core::agent_instance::AgentRole;
 use glidinghorse::core::sa::{SupervisorAgent, TaskComplexity};
 use glidinghorse::core::event_bus::EventBus;
 use glidinghorse::gateway::UnifiedGateway;
@@ -17,7 +17,6 @@ use glidinghorse::config::GatewaySettings;
 use glidinghorse::config::settings::LoggingSettings;
 use glidinghorse::utils::init_logging;
 use glidinghorse::CoreConfig;
-use serde_json::json;
 
 static LOGGING_INITIALIZED: std::sync::Once = std::sync::Once::new();
 

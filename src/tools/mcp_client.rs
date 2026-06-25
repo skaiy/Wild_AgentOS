@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -9,7 +8,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tracing::{debug, info, warn};
 use reqwest::Client;
 
-use crate::config::{McpServerConfig, McpStdioServerConfig, McpRemoteServerConfig};
+use crate::config::{McpServerConfig, McpStdioServerConfig};
 use crate::CoreError;
 
 static JSON_RPC_VERSION: &str = "2.0";

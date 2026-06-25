@@ -4,7 +4,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::batch::vocabulary::{EntityTypeConfig, IntentTypeConfig, RelationTypeConfig};
-use crate::batch::error::BatchError;
 
 // ============================================================
 // BatchAgentConfig — serialisable per-agent configuration

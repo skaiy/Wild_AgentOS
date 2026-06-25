@@ -674,7 +674,7 @@ mod tests {
         emitter.emit_token_usage(100, 50, "deepseek-v4-flash", 1);
         emitter.emit_token_usage(200, 100, "deepseek-v4-flash", 2);
 
-        let (turns, tool_calls, tokens) = emitter.get_stats();
+        let (turns, _tool_calls, tokens) = emitter.get_stats();
         assert_eq!(turns, 2);
         assert_eq!(tokens, 450);
     }

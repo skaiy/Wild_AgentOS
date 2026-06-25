@@ -187,7 +187,6 @@ impl UnifiedGraphStore {
                     format!("\"{}\"^^<{}>", value, datatype.as_str())
                 }
             }
-            _ => term.to_string(),
         }
     }
 
@@ -357,6 +356,7 @@ impl UnifiedGraphStore {
         Ok(())
     }
 
+    #[allow(deprecated)]
     pub fn query(&self, sparql: &str) -> Result<SparqlQueryResult, Box<dyn std::error::Error>> {
         debug!(sparql_len = sparql.len(), "Executing SPARQL query");
 
@@ -381,7 +381,6 @@ impl UnifiedGraphStore {
                                 SparqlValue::Literal(lit.value().to_string(), lang)
                             }
                             Term::BlankNode(node) => SparqlValue::BlankNode(node.as_str().to_string()),
-                            _ => SparqlValue::Literal(value.to_string(), None),
                         };
                         row.insert(var.as_str().to_string(), sparql_value);
                     }

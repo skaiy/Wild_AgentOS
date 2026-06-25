@@ -357,7 +357,7 @@ impl WorkspaceMonitor {
                                 serde_json::Value::String(warning.clone()),
                             );
                             // 同时写入 metadata 以便 ToolGuard pre-injection 将其注入 system prompt
-                            let mut injections = ctx.metadata
+                            let injections = ctx.metadata
                                 .entry("guard_pre_injections".to_string())
                                 .or_insert_with(|| serde_json::Value::Array(Vec::new()));
                             if let Some(arr) = injections.as_array_mut() {
@@ -379,7 +379,7 @@ impl WorkspaceMonitor {
                                 serde_json::Value::String(hint.clone()),
                             );
                             // 同时写入 metadata 以便 ToolGuard pre-injection
-                            let mut injections = ctx.metadata
+                            let injections = ctx.metadata
                                 .entry("guard_pre_injections".to_string())
                                 .or_insert_with(|| serde_json::Value::Array(Vec::new()));
                             if let Some(arr) = injections.as_array_mut() {
@@ -443,7 +443,7 @@ impl WorkspaceMonitor {
     }
 
     /// 设置主动感知存储，使 WorkspaceMonitor 能向 Agent 注入文件状态感知数据
-    pub fn with_perception_store(mut self, store: Arc<PerceptionStore>) -> Self {
+    pub fn with_perception_store(self, store: Arc<PerceptionStore>) -> Self {
         *self.perception_store.write() = Some(store);
         self
     }
@@ -970,7 +970,7 @@ mod tests {
 
     #[test]
     fn test_inject_file_perception_with_stale_files() {
-        let (ws, dir) = temp_ws_monitor();
+        let (_ws, dir) = temp_ws_monitor();
         let ps = Arc::new(PerceptionStore::new());
 
         // Can't use with_perception_store after initialize since it consumes self

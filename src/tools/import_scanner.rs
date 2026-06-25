@@ -300,7 +300,7 @@ fn scan_python_imports(content: &str, parent: &Path) -> Vec<DiscoveredImport> {
 // ─── Go ──────────────────────────────────────────────────
 
 fn scan_golang_imports(content: &str, parent: &Path) -> Vec<DiscoveredImport> {
-    let mut results = Vec::new();
+    let results = Vec::new();
 
     // `import "path"` — can't easily distinguish local vs external for Go
     // without module context, so we skip Go for now.

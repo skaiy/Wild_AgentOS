@@ -5,15 +5,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use petgraph::prelude::*;
-use serde_json::Value;
 use tokio::time::{sleep, Duration};
 use tracing::{info, warn};
 
 use super::definition::*;
 use super::loader::*;
 use crate::core::agent_instance::{AgentInstance, AgentRole};
-use crate::core::agent_runner::{AgentRunner, TaskContext, TaskResult};
+use crate::core::agent_runner::{AgentRunner, TaskContext};
 
 /// DAG 执行引擎
 pub struct DagEngine {

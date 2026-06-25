@@ -5,7 +5,6 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 
 use crate::memory::l0_store::L0Store;
 use crate::CoreError;
@@ -369,7 +368,7 @@ pub fn parse_checkpoint_phase(name: &str) -> String {
 pub fn compute_skip_roles_from_phase(name: &str, current_role: Option<&str>) -> Vec<String> {
     // 角色顺序
     let role_order = ["Plan", "Do", "Check", "Act"];
-    let alt_roles = ["PA", "DA", "CA", "AA"];
+    let _alt_roles = ["PA", "DA", "CA", "AA"];
     let all_roles = ["Plan", "Do", "Check", "Act", "PA", "DA", "CA", "AA"];
 
     // 优先使用 current_role

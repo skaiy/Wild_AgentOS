@@ -145,7 +145,7 @@ pub struct ToolGuard {
 
 impl ToolGuard {
     pub fn new() -> Self {
-        let mut guard = Self {
+        let guard = Self {
             pre_injections: Arc::new(RwLock::new(HashMap::new())),
             validations: Arc::new(RwLock::new(HashMap::new())),
             tool_categories: Self::default_tool_categories(),

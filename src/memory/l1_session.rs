@@ -731,7 +731,7 @@ mod tests {
     #[test]
     fn test_eviction_config_with_config() {
         let custom = EvictionConfig { recency_weight: 0.5, relevance_weight: 0.3, cost_weight: 0.2, ..Default::default() };
-        let mut session = L1Session::with_config("agent_1", "DA", "iri://task/abc", 1000, custom);
+        let session = L1Session::with_config("agent_1", "DA", "iri://task/abc", 1000, custom);
         assert!((session.eviction_config().recency_weight - 0.5).abs() < 1e-6);
     }
 
@@ -796,7 +796,7 @@ mod tests {
         session.token_budget = 100;
 
         // 硬阈值淘汰不会移除 is_supplement 条目
-        let evicted = session.evict_with_query(None);
+        let _evicted = session.evict_with_query(None);
         // 补充输入不应该被硬阈值淘汰
         let has_supplement = session.turns.iter().any(|t| t.is_supplement);
         assert!(has_supplement, "supplement should be protected from hard threshold eviction");

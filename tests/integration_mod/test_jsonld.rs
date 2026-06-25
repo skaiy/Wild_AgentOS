@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use glidinghorse::core::validation::{JsonLdValidator, MetaValidator, ValidationEngine};
-use glidinghorse::memory::l2_blackboard::{Blackboard, GraphPermission, Node};
+use glidinghorse::memory::l2_blackboard::{Blackboard, GraphPermission};
 use glidinghorse::memory::l3_projection::ProjectionEngine;
 use glidinghorse::tools::skill_registry::SkillRegistry;
 use glidinghorse::CoreConfig;
@@ -473,7 +473,7 @@ fn test_cache_invalidation() {
     blackboard.write_node("iri://test/cache", &node, &config).unwrap();
     
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let result1 = rt.block_on(async {
+    let _result1 = rt.block_on(async {
         projection.project("iri://test", "reference_only", HashMap::new()).await
     }).unwrap();
     

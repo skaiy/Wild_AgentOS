@@ -5,10 +5,9 @@ use parking_lot::RwLock;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
-use crate::batch::error::BatchError;
 use crate::batch::types::{TriggerConfig, TriggerReason, TriggerType};
 use crate::batch::window::SlidingWindow;
-use crate::core::event_bus::{Event, EventBus};
+use crate::core::event_bus::EventBus;
 
 #[derive(Debug, Clone)]
 pub struct CronSchedule {
@@ -174,7 +173,7 @@ impl TriggerSystem {
                                 "TriggerSystem received custom event"
                             );
                             // Wake up via a trigger on the window
-                            let mut win = window.write();
+                            let win = window.write();
                             // Add a synthetic entry so the window can detect it
                             // Actual re-evaluation is triggered by the manager polling
                             let _ = win;

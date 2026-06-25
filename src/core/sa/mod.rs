@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
@@ -303,7 +301,7 @@ pub struct SupervisorAgent {
 
 impl SupervisorAgent {
     pub fn new(
-        mut runner: Arc<AgentRunner>,
+        runner: Arc<AgentRunner>,
         template_engine: Arc<TemplateEngine>,
         skills: Arc<SkillRegistry>,
         event_bus: Arc<EventBus>,
@@ -1177,7 +1175,7 @@ impl SupervisorAgent {
         cycle_id: &str,
         plan_step: Option<PlanStep>,
     ) -> Result<TaskResult, CoreError> {
-        let mut agent = self.create_agent(role, cycle_id);
+        let agent = self.create_agent(role, cycle_id);
 
         // 从 L2 黑板查询上下文（替代 prev_summary）
         let prev_agent_summary = context.prev_agent_summary.clone();
@@ -1539,7 +1537,7 @@ impl SupervisorAgent {
                 format!("\n\n## 历史经验\n{}", cycle_hints.iter().map(|h| format!("- {}", h)).collect::<Vec<_>>().join("\n"))
             };
             let objective = match (&prev_summary, step.role) {
-                (Some(summary), AgentRole::Plan) => {
+                (Some(_summary), AgentRole::Plan) => {
                     format!("{}\n\n## 用户任务\n{}{}\n\n请为上述用户任务制定详细的执行计划。", step.objective, user_input, hints_block)
                 }
                 (Some(summary), AgentRole::Do) => {
@@ -2287,7 +2285,7 @@ impl SupervisorAgent {
     async fn analyze_anomaly_with_llm(
         &self,
         plan: &crate::perception::proactive_engine::InterventionPlan,
-        task_iri: &str,
+        _task_iri: &str,
     ) -> Result<(InterventionAction, ActionParams), CoreError> {
         use crate::gateway::unified_gateway::ChatMessage;
 

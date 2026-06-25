@@ -4,7 +4,7 @@ use std::convert::Infallible;
 
 use axum::{
     extract::State,
-    http::{StatusCode, header},
+    http::StatusCode,
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse,
@@ -14,13 +14,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio_stream::{Stream, StreamExt};
-use futures::stream;
-use tracing::info;
 
 use crate::core::core_types::SemanticCore;
-use crate::core::event_bus::EventBus;
-use crate::core::execution_event::{ExecutionEvent, ExecutionEventKind};
 use crate::knowledge_graph::rdf_mapper::RdfMapper;
 use crate::knowledge_graph::store::KnowledgeGraphStore;
 use crate::knowledge_graph::types::{EdgeDef, LLMExtractionOutput, NodeDef};
@@ -438,7 +433,7 @@ fn expand_extraction(mut extraction: LLMExtractionOutput) -> LLMExtractionOutput
 
 async fn kg_import_handler(
     State(state): State<Arc<AppState>>,
-    Json(mut req): Json<KgImportRequest>,
+    Json(req): Json<KgImportRequest>,
 ) -> impl IntoResponse {
     let store = state.kg_store.clone();
     let graph_iri = expand_iri(&req.graph);

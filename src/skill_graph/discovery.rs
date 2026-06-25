@@ -4,7 +4,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tracing::{debug, info};
 
-use crate::memory::vector_store::{HybridSearchFilter, VectorStore};
+use crate::memory::vector_store::VectorStore;
 use crate::skill_graph::graph_store::SkillGraphStore;
 use crate::skill_graph::types::*;
 use crate::CoreError;

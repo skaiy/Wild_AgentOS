@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use serde_json::{json, Value};
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, warn};
 
         use crate::core::agent_instance::{AgentInstance, AgentRole, AgentStatus};
 use crate::core::execution_event::{ExecutionEvent, ExecutionEventKind};
@@ -620,7 +620,7 @@ impl super::AgentRunner {
         let mut soft_limit_final_warning_sent = false;
         let mut soft_limit_force_finish = false;
 
-        'react_loop: loop {
+        loop {
             // --- 软限制阶段 1：提前预警（剩余约 8 轮） ---
             if !soft_limit_early_warning_sent && turn >= effective_max_turns.saturating_sub(8) {
                 soft_limit_early_warning_sent = true;

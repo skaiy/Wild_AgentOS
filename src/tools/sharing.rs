@@ -8,7 +8,6 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::tools::sharing_audit::SharingAuditLog;
-use crate::CoreError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ShareType {
@@ -589,7 +588,7 @@ mod tests {
     fn test_share_expiration() {
         let protocol = SharingProtocol::new();
         
-        let refs = protocol.create_share(
+        let _refs = protocol.create_share(
             "iri://agent/pa",
             "iri://agent/da",
             &["iri://task/123/plan".to_string()],

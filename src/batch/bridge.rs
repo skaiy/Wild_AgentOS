@@ -4,7 +4,6 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
-use crate::batch::error::BatchError;
 use crate::core::event_bus::{Event, EventBus};
 
 const BATCH_EVENT_TYPES: &[&str] = &[

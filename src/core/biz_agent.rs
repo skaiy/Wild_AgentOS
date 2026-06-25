@@ -1,15 +1,12 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::core::agent_instance::{AgentInstance, AgentRole, AgentStatus};
 use crate::core::agent_runner::{AgentRunner, TaskContext, TaskResult};
-use crate::memory::l0_store::L0Store;
 use crate::memory::l1_session::L1Session;
-use crate::memory::memory_manager::MemoryManager;
 use crate::CoreError;
 
 /// Agent 配置

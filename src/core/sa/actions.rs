@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::core::event_bus::EventPriority;
@@ -165,13 +164,13 @@ fn get_supplementary_handler(action: &SupplementaryInputAction) -> Option<Supple
                 Ok(())
             })
         })),
-        SupplementaryInputAction::RefineObjective => Some(Box::new(|sa, _action, _params, supplement| {
+        SupplementaryInputAction::RefineObjective => Some(Box::new(|_sa, _action, _params, supplement| {
             Box::pin(async move {
                 info!("补充输入: 细化目标 - {}", supplement);
                 Ok(())
             })
         })),
-        SupplementaryInputAction::ProvideConstraint => Some(Box::new(|sa, _action, _params, supplement| {
+        SupplementaryInputAction::ProvideConstraint => Some(Box::new(|_sa, _action, _params, supplement| {
             Box::pin(async move {
                 info!("补充输入: 提供约束 - {}", supplement);
                 Ok(())

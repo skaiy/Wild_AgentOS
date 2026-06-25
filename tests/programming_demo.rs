@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 测试 API 连通性
     println!("  测试 API...");
-    let test_client = reqwest::Client::builder()
+    let _test_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()?;
     println!("  系统就绪\n");

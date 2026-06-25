@@ -112,7 +112,7 @@ impl MicroToolGenerator {
     }
 
     pub fn generate_read_full_tool(
-        call_id: &str,
+        _call_id: &str,
         storage_key: &str,
         preview_size: usize,
     ) -> MicroToolSchema {

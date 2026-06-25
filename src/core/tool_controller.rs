@@ -1,5 +1,5 @@
 use serde_json::Value;
-use tracing::{debug, warn};
+use tracing::warn;
 
 use crate::core::agent_instance::AgentRole;
 

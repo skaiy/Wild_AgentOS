@@ -885,7 +885,7 @@ impl SkillRegistry {
         let results = blackboard.query(&sparql)?;
         let mut metas = Vec::new();
         for row in &results {
-            if let (Some(iri), Some(name)) = (
+            if let (Some(iri), Some(_name)) = (
                 row.get("iri").and_then(|v| v.as_str()),
                 row.get("name").and_then(|v| v.as_str()),
             ) {

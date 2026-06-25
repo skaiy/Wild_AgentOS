@@ -1,4 +1,3 @@
-use std::sync::Arc;
 
 use crate::memory::l1_session::cosine_similarity;
 

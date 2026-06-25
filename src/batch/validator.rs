@@ -4,7 +4,6 @@ use crate::batch::error::BatchError;
 use crate::batch::types::{
     BatchAgentConfig, ExtractionResult, ExtractedDecision, ExtractedEntity, ExtractedRelation,
 };
-use crate::batch::vocabulary::{EntityTypeConfig, IntentTypeConfig, RelationTypeConfig};
 
 pub struct OutputValidator;
 

@@ -596,7 +596,7 @@ pub(super) async fn execute_file_read(input: Value) -> Result<Value, String> {
                 // 文件不存在 → 自动列出父目录内容，帮助 LLM 快速定位正确文件名
                 let parent = path_obj.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
                 let parent_display = parent.display().to_string();
-                let mut listing = String::new();
+                let mut listing;
                 if let Ok(entries) = std::fs::read_dir(&parent) {
                     let files: Vec<String> = entries
                         .filter_map(|e| e.ok())

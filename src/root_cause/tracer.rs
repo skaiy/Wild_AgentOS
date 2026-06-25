@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use serde_json::{json, Value};
+use serde_json::json;
 
 use super::types::{
     Evidence, RootCauseConfig, RootCauseError, TraceChain, TraceContext, TraceLevel,

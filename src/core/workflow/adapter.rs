@@ -9,7 +9,7 @@ use crate::core::agent_instance::AgentRole;
 use crate::core::sa::{ExecutionPlan, PlanStep};
 
 /// 将 ExecutionPlan 转换为 WorkflowDefinition（可被 DAG 引擎执行）
-pub fn plan_to_workflow(plan: &ExecutionPlan, task_iri: &str) -> WorkflowDefinition {
+pub fn plan_to_workflow(plan: &ExecutionPlan, _task_iri: &str) -> WorkflowDefinition {
     let plan_id = &plan.plan_id;
 
     let mut nodes = Vec::new();
@@ -138,7 +138,7 @@ pub fn is_plan_compatible(_plan: &ExecutionPlan) -> bool {
 pub fn dag_to_execution_plan(
     dag: &WorkflowDag,
     def: &WorkflowDefinition,
-    task_iri: &str,
+    _task_iri: &str,
 ) -> ExecutionPlan {
     let order = crate::core::workflow::loader::topological_order(dag)
         .unwrap_or_else(|_| dag.graph.node_indices().collect::<Vec<_>>());

@@ -81,6 +81,7 @@ impl KnowledgeGraphStore {
         Ok(0)
     }
 
+    #[allow(deprecated)]
     pub fn delete_quads_by_subject_prefix(&self, prefix: &str, graph: &str) -> Result<usize, String> {
         let sparql = format!(
             "SELECT DISTINCT ?s WHERE {{ GRAPH <{}> {{ ?s ?p ?o . FILTER(STRSTARTS(STR(?s), \"{}\")) }} }}",
@@ -111,6 +112,7 @@ impl KnowledgeGraphStore {
         Ok(count)
     }
 
+    #[allow(deprecated)]
     pub fn query_sparql(
         &self,
         sparql: &str,

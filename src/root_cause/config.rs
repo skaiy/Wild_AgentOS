@@ -1,14 +1,7 @@
-/// Configuration for the RootCauseEngine.
-///
-/// Architecture Layer: L1 — Enforcement (RootCauseEngine)
-///
-/// Default impl is in types.rs alongside the struct definition.
-
-use super::types::RootCauseConfig;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
 
     #[test]
     fn test_default_config() {

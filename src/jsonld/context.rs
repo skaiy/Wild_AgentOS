@@ -172,7 +172,7 @@ pub fn map_field_to_iri(field: &str) -> String {
 }
 
 /// 创建 Skill 专用的 @context（追加 skill_name / skill_version）
-pub fn create_context_for_skill(skill_name: &str, skill_version: &str) -> HashMap<String, serde_json::Value> {
+pub fn create_context_for_skill(_skill_name: &str, _skill_version: &str) -> HashMap<String, serde_json::Value> {
     let ctx = JsonLdContext::context_value();
     let mut context: HashMap<String, Value> = ctx
         .as_object()

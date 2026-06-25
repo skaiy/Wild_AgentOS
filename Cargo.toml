@@ -3,6 +3,10 @@ name = "glidinghorse"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
 [features]
 default = []
 # Ontology fusion base (SHACL, reason, align, drift, lifecycle)

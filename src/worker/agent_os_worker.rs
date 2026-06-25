@@ -173,7 +173,7 @@ impl AgentOsWorker {
             )
         ));
         
-        let mut hook_manager = HookManager::new();
+        let hook_manager = HookManager::new();
         let mut approval_notifier = None;
         
         if let Some(ref approval_cfg) = config.approval_config {

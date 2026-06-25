@@ -97,9 +97,11 @@ pub struct App {
     /// 最后一次 API 调用的 token 数（单次，非累计）
     last_prompt_tok: u64,
     last_completion_tok: u64,
-    /// 上一次渲染时的值，用于计算 delta
+    /// 上一帧 prompt token 值（用于计算 delta）
     prev_last_prompt_tok: u64,
-    prev_last_completion_tok: u64,
+    /// delta 显示状态：变化时更新，无变化时保持（避免闪烁）
+    display_delta_arrow: RefCell<String>,
+    display_delta_val: RefCell<String>,
     /// 模型上下文窗口上限（用于计算占比）
     context_limit: u64,
     /// Checkpoint 恢复的 token 基数（resume 模式下使用）
@@ -614,7 +616,8 @@ impl App {
             last_prompt_tok: 0,
             last_completion_tok: 0,
             prev_last_prompt_tok: 0,
-            prev_last_completion_tok: 0,
+            display_delta_arrow: RefCell::new(String::new()),
+            display_delta_val: RefCell::new(String::new()),
             context_limit,
             resume_prompt_base: 0,
             resume_completion_base: 0,
@@ -871,9 +874,8 @@ impl App {
                 self.prompt_tok = current_prompt;
                 self.completion_tok = current_completion;
             }
-            // 保存旧值用于计算 delta，再更新为最新值
+            // 保存旧值用于计算 delta
             self.prev_last_prompt_tok = self.last_prompt_tok;
-            self.prev_last_completion_tok = self.last_completion_tok;
             self.last_prompt_tok = self
                 .last_prompt_tokens
                 .load(std::sync::atomic::Ordering::Relaxed);
@@ -2119,23 +2121,16 @@ impl App {
         } else {
             format!("{:.0}%", ctx_pct)
         };
-        // 计算 prompt/completion delta（与上一帧的变化），用箭头表示增减方向
+        // prompt delta：变化时更新持久显示，无变化时保持旧值（避免闪烁）
         let p_delta = self.last_prompt_tok as i64 - self.prev_last_prompt_tok as i64;
-        let c_delta = self.last_completion_tok as i64 - self.prev_last_completion_tok as i64;
-        let (p_arrow, p_val) = if p_delta > 0 {
-            ("↑", fmt_k(p_delta as u64))
+        if p_delta > 0 {
+            *self.display_delta_arrow.borrow_mut() = "↑".to_string();
+            *self.display_delta_val.borrow_mut() = fmt_k(p_delta as u64);
         } else if p_delta < 0 {
-            ("↓", fmt_k((-p_delta) as u64))
-        } else {
-            (" ", String::new())
-        };
-        let (c_arrow, c_val) = if c_delta > 0 {
-            ("↑", fmt_k(c_delta as u64))
-        } else if c_delta < 0 {
-            ("↓", fmt_k((-c_delta) as u64))
-        } else {
-            (" ", String::new())
-        };
+            *self.display_delta_arrow.borrow_mut() = "↓".to_string();
+            *self.display_delta_val.borrow_mut() = fmt_k((-p_delta) as u64);
+        }
+        // p_delta == 0: 保持当前显示不变
         let fg = if ctx_pct > 50.0 {
             Color::Red
         } else if ctx_pct > 30.0 {
@@ -2145,14 +2140,12 @@ impl App {
         };
         lines.push(Line::from(vec![Span::styled(
             fw(&format!(
-                "Ctx:{:>8}/{:>8} ({:>5})  {:>1}{:>8} {:>1}{:>8}",
+                "Ctx:{:>8}/{:>8} ({:>5})  {}{}",
                 fmt_k(self.last_prompt_tok),
                 fmt_k_short(self.context_limit),
                 ctx_label,
-                p_arrow,
-                p_val,
-                c_arrow,
-                c_val
+                self.display_delta_arrow.borrow(),
+                self.display_delta_val.borrow()
             )),
             Style::default().fg(fg),
         )]));

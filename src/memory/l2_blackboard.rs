@@ -416,6 +416,7 @@ impl Blackboard {
         Ok(())
     }
 
+    #[allow(deprecated)]
     pub fn query(&self, sparql: &str) -> Result<Vec<serde_json::Value>, CoreError> {
         let results = self.store.query(sparql)?;
         let mut values = Vec::new();

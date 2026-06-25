@@ -156,6 +156,7 @@ impl IriRegistry {
     }
 
     /// 按命名空间查询所有注册的 IRI
+    #[allow(deprecated)]
     pub fn resolve_by_namespace(&self, namespace: &str) -> Vec<EntityLocation> {
         let sparql = format!(
             "SELECT ?iri WHERE {{
@@ -197,6 +198,7 @@ impl IriRegistry {
     }
 
     /// 按实体类型查询
+    #[allow(deprecated)]
     pub fn resolve_by_type(&self, entity_type: &str) -> Vec<EntityLocation> {
         let sparql = format!(
             "SELECT ?iri WHERE {{
@@ -237,6 +239,7 @@ impl IriRegistry {
     }
 
     /// 检测所有重复 IRI（同一 @id 出现在多个 Named Graph）
+    #[allow(deprecated)]
     pub fn find_duplicates(&self) -> Vec<IriConflict> {
         let sparql = format!(
             "SELECT ?iri (COUNT(DISTINCT ?namedGraph) AS ?graphCount) WHERE {{
@@ -296,6 +299,7 @@ impl IriRegistry {
             .map_err(|e| format!("SPARQL INSERT 失败: {}", e))
     }
 
+    #[allow(deprecated)]
     fn query_store(&self, iri: &str) -> Result<Vec<EntityLocation>, String> {
         let sparql = format!(
             "SELECT ?namespace ?namedGraph ?storageLayer ?entityType ?createdAt WHERE {{

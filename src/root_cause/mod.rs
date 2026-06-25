@@ -132,7 +132,7 @@ impl RootCauseEngine {
     /// Registers:
     /// 1. `TaskError` → auto-trace (priority 90, run before other error handlers)
     /// 2. `PhaseEnd` → check unresolved traces before allowing DO→next phase (priority 50)
-    pub fn register_hooks(&self, hook_manager: &HookManager, agent_id: &str) {
+    pub fn register_hooks(&self, hook_manager: &HookManager, _agent_id: &str) {
         let engine = Arc::new(self.clone_inner());
 
         // Hook 1: TaskError → auto traceback (synchronous)

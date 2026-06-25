@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
 use serde_json::{json, Value};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, warn};
 
 use crate::core::agent_instance::{AgentInstance, AgentRole, AgentStatus};
 use crate::gateway::unified_gateway::ChatMessage;
@@ -499,7 +499,7 @@ impl super::AgentRunner {
         &self,
         agent: &mut AgentInstance,
         ctx: TaskContext,
-        mut on_event: F,
+        on_event: F,
     ) -> Result<TaskResult, CoreError>
     where
         F: FnMut(&crate::llm::StreamEvent) + Send,
@@ -1144,7 +1144,7 @@ impl super::AgentRunner {
 
     /// 将微工具数据同时写入内存和 L0 持久化存储
     fn store_micro_tool_data_persistent(&self, storage_key: &str, data: serde_json::Value) {
-        let mut exe = self.tool_executor.write().unwrap_or_else(|e| {
+        let exe = self.tool_executor.write().unwrap_or_else(|e| {
             warn!("ToolExecutor 写锁中毒 (store_micro_tool_data): {}", e);
             e.into_inner()
         });

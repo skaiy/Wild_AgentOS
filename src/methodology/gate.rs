@@ -1,28 +1,3 @@
-/// MethodologyGate (L2 Enforcement) — Activation, anti-pattern checks, and persuasion injection.
-///
-/// The MethodologyGate evaluates activation conditions against runtime context,
-/// tracks active methodologies, and provides red flag warnings, anti-pattern
-/// gate checks, and persuasion directives for system prompt injection.
-///
-/// Architecture Layer: L2/L1 boundary — Methodology (On-Demand) + Enforcement (Code)
-/// See design: PR-res/superpowers-skills-full-integration-design.md §2
-///
-/// ## Data Flow
-///
-/// ```text
-/// HookManager → on_hook_trigger() → evaluate ActivationConditions
-///                                   ↓
-///                          active_methodologies[]
-///                                   ↓
-///     ┌─────────────────────┬──────────────────┬──────────────────┐
-///     ↓                     ↓                  ↓                  ↓
-///  red_flags()    anti_pattern_gates()   persuasive()    rationalizations()
-///     ↓                     ↓                  ↓                  ↓
-///  SystemPrompt        ToolGuard          SystemPrompt     SystemPrompt
-///  (warnings)         (pre-block)        (framing)        (self-check)
-/// ```
-
-use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -30,9 +5,8 @@ use tracing::debug;
 
 use crate::core::constitution::{ActivationCondition, ConstitutionRegistry};
 use crate::methodology::{
-    evolution::{EvolutionEngineHandle, ViolationReporter},
-    AntiPatternEntry, MethodologyDefinition, MethodologyRegistry,
-    RedFlagEntry, RedFlagSeverity, MethodologyType,
+    evolution::{EvolutionEngineHandle, ViolationReporter}, MethodologyDefinition, MethodologyRegistry,
+    RedFlagEntry, MethodologyType,
 };
 use crate::tools::hooks::{FunctionHook, HookContext, HookManager, HookPoint, HookResult};
 use crate::tools::tool_guard::ToolCategory;
@@ -881,7 +855,7 @@ impl crate::core::constitution::ConstitutionRole {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::constitution::ConstitutionRole;
+    
 
     fn test_gate() -> MethodologyGate {
         MethodologyGate::new(MethodologyRegistry::new())

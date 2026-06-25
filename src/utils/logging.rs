@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use tracing_subscriber::{
     fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
 };

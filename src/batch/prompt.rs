@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use tracing::{debug, warn};
+use tracing::warn;
 
 use crate::batch::error::BatchError;
 use crate::batch::types::{
-    BatchAgentConfig, EmphasisItem, PromptContext, PromptSource, WindowEntry,
+    BatchAgentConfig, PromptContext, PromptSource, WindowEntry,
 };
 use crate::batch::vocabulary::{EntityTypeConfig, IntentTypeConfig, RelationTypeConfig};
 use crate::core::system_prompt::{SystemPromptBuilder, SystemPromptRegion};
@@ -50,7 +50,7 @@ impl DynamicPromptEngine {
     ) -> Result<String, BatchError> {
         let source = self.decide_source(config, context).await;
 
-        let base_prompt = match &source {
+        let _base_prompt = match &source {
             PromptSource::TemplateFile | PromptSource::TemplateEngine => {
                 self.load_from_template(config, context)?
             }

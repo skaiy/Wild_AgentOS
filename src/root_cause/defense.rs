@@ -10,7 +10,7 @@
 /// Architecture Layer: L1 — Enforcement (RootCauseEngine)
 
 use super::types::{
-    DefenseLayer, DefenseRecommendation, RootCauseConfig, TraceChain, TraceLevel,
+    DefenseLayer, DefenseRecommendation, RootCauseConfig, TraceChain,
 };
 
 /// DefenseInDepthManager converts root cause analysis into actionable defense recommendations.

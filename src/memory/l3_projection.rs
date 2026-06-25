@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -628,7 +628,7 @@ impl ProjectionEngine {
             }
         }
 
-        let mut artifacts: Vec<serde_json::Value> = subject_data
+        let artifacts: Vec<serde_json::Value> = subject_data
             .into_values()
             .filter(|m| m.len() > 1)
             .map(|m| serde_json::Value::Object(m))

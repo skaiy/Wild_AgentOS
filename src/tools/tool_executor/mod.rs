@@ -2,13 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
 
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 
-use once_cell::sync::OnceCell;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::debug;
 
@@ -18,12 +14,7 @@ use crate::tools::builtin::rag;
 use crate::tools::builtin::knowledge;
 #[cfg(feature = "ontology")]
 use crate::tools::builtin::ontology_tools;
-use crate::knowledge_graph::code_ast::CodeAstExtractor;
-use crate::knowledge_graph::extractor::KnowledgeExtractor;
-use crate::knowledge_graph::ontology::OntologyManager;
-use crate::knowledge_graph::rdf_mapper::RdfMapper;
 use crate::knowledge_graph::store::KnowledgeGraphStore;
-use crate::knowledge_graph::types::{BridgeRelationType, NodeDef, EdgeDef, RdfQuad, RdfValue};
 use crate::tools::tool_groups::ToolGroupManager;
 use crate::tools::workspace_monitor::{WorkspaceMonitor, FileState};
 
@@ -32,7 +23,6 @@ mod builtins;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::builtins::init_skill_creator_gateway;
 
 /// Tool input structs
 #[derive(Debug, Deserialize)]
@@ -1027,7 +1017,7 @@ impl ToolExecutor {
         drop(data_guard);
 
         Some(Arc::new(move |input: Value| {
-            let storage_key = storage_key.clone();
+            let _storage_key = storage_key.clone();
             let call_id = call_id.clone();
             let stored_data = stored_data.clone();
 
@@ -1099,7 +1089,7 @@ impl ToolExecutor {
             }
         };
         
-        let mut result: Vec<Value> = self.tool_descriptions.iter()
+        let result: Vec<Value> = self.tool_descriptions.iter()
             .filter(|td| {
                 if !td.allowed_roles.is_empty() {
                     return td.allowed_roles.iter().any(|r| r == role);
@@ -1148,7 +1138,7 @@ impl ToolExecutor {
     pub fn search_tools(&self, query: &str, max_results: Option<usize>) -> Value {
         let query_lower = query.to_lowercase();
         let max = max_results.unwrap_or(10);
-        let mut matches: Vec<Value> = self
+        let matches: Vec<Value> = self
             .tool_descriptions
             .iter()
             .filter(|t| {

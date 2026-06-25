@@ -231,7 +231,7 @@ impl super::AgentRunner {
         }).list_tools(&role_name);
 
         let supports_reasoning = self.gateway.supports_native_reasoning(model);
-        let format_constraint = if supports_reasoning {
+        let _format_constraint = if supports_reasoning {
             LLM_RESPONSE_FORMAT_NO_THOUGHT
         } else {
             LLM_RESPONSE_FORMAT_WITH_THOUGHT

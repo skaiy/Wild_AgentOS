@@ -2,12 +2,12 @@ use std::collections::VecDeque;
 
 use reqwest::Response;
 use serde_json::Value;
-use tracing::{debug, info, warn};
+use tracing::debug;
 
 use crate::llm::response_parser::ToolCall;
 use crate::llm::sse::{SseError, SseParser};
 use crate::llm::stream_types::{
-    ContentBlock, ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent,
+    ContentBlock, ContentBlockDelta,
     StreamAccumulator, StreamEvent, StreamResponse, Usage,
 };
 

@@ -10,7 +10,7 @@ pub mod gate;
 pub mod integration;
 pub mod evolution;
 
-use crate::core::constitution::{ActivationCondition, ConstitutionRegistry, ConstitutionRole};
+use crate::core::constitution::{ActivationCondition, ConstitutionRole};
 
 /// The nature of a methodology — determines how it's communicated to the agent
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

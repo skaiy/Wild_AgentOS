@@ -3,7 +3,7 @@
 //! 本模块处理记忆和知识的持久化存储，支持 MESI 缓存一致性状态和标签二级索引。
 
 use chrono::{DateTime, Utc};
-use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, Table, TableDefinition};
+use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -1414,7 +1414,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = L0Store::new(dir.path().to_string_lossy().as_ref()).unwrap();
 
-        let mut entry1 = L0Entry {
+        let entry1 = L0Entry {
             iri: "iri://test/person1".to_string(),
             content: "Person 1".to_string(),
             importance: 0.5,
@@ -1432,7 +1432,7 @@ mod tests {
         };
         store.store_entry(&entry1).unwrap();
 
-        let mut entry2 = L0Entry {
+        let entry2 = L0Entry {
             iri: "iri://test/person2".to_string(),
             content: "Person 2".to_string(),
             importance: 0.5,
@@ -1450,7 +1450,7 @@ mod tests {
         };
         store.store_entry(&entry2).unwrap();
 
-        let mut entry3 = L0Entry {
+        let entry3 = L0Entry {
             iri: "iri://test/organization".to_string(),
             content: "Organization".to_string(),
             importance: 0.5,
@@ -1484,7 +1484,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = L0Store::new(dir.path().to_string_lossy().as_ref()).unwrap();
 
-        let mut entry1 = L0Entry {
+        let entry1 = L0Entry {
             iri: "iri://test/entity1".to_string(),
             content: "Entity 1".to_string(),
             importance: 0.5,
@@ -1502,7 +1502,7 @@ mod tests {
         };
         store.store_entry(&entry1).unwrap();
 
-        let mut entry2 = L0Entry {
+        let entry2 = L0Entry {
             iri: "iri://test/entity2".to_string(),
             content: "Entity 2".to_string(),
             importance: 0.5,

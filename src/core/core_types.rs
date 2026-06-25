@@ -60,8 +60,8 @@ impl From<oxigraph::store::StorageError> for CoreError {
     }
 }
 
-impl From<oxigraph::sparql::EvaluationError> for CoreError {
-    fn from(e: oxigraph::sparql::EvaluationError) -> Self {
+impl From<oxigraph::sparql::QueryEvaluationError> for CoreError {
+    fn from(e: oxigraph::sparql::QueryEvaluationError) -> Self {
         CoreError::SparqlError { message: e.to_string() }
     }
 }
@@ -162,7 +162,7 @@ impl SemanticCore {
     pub async fn init_task(
         &self,
         user_input: &str,
-        agent_md_path: Option<&str>,
+        _agent_md_path: Option<&str>,
         parent_task_iri: Option<&str>,
     ) -> Result<String, CoreError> {
         let task_iri = format!("iri://task_{}", uuid::Uuid::new_v4().hyphenated());

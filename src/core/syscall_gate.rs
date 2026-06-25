@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::fmt::Write;
 use std::sync::Arc;
 
 use serde_json::Value;

@@ -1,10 +1,8 @@
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::Arc;
 
 use lru::LruCache;
 use parking_lot::{Mutex, RwLock};
-use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
+use redb::{Database, ReadableDatabase, TableDefinition};
 use sha2::{Digest, Sha256};
 use tracing::{debug, warn};
 

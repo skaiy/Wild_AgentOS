@@ -5,7 +5,6 @@ use glidinghorse::config::settings::LoggingSettings;
 use glidinghorse::core::agent_instance::AgentRole;
 use glidinghorse::core::event_bus::EventBus;
 use glidinghorse::core::sa::{SupervisorAgent, TaskComplexity};
-use glidinghorse::core::validation::ValidationEngine;
 use glidinghorse::gateway::UnifiedGateway;
 use glidinghorse::memory::l0_store::L0Store;
 use glidinghorse::memory::l2_blackboard::Blackboard;

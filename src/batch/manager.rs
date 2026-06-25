@@ -1,12 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::Utc;
 use parking_lot::RwLock;
-use tokio::sync::Mutex;
-use tokio::sync::broadcast;
-use tracing::{debug, error, info, warn};
-use uuid::Uuid;
+use tracing::{debug, info, warn};
 
 use crate::batch::emitter::BatchEventEmitter;
 use crate::batch::error::BatchError;
@@ -19,7 +15,6 @@ use crate::batch::window::WindowConfig;
 use crate::batch::window::SlidingWindow;
 use crate::config::settings::BatchAgentSettings;
 use crate::core::event_bus::EventBus;
-use crate::core::CoreError;
 use crate::skill_graph::graph_store::SkillGraphStore;
 
 /// Holds the runtime state for a single Batch Agent instance.

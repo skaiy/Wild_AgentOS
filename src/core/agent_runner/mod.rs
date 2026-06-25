@@ -423,7 +423,7 @@ impl AgentRunner {
     /// Load ToolGuard rules from a JSON config file.
     /// The guard is registered into the hook_manager on the next `execute` call.
     /// Default rules are used for categories not specified in the file.
-    pub fn with_tool_guard_config<P: AsRef<std::path::Path>>(mut self, path: P) -> Self {
+    pub fn with_tool_guard_config<P: AsRef<std::path::Path>>(self, path: P) -> Self {
         match ToolGuard::from_json(path) {
             Ok(guard) => {
                 guard.register_hooks(&self.hook_manager);
@@ -462,7 +462,7 @@ impl AgentRunner {
     /// 完成初始化接线：将 AgentRunner 的 perception_store 连接到 WorkspaceMonitor。
     /// 在 AgentRunner 构建完成、所有子组件就绪后调用一次。
     pub fn finalize_setup(&self) {
-        use crate::tools::workspace_monitor::WorkspaceMonitor;
+        
         if let Ok(executor) = self.tool_executor.read() {
             if let Some(wm) = executor.get_workspace_monitor() {
                 wm.set_perception_store(Arc::new(self.perception_store.clone()));

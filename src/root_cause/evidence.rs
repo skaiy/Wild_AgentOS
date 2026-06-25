@@ -1,19 +1,6 @@
-/// EvidenceChainManager — validates the integrity and completeness of trace evidence chains.
-///
-/// Each trace level must produce evidence that:
-/// 1. Has a verifiable source (file/line/log reference)
-/// 2. Meets minimum confidence threshold
-/// 3. Chains continuously to adjacent levels (no gaps)
-/// 4. Culminates in a definitive root cause
-///
-/// Corresponds to: superpowers-main/skills/systematic-debugging/root-cause-tracing.md
-/// Architecture Layer: L1 — Enforcement (RootCauseEngine)
-
-use serde_json::Value;
 
 use super::types::{
-    ChainValidationError, Evidence, RootCauseConfig,
-    RootCauseError, TraceChain, TraceLevel,
+    ChainValidationError, RootCauseConfig, TraceChain, TraceLevel,
 };
 
 /// EvidenceChainManager validates the continuity and integrity of trace evidence chains.

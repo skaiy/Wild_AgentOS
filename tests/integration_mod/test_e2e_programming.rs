@@ -3,8 +3,7 @@ use std::path::Path;
 
 use glidinghorse::config::GatewaySettings;
 use glidinghorse::config::settings::LoggingSettings;
-use glidinghorse::core::agent_instance::AgentRole;
-use glidinghorse::core::agent_runner::{AgentRunner, TaskContext};
+use glidinghorse::core::agent_runner::AgentRunner;
 use glidinghorse::core::event_bus::EventBus;
 use glidinghorse::core::sa::SupervisorAgent;
 use glidinghorse::core::validation::ValidationEngine;
