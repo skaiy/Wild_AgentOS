@@ -245,7 +245,7 @@ impl TaskQueue {
                 Ok(guard_result) => {
                     let guard = guard_result.map_err(|e| QueueError::Queue(e.to_string()))?;
                     let result: AgentOsResult = serde_json::from_slice(&*guard)?;
-                    guard.commit();
+                    let _ = guard.commit();
                     
                     tracing::info!(
                         expected_task_id = %task_id,
@@ -280,7 +280,7 @@ impl TaskQueue {
             .map_err(|e| QueueError::Queue(e.to_string()))?;
         
         let result: AgentOsResult = serde_json::from_slice(&*guard)?;
-        guard.commit();
+        let _ = guard.commit();
         tracing::debug!(task_id = %result.task_id, status = %result.status, "收到结果");
         Ok(Some(result))
     }
@@ -319,7 +319,7 @@ impl WorkerQueue {
         let guard = self.task_receiver.recv().await
             .map_err(|e| QueueError::Queue(e.to_string()))?;
         let task: AgentOsTask = serde_json::from_slice(&*guard)?;
-        guard.commit();
+        let _ = guard.commit();
         tracing::debug!(task_id = %task.task_id, "收到任务");
         Ok(task)
     }

@@ -78,6 +78,7 @@ fn validate_jsonld_basic(json_str: &str) -> Result<Value, String> {
     Ok(parsed)
 }
 
+#[allow(dead_code)]
 fn validate_jsonld_with_context(json_str: &str) -> Result<Value, String> {
     let parsed = validate_jsonld_basic(json_str)?;
     

@@ -179,6 +179,7 @@ impl LLMClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::unified_gateway::ResponseToolCall;
 
     #[test]
     fn test_parse_tool_calls_from_response() {

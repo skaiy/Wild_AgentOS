@@ -1,7 +1,7 @@
 
 #[cfg(test)]
 mod tests {
-    
+    use crate::root_cause::RootCauseConfig;
 
     #[test]
     fn test_default_config() {

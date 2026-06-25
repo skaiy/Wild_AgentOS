@@ -546,6 +546,7 @@ impl Default for McpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{McpServerConfig, McpRemoteServerConfig};
 
     #[tokio::test]
     async fn test_mcp_client_register() {

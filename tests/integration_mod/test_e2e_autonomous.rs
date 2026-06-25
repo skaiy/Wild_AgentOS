@@ -108,6 +108,7 @@ struct AutonomousTestResult {
     tool_call_count: u32,
     errors: Vec<String>,
     execution_time_secs: f64,
+    #[allow(dead_code)]
     artifacts_created: Vec<String>,
 }
 

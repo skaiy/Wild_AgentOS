@@ -149,6 +149,7 @@ impl EvidenceChainManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::root_cause::Evidence;
     use serde_json::json;
 
     fn make_chain() -> TraceChain {

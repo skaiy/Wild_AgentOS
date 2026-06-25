@@ -217,6 +217,7 @@ fn extract_keywords(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn make_entry(content: &str) -> WindowEntry {
         WindowEntry {
@@ -273,10 +274,10 @@ mod tests {
             intent_shift_threshold: 0.3,
         });
 
-        w.push(make_entry("Rust is great for backend web services"));
-        w.push(make_entry("I like the Rust web framework ecosystem"));
-        w.push(make_entry("Rust has excellent performance characteristics"));
-        w.push(make_entry("Let me check which Rust web framework to use"));
+        w.push(make_entry("Rust is great for backend web services")).unwrap();
+        w.push(make_entry("I like the Rust web framework ecosystem")).unwrap();
+        w.push(make_entry("Rust has excellent performance characteristics")).unwrap();
+        w.push(make_entry("Let me check which Rust web framework to use")).unwrap();
         assert!(w.detect_intent_shift(0.3).is_none());
 
         let mut w2 = SlidingWindow::new(WindowConfig {
@@ -287,9 +288,9 @@ mod tests {
         });
 
         // Different topics
-        w2.push(make_entry("The database schema needs an index on user_id"));
-        w2.push(make_entry("We should normalize the orders table"));
-        w2.push(make_entry("Let me deploy the docker container to kubernetes"));
+        w2.push(make_entry("The database schema needs an index on user_id")).unwrap();
+        w2.push(make_entry("We should normalize the orders table")).unwrap();
+        w2.push(make_entry("Let me deploy the docker container to kubernetes")).unwrap();
         let shift = w2.detect_intent_shift(0.3);
         assert!(shift.is_some(), "Expected intent shift between DB and k8s topics");
     }

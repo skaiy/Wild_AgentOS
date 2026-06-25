@@ -270,9 +270,9 @@ mod tests {
             intent_shift_threshold: 0.3,
         });
 
-        window.push(make_entry("Rust backend framework performance"));
-        window.push(make_entry("PostgreSQL database schema design"));
-        window.push(make_entry("Rust async web framework comparison"));
+        window.push(make_entry("Rust backend framework performance")).unwrap();
+        window.push(make_entry("PostgreSQL database schema design")).unwrap();
+        window.push(make_entry("Rust async web framework comparison")).unwrap();
 
         let keywords = collector.extract_window_keywords(&window);
         assert!(!keywords.is_empty(), "Should extract keywords");

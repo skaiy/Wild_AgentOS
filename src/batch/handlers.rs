@@ -447,6 +447,7 @@ mod tests {
     };
     use crate::skill_graph::graph_store::SkillGraphStore;
     use crate::skill_graph::types::SkillGraphNode;
+    use chrono::Utc;
     use std::collections::HashMap;
 
     fn make_result() -> ExtractionResult {

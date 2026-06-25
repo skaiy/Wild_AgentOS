@@ -53,7 +53,7 @@ impl SkillGraphStore {
         let iri = skill.skill_iri.clone();
         info!("注册技能到图谱: {} ({})", skill.name, iri);
 
-        if let Some(_blackboard) = self.blackboard {
+        if let Some(_blackboard) = &self.blackboard {
             let json_ld = skill.to_json_ld();
             let json_str = serde_json::to_string(&json_ld).unwrap_or_default();
             debug!("技能 JSON-LD 已生成: {} bytes", json_str.len());

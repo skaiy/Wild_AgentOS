@@ -61,6 +61,7 @@ fn test_gateway_settings() -> GatewaySettings {
     }
 }
 
+#[allow(dead_code)]
 struct TestInfra {
     _l0_dir: tempfile::TempDir,
     l0: Arc<L0Store>,
