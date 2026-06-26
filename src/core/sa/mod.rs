@@ -1178,17 +1178,38 @@ impl SupervisorAgent {
         let agent = self.create_agent(role, cycle_id);
 
         // 从 L2 黑板查询上下文（替代 prev_summary）
+        // 改进：优先使用节点 content（完整输出），回退到 summary（短摘要）
         let prev_agent_summary = context.prev_agent_summary.clone();
         let prev_summary = if let Some(blackboard) = &self.blackboard {
             let nodes = blackboard.query_nodes(&context.task_iri).unwrap_or_default();
             if !nodes.is_empty() {
-                let summaries: Vec<String> = nodes.iter()
-                    .filter_map(|n| {
-                        let parsed: serde_json::Value = serde_json::from_str(&n.json_ld).ok()?;
-                        parsed.get("summary").and_then(|s| s.as_str()).map(String::from)
-                    })
-                    .collect();
-                if !summaries.is_empty() {
+                let mut contents: Vec<String> = Vec::new();
+                let mut summaries: Vec<String> = Vec::new();
+                for n in nodes.iter() {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&n.json_ld) {
+                        let role = parsed.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                        let prefix = if !role.is_empty() { format!("[{}] ", role) } else { String::new() };
+                        // 优先 content 字段（完整 LLM 输出）
+                        if let Some(content) = parsed.get("content").and_then(|s| s.as_str()) {
+                            let trimmed = content.trim();
+                            if !trimmed.is_empty() && trimmed.len() > 20 {
+                                contents.push(format!("{}{}", prefix, trimmed));
+                                continue;
+                            }
+                        }
+                        // 回退到 summary 字段
+                        if let Some(summary) = parsed.get("summary").and_then(|s| s.as_str()) {
+                            let trimmed = summary.trim();
+                            if !trimmed.is_empty() {
+                                summaries.push(format!("{}{}", prefix, trimmed));
+                            }
+                        }
+                    }
+                }
+                // 优先使用有实质内容的 content
+                if !contents.is_empty() {
+                    Some(contents.join("\n\n---\n\n"))
+                } else if !summaries.is_empty() {
                     Some(summaries.join("\n"))
                 } else {
                     prev_agent_summary.clone()

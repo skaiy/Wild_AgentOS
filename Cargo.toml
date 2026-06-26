@@ -8,7 +8,7 @@ resolver = "2"
 members = ["crates/*", "crates/ontologies", "apps/gliding_code"]
 
 [features]
-default = []
+default = ["ontology"]
 # Ontology engine (SHACL, reason, lint, diff) — always enabled
 ontology = []
 # Embeddings (ONNX model, ~100MB added to binary)

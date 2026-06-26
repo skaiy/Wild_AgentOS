@@ -322,10 +322,10 @@ impl KnowledgeGraphStore {
         &self.default_graph
     }
 
-    // TODO: Qdrant 向量索引集成 — 需要配置 Qdrant 客户端连接
-    // pub async fn index_to_qdrant(&self, _collection: &str) -> Result<(), String> {
-    //     todo!("将知识图谱实体同步到 Qdrant 向量索引")
-    // }
+    // Knowledge graph → vector index sync is handled externally via HyperspaceEngine.
+    // See src/memory/hyperspace_store.rs for the vector store API.
+    // To index KG entities into vector search, iterate results from SPARQL queries
+    // and call HyperspaceStore::upsert() with the entity IRI and text content.
 }
 
 fn normalize_term(s: &str) -> String {

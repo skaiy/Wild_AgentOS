@@ -29,7 +29,6 @@ pub mod hybrid;
 pub mod hyper_vector;
 pub mod jsonld_meta;
 pub mod metric;
-pub mod open_ontologies;
 pub mod snapshot;
 pub mod storage;
 pub mod tangent;

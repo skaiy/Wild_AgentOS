@@ -35,6 +35,13 @@ pub struct OntologyValidateShaclInput {
     pub data_ttl: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct OntologyReasonInput {
+    pub ttl: String,
+    pub profile: Option<String>,
+    pub materialize: Option<bool>,
+}
+
 // ─── Tool implementations ───────────────────────────────────
 
 /// Validate Turtle syntax without loading into a store.
@@ -101,6 +108,31 @@ pub async fn execute_ontology_validate_shacl(input: Value) -> Result<Value, Stri
 
     Ok(json!({
         "success": true,
+        "result": result,
+    }))
+}
+
+/// Run RDFS/OWL-RL reasoning over Turtle data and return inferred triples.
+pub async fn execute_ontology_reason(input: Value) -> Result<Value, String> {
+    let params: OntologyReasonInput =
+        serde_json::from_value(input).map_err(|e| format!("Invalid input: {}", e))?;
+
+    let profile = params.profile.as_deref().unwrap_or("owl-rl");
+    let materialize = params.materialize.unwrap_or(true);
+
+    let shared = crate::ontology::new_shared_store()
+        .map_err(|e| format!("Failed to create ontology store: {}", e))?;
+
+    shared.load_turtle(&params.ttl, None)
+        .map_err(|e| format!("Failed to load Turtle data: {}", e))?;
+
+    let result = shared.reason(profile, materialize)
+        .map_err(|e| format!("Reasoning failed: {}", e))?;
+
+    Ok(json!({
+        "success": true,
+        "profile": profile,
+        "materialize": materialize,
         "result": result,
     }))
 }

@@ -47,4 +47,5 @@ pub use ontology_tools::{
     execute_ontology_lint_turtle,
     execute_ontology_diff_turtle,
     execute_ontology_validate_shacl,
+    execute_ontology_reason,
 };

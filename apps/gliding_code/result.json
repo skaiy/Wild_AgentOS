@@ -1,0 +1,45 @@
+{
+  "columns": {
+    "id": {
+      "min": 101,
+      "max": 108,
+      "sum": 836,
+      "avg": 104.5,
+      "count": 8,
+      "type": "numeric"
+    },
+    "name": {
+      "min": null,
+      "max": null,
+      "sum": null,
+      "avg": null,
+      "count": 0,
+      "type": "non-numeric"
+    },
+    "age": {
+      "min": 24,
+      "max": 35,
+      "sum": 232,
+      "avg": 29.0,
+      "count": 8,
+      "type": "numeric"
+    },
+    "score": {
+      "min": 73.5,
+      "max": 95.0,
+      "sum": 688.0,
+      "avg": 86.0,
+      "count": 8,
+      "type": "numeric"
+    },
+    "bonus": {
+      "min": 3200,
+      "max": 8000,
+      "sum": 46600,
+      "avg": 5825.0,
+      "count": 8,
+      "type": "numeric"
+    }
+  },
+  "total_rows": 8
+}

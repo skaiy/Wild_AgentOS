@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tracing::{debug, info};
 
+use crate::memory::hyperspace_store::HyperspaceStore;
 use crate::memory::l0_store::L0Store;
 use crate::memory::l1_session::{L1Session, SessionSummary};
 use crate::memory::l2_blackboard::Blackboard;
@@ -25,6 +26,9 @@ pub struct MemoryManager {
     sessions: HashMap<String, L1Session>,
     scheduler: Option<Arc<MemoryScheduler>>,
     l1_active_count: AtomicU64,
+    /// HyperspaceEngine-backed vector store for semantic search.
+    /// Available to all memory layers for embedding-based retrieval.
+    vector_store: Option<Arc<HyperspaceStore>>,
 }
 
 impl MemoryManager {
@@ -33,6 +37,17 @@ impl MemoryManager {
         l2: Arc<Blackboard>,
         projection: Arc<ProjectionEngine>,
         config: CoreConfig,
+    ) -> Self {
+        Self::with_vector_store(l0, l2, projection, config, None)
+    }
+
+    /// Construct MemoryManager with an optional vector store.
+    pub fn with_vector_store(
+        l0: Arc<L0Store>,
+        l2: Arc<Blackboard>,
+        projection: Arc<ProjectionEngine>,
+        config: CoreConfig,
+        vector_store: Option<Arc<HyperspaceStore>>,
     ) -> Self {
         info!("MemoryManager initialized");
         Self {
@@ -43,6 +58,7 @@ impl MemoryManager {
             sessions: HashMap::new(),
             scheduler: None,
             l1_active_count: AtomicU64::new(0),
+            vector_store,
         }
     }
 
@@ -57,6 +73,17 @@ impl MemoryManager {
         config: CoreConfig,
         scheduler: Arc<MemoryScheduler>,
     ) -> Self {
+        Self::with_scheduler_and_vector_store(l0, l2, projection, config, scheduler, None)
+    }
+
+    pub fn with_scheduler_and_vector_store(
+        l0: Arc<L0Store>,
+        l2: Arc<Blackboard>,
+        projection: Arc<ProjectionEngine>,
+        config: CoreConfig,
+        scheduler: Arc<MemoryScheduler>,
+        vector_store: Option<Arc<HyperspaceStore>>,
+    ) -> Self {
         info!("MemoryManager initialized (with scheduler)");
         Self {
             l0,
@@ -66,6 +93,7 @@ impl MemoryManager {
             sessions: HashMap::new(),
             scheduler: Some(scheduler),
             l1_active_count: AtomicU64::new(0),
+            vector_store,
         }
     }
 
@@ -82,6 +110,11 @@ impl MemoryManager {
     /// 获取 L3 ProjectionEngine 引用
     pub fn projection(&self) -> &Arc<ProjectionEngine> {
         &self.projection
+    }
+
+    /// 获取 HyperspaceEngine 向量存储引用（若已配置）
+    pub fn vector_store(&self) -> Option<&Arc<HyperspaceStore>> {
+        self.vector_store.as_ref()
     }
 
     // ========== L1 Session 管理 ==========

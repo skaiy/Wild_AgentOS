@@ -495,7 +495,12 @@ impl WorkspaceMonitor {
             parts.push(format!("{} 个新发现未读取", discovered.len()));
         }
 
-        Some(format!("{} | {}", total, parts.join(" | ")))
+        let summary = format!("{} | {}", total, parts.join(" | "));
+        let guidance = "\n\n提示：只读取与你当前任务相关的文件，无关文件应直接忽略。\
+            \n\"已写入未重新读取\"的文件是其他Agent的输出物，仅在你需要参考其内容时才读取，不需要全部确认。\
+            \n\"有外部变更\"的文件是已读取过但被外部改写的文件，仅在必要时重新读取。\
+            \ncache_hit(from_cache=true)表示文件内容在本轮未变化且之前已提供过——跳过重读，用已有内容继续工作。".to_string();
+        Some(format!("{}{}", summary, guidance))
     }
 
     /// 向 PerceptionStore 写入当前文件状态的感知摘要

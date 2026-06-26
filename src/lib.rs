@@ -22,6 +22,12 @@ pub mod root_cause;
 #[cfg(feature = "ontology")]
 pub mod ontology;
 
+/// Bridge types for ontology embedding storage (OntologyEmbedStore, HyperspaceEmbedStore,
+/// OntologySearchBridge).  This module was moved out of crates/hyperspace-engine/src/open_ontologies.rs
+/// because it bridges two independent subsystems; it belongs at the application level.
+#[cfg(feature = "ontology")]
+pub mod ontology_bridge;
+
 pub use core::{
     AgentRunner, AgentInstance, SupervisorAgent,
     agent_runner::{TaskContext, TaskResult},

@@ -1,0 +1,42 @@
+[
+  {
+    "number": 1,
+    "square": 1
+  },
+  {
+    "number": 2,
+    "square": 4
+  },
+  {
+    "number": 3,
+    "square": 9
+  },
+  {
+    "number": 4,
+    "square": 16
+  },
+  {
+    "number": 5,
+    "square": 25
+  },
+  {
+    "number": 6,
+    "square": 36
+  },
+  {
+    "number": 7,
+    "square": 49
+  },
+  {
+    "number": 8,
+    "square": 64
+  },
+  {
+    "number": 9,
+    "square": 81
+  },
+  {
+    "number": 10,
+    "square": 100
+  }
+]

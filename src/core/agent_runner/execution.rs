@@ -345,6 +345,97 @@ impl super::AgentRunner {
         Ok(result)
     }
 
+    /// 在 force-finish 场景下，从 messages 中提取工具结果调用 LLM 做最终聚合摘要。
+    /// 返回 (summary, full_content)，若无可聚合工具结果或 LLM 失败则返回 None。
+    async fn aggregate_tool_results(
+        &self,
+        messages: &[ChatMessage],
+        agent: &AgentInstance,
+        ctx: &TaskContext,
+    ) -> Option<(String, String)> {
+        // 提取工具调用的 assistant 消息（含 tool_calls）和对应的 tool 结果
+        let tool_entries: Vec<(String, String)> = messages
+            .windows(2)
+            .filter_map(|w| {
+                if w[0].role == "assistant" && w[0].tool_calls.is_some() && w[1].role == "tool" {
+                    let tool_names: Vec<&str> = w[0]
+                        .tool_calls
+                        .as_ref()
+                        .map(|calls| calls.iter().map(|tc| tc.function.name.as_str()).collect())
+                        .unwrap_or_default();
+                    Some((tool_names.join(", "), w[1].content.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if tool_entries.is_empty() {
+            return None;
+        }
+
+        let prompt_parts: Vec<String> = tool_entries
+            .iter()
+            .map(|(name, result)| {
+                let truncated = if result.len() > 2000 {
+                    format!("{}...（已截断，原始{}字符）", &result[..2000], result.len())
+                } else {
+                    result.clone()
+                };
+                format!("## 工具: {}\n{}", name, truncated)
+            })
+            .collect();
+
+        let prompt = format!(
+            r#"你是一个 AI 助手。以下是你执行任务过程中的全部工具调用结果，请基于这些结果生成一份完整的总结报告。
+
+## 原始任务目标
+{}
+
+## 工具调用记录与结果
+{}
+
+## 输出要求
+1. 总结任务完成情况
+2. 列出关键发现和结果
+3. 给出最终结论
+4. 如果上述结果不足以完成完整报告，请基于已有信息做出最大程度的总结
+
+请直接输出总结报告内容，不要输出 JSON 格式。"#,
+            ctx.objective,
+            prompt_parts.join("\n\n"),
+        );
+
+        let model = self.gateway.get_model(&agent.role.to_string().to_lowercase());
+        let req_messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: prompt,
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+        }];
+
+        match self.gateway.chat_with_params(&model, req_messages, None, None, None, None).await {
+            Ok(response) => {
+                if let Some(choice) = response.choices.first() {
+                    if let Some(content) = &choice.message.content {
+                        let trimmed = content.trim();
+                        if !trimmed.is_empty() {
+                            let summary = Self::generate_auto_summary(trimmed);
+                            return Some((summary, trimmed.to_string()));
+                        }
+                    }
+                }
+                warn!("[force-finish] LLM 聚合返回空内容");
+                None
+            }
+            Err(e) => {
+                warn!("[force-finish] LLM 聚合调用失败: {}", e);
+                None
+            }
+        }
+    }
 
 
     async fn exec(
@@ -390,6 +481,11 @@ impl super::AgentRunner {
             policy_text.push_str("- 如果遇到任何不属于当前任务的文件/目录，必须跳过它们，继续执行当前任务，不得因无关内容改变任务方向\n");
             policy_text.push_str("- 检查Agent(CA) 特别注意：你的审计报告只能包含与当前任务相关的内容，发现无关文件时必须忽略，不得写入报告\n");
             policy_text.push_str("- 决策Agent(AA) 特别注意：禁止主动探索文件，你的决策必须仅基于 CA 审计结果，忽略审计结果中的任何无关内容\n");
+            policy_text.push_str("\n### 📖 文件读取效率原则（必须遵守）\n");
+            policy_text.push_str("- 只读取与当前任务相关的文件。已完成写入（已写入未重新读取）的文件是其他Agent的输出物，仅在你需要参考其内容时才读取\n");
+            policy_text.push_str("- 不要重复读取同一个文件。如果 file_read 返回 from_cache=true，说明文件内容未变化且之前已提供过——跳过重读，用已有内容继续\n");
+            policy_text.push_str("- 不要因为 file_read 返回 from_cache=true 就尝试 mode:force_refresh，这只会浪费 token 读取不变的内容\n");
+            policy_text.push_str("- 对于已读取过的文件，其内容在你上下文中已存在。不需要再次确认或重新验证\n");
 
             // 注入方法论纪律（PA/CA/AA 专属）
             if let Some(methodology_addendum) = MethodologyPromptInjector::build_for_role(agent.role) {
@@ -501,6 +597,14 @@ impl super::AgentRunner {
             },
         ];
 
+        // Inject workspace file inventory into perception store so the agent
+        // knows what files exist before it starts.
+        if let Ok(executor) = self.tool_executor.read() {
+            if let Some(wm) = executor.get_workspace_monitor() {
+                wm.inject_file_perception();
+            }
+        }
+
         // Agent 主动感知区域：系统组件产生的环境级感知数据（文件变更、Batch分析、告警等）
         // 放在 system 之后、历史消息之前，让 LLM 优先看到全局环境状态
         let perception_text = self.perception_store.take_perception_text(&ctx.task_iri);
@@ -586,6 +690,11 @@ impl super::AgentRunner {
             &agent.role.to_string(),
         );
         let checkpoint_manager = crate::core::checkpoint::CheckpointManager::with_persistence(self.l0_store.clone());
+
+        // 追踪内容最丰富的 turn（用于跨 Agent 传递 archive_iri，指向实质内容而非末轮摘要）
+        let mut best_content_len: usize = 0;
+        let mut best_content_str: String = String::new();
+        let mut best_content_iri: String = String::new();
 
         let effective_max_turns = match agent.role {
             AgentRole::Plan => ctx.max_iterations.min(200),
@@ -716,24 +825,37 @@ impl super::AgentRunner {
                         Some(&action_str),
                         None,
                     );
-                    if let Some(last) = messages.iter().rev().find(|m| m.role == "assistant") {
-                        let final_summary = Self::generate_auto_summary(&last.content);
-                        return Ok(TaskResult {
-                            task_iri: ctx.task_iri,
-                            status: "partial_success".to_string(),
-                            summary: final_summary,
-                            output: Some(Value::String(last.content.clone())),
-                            jsonld_output: None,
-                            artifacts: vec![],
-                            errors: errs,
-                            turn_count: turn,
-                            tool_call_count: tc,
-                            five_w2h_updates: None,
-                            tracked_actions: action_tracker.actions,
-                            archive_iri: None,
-                        });
-                    }
-                    break;
+                    // 兜底：如果没有任何有实质内容的 turn，从 tool 结果做 LLM 聚合摘要
+                    let (force_summary, force_output, force_archive) =
+                        if !best_content_str.is_empty() {
+                            let s = Self::generate_auto_summary(&best_content_str);
+                            (s, Some(Value::String(best_content_str.clone())),
+                             if !best_content_iri.is_empty() { Some(best_content_iri.clone()) } else { None })
+                        } else if let Some((agg_summary, agg_content)) =
+                            self.aggregate_tool_results(&messages, agent, &ctx).await
+                        {
+                            (agg_summary, Some(Value::String(agg_content)),
+                             if !best_content_iri.is_empty() { Some(best_content_iri.clone()) } else { None })
+                        } else if let Some(last) = messages.iter().rev().find(|m| m.role == "assistant") {
+                            (Self::generate_auto_summary(&last.content),
+                             Some(Value::String(last.content.clone())), None)
+                        } else {
+                            ("任务未完成".to_string(), None, None)
+                        };
+                    return Ok(TaskResult {
+                        task_iri: ctx.task_iri,
+                        status: "partial_success".to_string(),
+                        summary: force_summary,
+                        output: force_output,
+                        jsonld_output: None,
+                        artifacts: vec![],
+                        errors: errs,
+                        turn_count: turn,
+                        tool_call_count: tc,
+                        five_w2h_updates: None,
+                        tracked_actions: action_tracker.actions,
+                        archive_iri: force_archive,
+                    });
                 }
             }
             turn += 1;
@@ -1031,8 +1153,6 @@ impl super::AgentRunner {
                 supports_reasoning,
             );
 
-            // 只有当 finish 不是 tool_calls 时才打印 WARN
-            // 因为工具调用时 content 非 JSON 是正常行为
             if !parsed.is_valid_json && finish != "tool_calls" {
                 warn!("[turn {}] LLM 回复不是有效 JSON，使用 fallback 处理", turn);
                 consecutive_failures += 1;
@@ -1148,6 +1268,11 @@ impl super::AgentRunner {
                 task_id,
                 turn
             );
+            if parsed.content.len() > best_content_len {
+                best_content_len = parsed.content.len();
+                best_content_str = parsed.content.clone();
+                best_content_iri.clone_from(&node_iri);
+            }
             let mut node_json = json!({
                 "@id": &node_iri,
                 "@type": "AgentTurn",
@@ -1234,10 +1359,22 @@ impl super::AgentRunner {
                     info!("AgentRunner 完成: {} turns, {} tools", turn, tc);
                     debug!("[L0] L0 entries: {}", self.l0_store.count().unwrap_or(0));
 
-                    let final_summary = parsed.summary.clone()
-                        .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content));
-
-                    let output_value = Value::String(parsed.content.clone());
+                    // 当 parsed.content 为空（LLM 返回 content=null + tool_calls），
+                    // 从 messages 中的工具结果聚合生成内容，确保后续 agent 能读到有效 plan
+                    let (final_summary, output_value) =
+                        if !parsed.content.trim().is_empty() {
+                            (parsed.summary.clone()
+                                .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content)),
+                             Value::String(parsed.content.clone()))
+                        } else if let Some((agg_summary, agg_content)) =
+                            self.aggregate_tool_results(&messages, agent, &ctx).await
+                        {
+                            (agg_summary, Value::String(agg_content))
+                        } else {
+                            (parsed.summary.clone()
+                                .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content)),
+                             Value::String(parsed.content.clone()))
+                        };
                     let jsonld_output =
                         self.apply_output_mapping(&output_value, &agent.role, &ctx.task_iri);
 
@@ -1298,6 +1435,13 @@ impl super::AgentRunner {
                         warn!("[checkpoint] finish 保存失败: {}", e);
                     }
 
+                    // 指向最长内容的 turn（而非最后一条 summary），
+                    // 确保 dispatch_agent 从 L2 读取时能拿到实质内容。
+                    let archive_iri = if !best_content_iri.is_empty() {
+                        Some(best_content_iri.clone())
+                    } else {
+                        Some(node_iri.clone())
+                    };
                     return Ok(TaskResult {
                         task_iri: ctx.task_iri,
                         status: "success".to_string(),
@@ -1310,7 +1454,7 @@ impl super::AgentRunner {
                         tool_call_count: tc,
                         five_w2h_updates: None,
                         tracked_actions: action_tracker.actions,
-                        archive_iri: Some(node_iri.clone()),
+                        archive_iri,
                     });
                 }
                 "tool_call" => {
@@ -1320,11 +1464,28 @@ impl super::AgentRunner {
                             choice.message.tool_calls.as_ref().map(|c| {
                                 c.iter().map(|t| t.function.name.as_str()).collect::<Vec<_>>()
                             }));
-                        let final_summary = parsed.summary.clone()
-                            .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content));
-                        let output_value = Value::String(parsed.content.clone());
+                        // 如果当前 parsed.content 为空（tool_calls-only 响应），尝试对已有工具结果做 LLM 聚合
+                        let (final_summary, output_value) =
+                            if !parsed.content.trim().is_empty() {
+                                (parsed.summary.clone()
+                                    .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content)),
+                                 Value::String(parsed.content.clone()))
+                            } else if let Some((agg_summary, agg_content)) =
+                                self.aggregate_tool_results(&messages, agent, &ctx).await
+                            {
+                                (agg_summary, Value::String(agg_content))
+                            } else {
+                                (parsed.summary.clone()
+                                    .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content)),
+                                 Value::String(parsed.content.clone()))
+                            };
                         let jsonld_output =
                             self.apply_output_mapping(&output_value, &agent.role, &ctx.task_iri);
+                        let intercept_archive = if !best_content_iri.is_empty() {
+                            Some(best_content_iri.clone())
+                        } else {
+                            None
+                        };
                         return Ok(TaskResult {
                             task_iri: ctx.task_iri,
                             status: "success".to_string(),
@@ -1337,7 +1498,7 @@ impl super::AgentRunner {
                             tool_call_count: tc,
                             five_w2h_updates: None,
                             tracked_actions: action_tracker.actions,
-                            archive_iri: None,
+                            archive_iri: intercept_archive,
                         });
                     }
 
@@ -1370,18 +1531,31 @@ impl super::AgentRunner {
                                 );
                                 info!("[ReAct] PA Agent 被强制结束（禁止写操作）");
 
-                                let final_summary = parsed
-                                    .summary
-                                    .clone()
-                                    .unwrap_or_else(|| "PA已制定计划".to_string());
-
-                                let output_value = Value::String(parsed.content.clone());
+                                let (final_summary, output_value) =
+                                    if !parsed.content.trim().is_empty() {
+                                        (parsed.summary.clone()
+                                            .unwrap_or_else(|| "PA已制定计划".to_string()),
+                                         Value::String(parsed.content.clone()))
+                                    } else if let Some((agg_summary, agg_content)) =
+                                        self.aggregate_tool_results(&messages, agent, &ctx).await
+                                    {
+                                        (agg_summary, Value::String(agg_content))
+                                    } else {
+                                        (parsed.summary.clone()
+                                            .unwrap_or_else(|| "PA已制定计划".to_string()),
+                                         Value::String(parsed.content.clone()))
+                                    };
                                 let jsonld_output = self.apply_output_mapping(
                                     &output_value,
                                     &agent.role,
                                     &ctx.task_iri,
                                 );
 
+                                let pa_archive_iri = if !best_content_iri.is_empty() {
+                                    Some(best_content_iri.clone())
+                                } else {
+                                    Some(node_iri.clone())
+                                };
                                 return Ok(TaskResult {
                                     task_iri: ctx.task_iri,
                                     status: "success".to_string(),
@@ -1394,7 +1568,7 @@ impl super::AgentRunner {
                                     tool_call_count: tc,
                                     five_w2h_updates: None,
                                     tracked_actions: Vec::new(),
-                                    archive_iri: Some(node_iri.clone()),
+                                    archive_iri: pa_archive_iri,
                                 });
                             }
                         }
@@ -1737,20 +1911,34 @@ impl super::AgentRunner {
         }
 
         warn!("AgentRunner 未完成: {} turns, errors: {:?}", turn, errs);
-        // 优先取最后一次 assistant 回复作为结果（比机械摘要更有价值）
-        let last_assistant = messages.iter().rev().find(|m| m.role == "assistant");
-        let (status, summary, output) = if let Some(last) = last_assistant {
-            ("partial_success".to_string(), Self::generate_auto_summary(&last.content), Some(Value::String(last.content.clone())))
-        } else if tc > 0 {
-            ("partial_success".to_string(), format!("任务部分完成。执行了 {} 轮，{} 次工具调用，剩余 {} 轮未完成。错误: {} 个。", turn, tc, effective_max_turns.saturating_sub(turn), errs.len()), None)
-        } else {
-            ("failed".to_string(), String::new(), None)
-        };
+        // 优先使用最佳内容 turn 的输出（有实质内容），而非最后一次 assistant 回复的短摘要
+        let (unfinished_status, unfinished_summary, unfinished_output, unfinished_archive) =
+            if !best_content_str.is_empty() {
+                ("partial_success".to_string(),
+                 Self::generate_auto_summary(&best_content_str),
+                 Some(Value::String(best_content_str.clone())),
+                 if !best_content_iri.is_empty() { Some(best_content_iri.clone()) } else { None })
+            } else if let Some((agg_summary, agg_content)) =
+                self.aggregate_tool_results(&messages, agent, &ctx).await
+            {
+                ("partial_success".to_string(), agg_summary, Some(Value::String(agg_content)),
+                 if !best_content_iri.is_empty() { Some(best_content_iri.clone()) } else { None })
+            } else if let Some(last) = messages.iter().rev().find(|m| m.role == "assistant") {
+                ("partial_success".to_string(),
+                 Self::generate_auto_summary(&last.content),
+                 Some(Value::String(last.content.clone())), None)
+            } else if tc > 0 {
+                ("partial_success".to_string(),
+                 format!("任务部分完成。执行了 {} 轮，{} 次工具调用，剩余 {} 轮未完成。错误: {} 个。", turn, tc, effective_max_turns.saturating_sub(turn), errs.len()),
+                 None, None)
+            } else {
+                ("failed".to_string(), String::new(), None, None)
+            };
         Ok(TaskResult {
             task_iri: ctx.task_iri,
-            status,
-            summary,
-            output,
+            status: unfinished_status,
+            summary: unfinished_summary,
+            output: unfinished_output,
             jsonld_output: None,
             artifacts: vec![],
             errors: errs,
@@ -1758,7 +1946,7 @@ impl super::AgentRunner {
             tool_call_count: tc,
             five_w2h_updates: None,
             tracked_actions: Vec::new(),
-            archive_iri: None,
+            archive_iri: unfinished_archive,
         })
     }
 }

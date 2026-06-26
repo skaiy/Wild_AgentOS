@@ -1,8 +1,12 @@
-//! Bridge between HyperspaceEngine and open-ontologies for ontology embedding storage & search.
+//! Bridge between HyperspaceEngine and ontology systems for dual-space embedding storage & search.
+//!
+//! Moved from `crates/hyperspace-engine/src/open_ontologies.rs` — this is a cross-cutting
+//! concern that bridges two independent subsystems (vector engine + ontology), so it belongs
+//! in the application crate rather than inside either subsystem crate.
 //!
 //! # Design
 //!
-//! open-ontologies stores dual-space embeddings (text in Cosine space, structural in Poincaré
+//! Open ontologies store dual-space embeddings (text in Cosine space, structural in Poincaré
 //! space) for ontology classes. This bridge provides:
 //!
 //! - `HyperspaceEmbedStore`: wraps two `HyperspaceEngine` instances (text + struct) in a single
@@ -26,9 +30,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::engine::{HyperspaceEngine, SearchHit};
-use crate::error::EngineError;
-use crate::hyper_vector::EmbeddingVector;
+use hyperspace_engine::engine::{HyperspaceEngine, SearchHit};
+use hyperspace_engine::error::EngineError;
+use hyperspace_engine::hyper_vector::EmbeddingVector;
 
 /// Trait for embedding storage that open-ontologies can use.
 /// This bridges HyperspaceEngine's capabilities into open-ontologies' workflow.
@@ -57,12 +61,19 @@ pub trait OntologyEmbedStore: Send + Sync {
         top_k: usize,
     ) -> Result<Vec<SearchHit>, EngineError>;
 
-    /// Cross-search: find entries in the OTHER space similar to a given IRI.
+    /// Cross-search: given an IRI in this store, retrieve the structural vector
+    /// and search the text space with it (cross-space retrieval).
     async fn cross_search(
         &self,
         source_iri: &str,
         top_k: usize,
     ) -> Result<Vec<SearchHit>, EngineError>;
+
+    /// Retrieve the text-space (Cosine) embedding vector for a given IRI.
+    async fn get_text_vector(&self, iri: &str) -> Result<Option<EmbeddingVector>, EngineError>;
+
+    /// Retrieve the structural-space (Poincaré) embedding vector for a given IRI.
+    async fn get_struct_vector(&self, iri: &str) -> Result<Option<EmbeddingVector>, EngineError>;
 
     /// Number of stored embeddings.
     async fn embedding_count(&self) -> Result<u64, EngineError>;
@@ -86,6 +97,16 @@ impl HyperspaceEmbedStore {
     ) -> Self {
         Self { text_engine, struct_engine }
     }
+
+    /// Expose the text engine for advanced use (OntologySearchBridge needs cross-store routing).
+    pub fn text_engine(&self) -> &Arc<dyn HyperspaceEngine> {
+        &self.text_engine
+    }
+
+    /// Expose the struct engine for advanced use.
+    pub fn struct_engine(&self) -> &Arc<dyn HyperspaceEngine> {
+        &self.struct_engine
+    }
 }
 
 #[async_trait]
@@ -108,7 +129,7 @@ impl OntologyEmbedStore for HyperspaceEmbedStore {
         if text_vec.is_some() {
             match self.text_engine.resolve_iri(iri).await? {
                 Some(id) => return Ok(id),
-                None => {},
+                None => {}
             }
         }
         if struct_vec.is_some() {
@@ -135,16 +156,34 @@ impl OntologyEmbedStore for HyperspaceEmbedStore {
         self.struct_engine.search(query, top_k, &[]).await
     }
 
+    /// Cross-search: get the STRUCTURAL vector for `source_iri` and use it to
+    /// search the TEXT space. This finds text entries whose structural semantics
+    /// are similar to the source IRI's structural embedding.
+    ///
+    /// If the source has no structural vector, falls back to getting the TEXT
+    /// vector and searching the STRUCTURAL space.
     async fn cross_search(
         &self,
         source_iri: &str,
         top_k: usize,
     ) -> Result<Vec<SearchHit>, EngineError> {
-        let vector = self.struct_engine.get_vector(source_iri).await?;
-        match vector {
-            Some(vec) => self.struct_engine.search(&vec, top_k, &[]).await,
-            None => Ok(Vec::new()),
+        // Primary: get struct vector → search text space
+        if let Some(vec) = self.struct_engine.get_vector(source_iri).await? {
+            return self.text_engine.search(&vec, top_k, &[]).await;
         }
+        // Fallback: get text vector → search struct space
+        if let Some(vec) = self.text_engine.get_vector(source_iri).await? {
+            return self.struct_engine.search(&vec, top_k, &[]).await;
+        }
+        Ok(Vec::new())
+    }
+
+    async fn get_text_vector(&self, iri: &str) -> Result<Option<EmbeddingVector>, EngineError> {
+        self.text_engine.get_vector(iri).await
+    }
+
+    async fn get_struct_vector(&self, iri: &str) -> Result<Option<EmbeddingVector>, EngineError> {
+        self.struct_engine.get_vector(iri).await
     }
 
     async fn embedding_count(&self) -> Result<u64, EngineError> {
@@ -161,6 +200,9 @@ impl OntologyEmbedStore for HyperspaceEmbedStore {
 ///
 /// Provides cross-search: find ontology classes similar to an agent memory, or
 /// agent memories similar to an ontology class.
+///
+/// Unlike `OntologyEmbedStore::cross_search` (which searches across spaces WITHIN
+/// one store), this bridge searches ACROSS stores: agent memory IRI → ontology space.
 pub struct OntologySearchBridge {
     agent_store: Arc<dyn OntologyEmbedStore>,
     ontology_store: Arc<dyn OntologyEmbedStore>,
@@ -175,23 +217,43 @@ impl OntologySearchBridge {
     }
 
     /// Find ontology classes whose structural embedding is close to an agent memory IRI.
-    /// Cross-searches the agent's structural index to find matching ontologies.
+    ///
+    /// Algorithm:
+    /// 1. Get the structural (Poincaré) vector for `agent_iri` from the agent store
+    /// 2. Search the ontology store's structural space with that vector
+    ///
+    /// This finds ontology classes that have similar STRUCTURAL roles to the agent memory.
     pub async fn find_related_ontologies(
         &self,
         agent_iri: &str,
         top_k: usize,
     ) -> Result<Vec<SearchHit>, EngineError> {
-        // Search the ontology store with the agent memory's structural embedding
-        self.ontology_store.cross_search(agent_iri, top_k).await
+        // Agent memory's structural vector lives in the agent store
+        let vec = self.agent_store.get_struct_vector(agent_iri).await?;
+        match vec {
+            Some(v) => self.ontology_store.search_structural(&v, top_k).await,
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Find agent memories whose structural embedding is close to an ontology class IRI.
+    ///
+    /// Algorithm:
+    /// 1. Get the structural (Poincaré) vector for `ontology_iri` from the ontology store
+    /// 2. Search the agent store's structural space with that vector
+    ///
+    /// This finds agent memories that have similar STRUCTURAL roles to the ontology class.
     pub async fn find_related_memories(
         &self,
         ontology_iri: &str,
         top_k: usize,
     ) -> Result<Vec<SearchHit>, EngineError> {
-        self.agent_store.cross_search(ontology_iri, top_k).await
+        // Ontology class's structural vector lives in the ontology store
+        let vec = self.ontology_store.get_struct_vector(ontology_iri).await?;
+        match vec {
+            Some(v) => self.agent_store.search_structural(&v, top_k).await,
+            None => Ok(Vec::new()),
+        }
     }
 }
 
@@ -199,12 +261,12 @@ impl OntologySearchBridge {
 mod tests {
     use std::sync::Arc;
 
-    use crate::engine::HyperspaceEngineImpl;
-    use crate::hnsw::HnswConfig;
-    use crate::hyper_vector::{EmbeddingVector, MetricKind};
-    use crate::metric::CosineMetric;
-    use crate::metric::PoincareMetric;
-    use crate::wal::WalSyncMode;
+    use hyperspace_engine::engine::HyperspaceEngineImpl;
+    use hyperspace_engine::hnsw::HnswConfig;
+    use hyperspace_engine::hyper_vector::{EmbeddingVector, MetricKind};
+    use hyperspace_engine::metric::CosineMetric;
+    use hyperspace_engine::metric::PoincareMetric;
+    use hyperspace_engine::wal::WalSyncMode;
     use serde_json::json;
 
     use super::*;
@@ -284,7 +346,8 @@ mod tests {
             Arc::new(struct_engine(onto_dir.path())),
         ));
 
-        // Insert into agent memory (simulates agent remembering a user)
+        // Insert into agent memory (simulates agent remembering a user).
+        // Both text AND structural vectors are stored in the agent store.
         agent_store
             .store_embedding(
                 "mem:user_123",
@@ -295,7 +358,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Insert into ontology engine
+        // Insert into ontology engine (ontology class Person with similar struct vector)
         ontology_store
             .store_embedding(
                 "onto:Person",
@@ -318,15 +381,19 @@ mod tests {
         // Create bridge
         let bridge = OntologySearchBridge::new(agent_store, ontology_store);
 
-        // Find ontologies related to the agent memory
+        // Find ontologies related to the agent memory.
+        // The fix: find_related_ontologies now correctly retrieves the struct vector
+        // from the AGENT store and searches the ONTOLOGY store's struct space.
         let results = bridge
             .find_related_ontologies("mem:user_123", 5)
             .await
             .unwrap();
-        assert!(
-            results.is_empty(),
-            "cross_search returns empty since get_vector lookup needs registry resolution"
-        );
+
+        // "Person" (struct vec [0.25, 0.05, ...]) is closer to "mem:user_123"
+        // (struct vec [0.3, 0.1, ...]) than "Organization" (struct vec [0.0, 0.3, ...]).
+        // Both should be returned since they're both structurally close enough.
+        assert_eq!(results.len(), 2, "Should find both Person and Organization as related ontologies");
+        assert_eq!(results[0].iri, "onto:Person", "Person should be the most related");
     }
 
     #[tokio::test]
@@ -362,5 +429,98 @@ mod tests {
             .await
             .unwrap();
         assert!(struct_results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_cross_search_with_both_vectors() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = HyperspaceEmbedStore::new(
+            Arc::new(text_engine(dir.path())),
+            Arc::new(struct_engine(dir.path())),
+        );
+
+        // Insert with BOTH text and struct vectors
+        store
+            .store_embedding(
+                "onto:Dual",
+                Some(&v_cos(vec![1.0, 0.0, 0.0, 0.0])),
+                Some(&v_poin(vec![0.2, 0.1, 0.0, 0.0])),
+                &json!({"label": "dual space entry"}),
+            )
+            .await
+            .unwrap();
+
+        // cross_search should find entries in the STRUCTURAL space similar to
+        // the TEXT vector — but since both spaces have the same entries,
+        // this is primarily testing the routing works (non-panicking, returns results)
+        let results = store
+            .cross_search("onto:Dual", 5)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1, "cross_search should return at least the source entry");
+        assert_eq!(results[0].iri, "onto:Dual");
+    }
+
+    #[tokio::test]
+    async fn test_get_text_and_struct_vectors() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = HyperspaceEmbedStore::new(
+            Arc::new(text_engine(dir.path())),
+            Arc::new(struct_engine(dir.path())),
+        );
+
+        store
+            .store_embedding(
+                "onto:TestVec",
+                Some(&v_cos(vec![0.1, 0.2, 0.3, 0.4])),
+                Some(&v_poin(vec![0.1, 0.05, 0.0, 0.0])),
+                &json!({"label": "vector test"}),
+            )
+            .await
+            .unwrap();
+
+        let text_vec = store.get_text_vector("onto:TestVec").await.unwrap();
+        assert!(text_vec.is_some(), "text vector should exist");
+        assert_eq!(text_vec.unwrap().metric, MetricKind::Cosine);
+
+        let struct_vec = store.get_struct_vector("onto:TestVec").await.unwrap();
+        assert!(struct_vec.is_some(), "struct vector should exist");
+        assert_eq!(struct_vec.unwrap().metric, MetricKind::Poincare);
+
+        // Non-existent IRI returns None
+        let missing = store.get_text_vector("onto:Nobody").await.unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_bridge_no_match_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_store = Arc::new(HyperspaceEmbedStore::new(
+            Arc::new(text_engine(dir.path())),
+            Arc::new(struct_engine(dir.path())),
+        ));
+        let onto_dir = tempfile::tempdir().unwrap();
+        let ontology_store = Arc::new(HyperspaceEmbedStore::new(
+            Arc::new(text_engine(onto_dir.path())),
+            Arc::new(struct_engine(onto_dir.path())),
+        ));
+
+        // Agent has an entry but ontology store is empty
+        agent_store
+            .store_embedding(
+                "mem:lonely",
+                Some(&v_cos(vec![1.0, 0.0, 0.0, 0.0])),
+                Some(&v_poin(vec![0.1, 0.1, 0.0, 0.0])),
+                &json!({"label": "lonely memory"}),
+            )
+            .await
+            .unwrap();
+
+        let bridge = OntologySearchBridge::new(agent_store, ontology_store);
+        let results = bridge
+            .find_related_ontologies("mem:lonely", 5)
+            .await
+            .unwrap();
+        assert!(results.is_empty(), "Empty ontology store should return no matches");
     }
 }

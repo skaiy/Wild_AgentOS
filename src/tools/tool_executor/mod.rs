@@ -264,7 +264,7 @@ impl ToolExecutor {
             "required": ["query"]
         }), Arc::new(|input: Value| Box::pin(async move { builtins::execute_tool_search(input).await })), all);
         let ws_read = self.workspace_monitor.clone();
-        self.register("file_read", "Read a text file. Reads the entire file by default. On re-read of a changed file, returns a unified diff showing what changed. Use mode:full to force full content, mode:changed_only to get only the new/changed lines.", json!({
+        self.register("file_read", "Read a text file. Reads the entire file by default. On re-read of a changed file, returns a unified diff showing what changed. On re-read of an unchanged file, returns from_cache=true — content already in your context, skip re-reading. Use mode:full to force full content, mode:changed_only to get only the new/changed lines.", json!({
             "properties": {
                 "path": {"type":"string", "description": "File path to read"},
                 "offset": {"type":"integer", "description": "Line offset to start from (0-indexed). Omit to read from beginning."},
@@ -323,14 +323,14 @@ impl ToolExecutor {
                                             obj.remove("returned");
                                             obj.insert("from_cache".to_string(), Value::Bool(true));
                                             obj.insert("message".to_string(), Value::String(
-                                                "File unchanged since last read (content already provided in a previous read). Use mode:force_refresh to force re-read full content.".to_string()
+                                                "Cache hit: file unchanged since last read. Content already in your context from a previous read — skip re-reading and proceed with what you have.".to_string()
                                             ));
                                         });
                                     } else {
                                         result.as_object_mut().map(|obj| {
                                             obj.insert("from_cache".to_string(), Value::Bool(true));
                                             obj.insert("message".to_string(), Value::String(
-                                                "File unchanged since last read. Use mode:force_refresh to force re-read full content.".to_string()
+                                                "Cache hit: file unchanged since last read. Content already in your context — skip re-reading.".to_string()
                                             ));
                                         });
                                     }
@@ -751,6 +751,15 @@ impl ToolExecutor {
                 },
                 "required": ["shapes_ttl"]
             }), Arc::new(|input: Value| Box::pin(async move { ontology_tools::execute_ontology_validate_shacl(input).await })), all);
+
+            self.register("ontology_reason", "Run RDFS/OWL-RL reasoning on Turtle data. Returns inferred triples.", json!({
+                "properties": {
+                    "ttl": {"type":"string","description":"Turtle data to reason over"},
+                    "profile": {"type":"string","description":"Reasoning profile: rdfs, owl-rl (default), owl-rl-ext, owl-dl"},
+                    "materialize": {"type":"boolean","description":"Whether to materialize inferred triples (default: true)"}
+                },
+                "required": ["ttl"]
+            }), Arc::new(|input: Value| Box::pin(async move { ontology_tools::execute_ontology_reason(input).await })), all);
         }
     }
 
