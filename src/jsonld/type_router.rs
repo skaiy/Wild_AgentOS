@@ -1,9 +1,9 @@
-//! JSON-LD 类型路由模块
+//! JSON-LD type routing module
 //!
-//! 基于 @type 实现多态发现和路由决策:
-//! - 确定适用的 SPARQL 投影模板
-//! - 触发相应的事件
-//! - 应用 SA 监控规则
+//! Polymorphic discovery and routing decisions based on @type:
+//! - Determine applicable SPARQL projection templates
+//! - Trigger corresponding events
+//! - Apply SA monitoring rules
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

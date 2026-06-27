@@ -87,12 +87,12 @@ pub fn smart_truncate_text(text: &str, max_bytes: usize) -> String {
         let total_lines = text.lines().count();
         let kept_lines = result.lines().count();
         format!(
-            "{}\n\n[截断: 共 {} 行, 保留 {} 行 | 原始 {} 字符]",
+            "{}\n\n[truncated: {} lines total, {} lines kept | {} original chars]",
             result, total_lines, kept_lines, text_width
         )
     } else {
         format!(
-            "{}...\n\n[截断: 原始 {} 字符, 保留 {} 字符]",
+            "{}...\n\n[truncated: {} original chars, {} chars kept]",
             truncated, text_width, truncated.width()
         )
     }
@@ -185,14 +185,14 @@ mod tests {
         let text = "line1\nline2\nline3\nline4\nline5";
         let result = smart_truncate_text(text, 15);
         assert!(result.contains("line1"));
-        assert!(result.contains("截断"));
+        assert!(result.contains("truncated"));
     }
 
     #[test]
     fn test_smart_truncate_text_utf8() {
         let text = "你好世界\n".repeat(500);
         let result = smart_truncate_text(&text, 100);
-        assert!(result.contains("截断"));
+        assert!(result.contains("truncated"));
         assert!(result.is_char_boundary(result.len()));
     }
 }

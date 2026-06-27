@@ -8,17 +8,17 @@
     "skill:Skill",
     "skill:Atomic"
   ],
-  "schema:description": "测试技能",
+  "schema:description": "Test skill",
   "schema:name": "test_skill",
   "skill:5W2H": {
     "skill:how": {
-      "skill:approach": "直接执行"
+      "skill:approach": "Direct execution"
     },
     "skill:howMuch": {
       "skill:avgDuration": 0,
       "skill:avgTokenCost": 0
     },
-    "skill:what": "测试",
+    "skill:what": "Test",
     "skill:when": {
       "skill:applicablePhase": [
         "Plan",
@@ -30,7 +30,7 @@
       "skill:requiredRole": "DA",
       "skill:roleName": "DA"
     },
-    "skill:why": "验证"
+    "skill:why": "Verify"
   },
   "skill:graphMeta": {
     "skill:avgTokenConsumption": 0,

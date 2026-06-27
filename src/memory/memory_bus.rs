@@ -66,9 +66,9 @@ impl MemoryBus {
         ).await;
     }
 
-    /// 订阅事件总线
+    /// Subscribe to the event bus
     ///
-    /// 返回 `broadcast::Receiver` 用于接收系统事件通知。
+    /// Returns a `broadcast::Receiver` for system event notifications.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.event_bus.subscribe()
     }

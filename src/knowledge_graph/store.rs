@@ -11,7 +11,7 @@ pub struct KnowledgeGraphStore {
 }
 
 impl KnowledgeGraphStore {
-    /// 使用统一共享的 Oxigraph Store 创建 KG Store
+    /// Create KG Store using a unified shared Oxigraph Store
     pub fn with_shared_store(store: Arc<Store>) -> Result<Self, String> {
         Ok(Self {
             store,
@@ -20,7 +20,7 @@ impl KnowledgeGraphStore {
     }
 
     pub fn new() -> Result<Self, String> {
-        let store = Store::new().map_err(|e| format!("创建 Oxigraph Store 失败: {}", e))?;
+        let store = Store::new().map_err(|e| format!("failed to create Oxigraph Store: {}", e))?;
         Ok(Self {
             store: Arc::new(store),
             default_graph: "graph:world".to_string(),
@@ -44,7 +44,7 @@ impl KnowledgeGraphStore {
     }
 
     pub fn with_graph(graph_name: &str) -> Result<Self, String> {
-        let store = Store::new().map_err(|e| format!("创建 Oxigraph Store 失败: {}", e))?;
+        let store = Store::new().map_err(|e| format!("failed to create Oxigraph Store: {}", e))?;
         Ok(Self {
             store: Arc::new(store),
             default_graph: graph_name.to_string(),
@@ -58,7 +58,7 @@ impl KnowledgeGraphStore {
         let sparql = RdfMapper::quads_to_sparql_insert(quads, graph);
         self.store
             .update(&sparql)
-            .map_err(|e| format!("SPARQL INSERT 失败: {}", e))
+            .map_err(|e| format!("SPARQL INSERT failed: {}", e))
     }
 
     pub fn delete_quads_for_source(&self, source_file: &str, graph: &str) -> Result<usize, String> {
@@ -70,7 +70,7 @@ impl KnowledgeGraphStore {
         );
         self.store
             .update(&delete_sparql)
-            .map_err(|e| format!("SPARQL DELETE 失败: {}", e))?;
+            .map_err(|e| format!("SPARQL DELETE failed: {}", e))?;
 
         let related_delete = format!(
             "DELETE WHERE {{ GRAPH <{}> {{ ?s <https://agentos.ontology/code/contains> <{}> . }} }}",
@@ -141,14 +141,14 @@ impl KnowledgeGraphStore {
         let results = self
             .store
             .query(&final_sparql)
-            .map_err(|e| format!("SPARQL 查询失败: {}", e))?;
+            .map_err(|e| format!("SPARQL query failed: {}", e))?;
 
         let mut values = Vec::new();
         match results {
             QueryResults::Solutions(solutions) => {
                 for solution in solutions {
                     let solution =
-                        solution.map_err(|e| format!("读取查询结果失败: {}", e))?;
+                        solution.map_err(|e| format!("Failed to read query result: {}", e))?;
                     let mut obj = serde_json::Map::new();
                     for (var, value) in solution.iter() {
                         obj.insert(
@@ -162,7 +162,7 @@ impl KnowledgeGraphStore {
             QueryResults::Graph(graph) => {
                 for triple in graph {
                     let triple =
-                        triple.map_err(|e| format!("读取图结果失败: {}", e))?;
+                        triple.map_err(|e| format!("Failed to read graph result: {}", e))?;
                     let mut obj = serde_json::Map::new();
                     obj.insert(
                         "subject".to_string(),
@@ -401,7 +401,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(results.len(), 3, "应返回 3 条三元组");
+        assert_eq!(results.len(), 3, "should return 3 triples");
 
         let labels: Vec<&str> = results
             .iter()
@@ -464,7 +464,7 @@ mod tests {
         store.write_quads(&quads, TEST_GRAPH).unwrap();
 
         let results = store.search_entities("alice", None).unwrap();
-        assert_eq!(results.len(), 1, "模糊搜索应找到 Alice");
+        assert_eq!(results.len(), 1, "fuzzy search should find Alice");
         let label = results[0].get("?label").and_then(|v| v.as_str()).unwrap();
         assert!(label.contains("Alice"));
 
@@ -473,7 +473,7 @@ mod tests {
             .unwrap();
         assert!(
             person_results.len() >= 2,
-            "按类型搜索 Person 应至少找到 2 个"
+            "search by type Person should find at least 2"
         );
 
         let vehicle_results = store
@@ -482,7 +482,7 @@ mod tests {
         assert_eq!(
             vehicle_results.len(),
             0,
-            "Alice 不是 Vehicle 类型"
+            "Alice is not Vehicle type"
         );
     }
 
@@ -500,8 +500,9 @@ mod tests {
 
         store.write_quads(&quads, TEST_GRAPH).unwrap();
 
-        let upper = store.search_entities("ALICE", None).unwrap();
-        assert_eq!(upper.len(), 1, "大小写不敏感搜索应找到结果");
+        let upper = store.search_entities("ALICE", None)
+            .unwrap();
+        assert_eq!(upper.len(), 1, "case-insensitive search should find results");
 
         let lower = store.search_entities("alice", None).unwrap();
         assert_eq!(lower.len(), 1);
@@ -561,7 +562,7 @@ mod tests {
         let neighbors = result.get("neighbors").unwrap().as_array().unwrap();
         assert!(
             neighbors.len() >= 2,
-            "1 跳遍历应至少找到 2 个邻居 (type + label + knows)"
+            "1-hop traversal should find at least 2 neighbors (type + label + knows)"
         );
 
         let knows: Vec<_> = neighbors
@@ -570,7 +571,7 @@ mod tests {
                 n.get("predicate").and_then(|v| v.as_str()) == Some(KNOWS)
             })
             .collect();
-        assert_eq!(knows.len(), 1, "应找到 1 条 knows 关系");
+        assert_eq!(knows.len(), 1, "should find 1 knows relation");
         assert_eq!(
             knows[0].get("target").and_then(|v| v.as_str()),
             Some("http://example.org/bob")
@@ -603,7 +604,7 @@ mod tests {
         let neighbors = result.get("neighbors").unwrap().as_array().unwrap();
         assert!(
             neighbors.len() >= 2,
-            "2 跳遍历应找到 alice->bob 和 bob->charlie"
+            "2-hop traversal should find alice->bob and bob->charlie"
         );
 
         let targets: Vec<_> = neighbors
@@ -618,11 +619,11 @@ mod tests {
             .collect();
         assert!(
             targets.contains(&"http://example.org/bob"),
-            "应包含 bob 作为直接邻居"
+            "should include bob as direct neighbor"
         );
         assert!(
             targets.contains(&"http://example.org/charlie"),
-            "应包含 charlie 作为 2 跳邻居"
+            "should include charlie as 2-hop neighbor"
         );
     }
 
@@ -633,7 +634,7 @@ mod tests {
             .get_neighbors("http://example.org/alice", 0)
             .unwrap();
         let neighbors = result.get("neighbors").unwrap().as_array().unwrap();
-        assert!(neighbors.is_empty(), "depth=0 应返回空邻居列表");
+        assert!(neighbors.is_empty(), "depth=0 should return empty neighbor list");
     }
 
     #[test]
@@ -670,7 +671,7 @@ mod tests {
             .unwrap();
         assert!(
             !results.is_empty(),
-            "使用 GRAPH ?g 应查询到命名图中的三元组"
+            "using GRAPH ?g should query triples in named graph"
         );
     }
 
@@ -693,7 +694,7 @@ mod tests {
             TEST_GRAPH
         );
         let results = store.query_sparql(&sparql, Some(TEST_GRAPH)).unwrap();
-        assert_eq!(results.len(), 1, "已有 GRAPH 子句时不应重复包装");
+        assert_eq!(results.len(), 1, "should not double-wrap when GRAPH clause already exists");
     }
 
     #[test]
@@ -719,7 +720,7 @@ mod tests {
             .iter()
             .filter(|n| n.get("direction").and_then(|v| v.as_str()) == Some("incoming"))
             .collect();
-        assert_eq!(incoming.len(), 1, "bob 应有 1 个入边 (来自 alice)");
+        assert_eq!(incoming.len(), 1, "bob should have 1 incoming edge (from alice)");
         assert_eq!(
             incoming[0].get("source").and_then(|v| v.as_str()),
             Some("http://example.org/alice")

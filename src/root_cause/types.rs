@@ -85,7 +85,7 @@ impl TraceChain {
     pub fn summary(&self) -> String {
         let root = self.root_level()
             .map(|l| l.description.as_str())
-            .unwrap_or("未确定根因");
+            .unwrap_or("Unidentified root cause");
         format!(
             "Trace[{}]: {} levels, root={}, agent={}",
             self.trace_id, self.depth(), root, self.agent_id
@@ -193,19 +193,19 @@ pub enum DefenseLayer {
 impl DefenseLayer {
     pub fn name(&self) -> &'static str {
         match self {
-            Self::EntryValidation => "入口校验",
-            Self::BusinessLogic => "业务逻辑",
-            Self::EnvironmentGuard => "环境防护",
-            Self::Instrumentation => "可观测性",
+            Self::EntryValidation => "entry validation",
+            Self::BusinessLogic => "business logic",
+            Self::EnvironmentGuard => "environment guard",
+            Self::Instrumentation => "observability",
         }
     }
 
     pub fn description(&self) -> &'static str {
         match self {
-            Self::EntryValidation => "在入口处验证输入参数和前置条件",
-            Self::BusinessLogic => "在业务逻辑层添加防御性检查",
-            Self::EnvironmentGuard => "在环境层添加守护措施",
-            Self::Instrumentation => "在关键路径添加日志和监控",
+            Self::EntryValidation => "Validate input parameters and preconditions at entry",
+            Self::BusinessLogic => "Add defensive checks in business logic layer",
+            Self::EnvironmentGuard => "Add guard measures in environment layer",
+            Self::Instrumentation => "Add logging and monitoring on critical paths",
         }
     }
 }

@@ -1,48 +1,48 @@
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "gliding", about = "Agent OS 编程控制台 - 基于 DeepSeek V4 的智能编程助手")]
+#[command(name = "gliding", about = "Agent OS Console - AI Coding Assistant")]
 struct Cli {
-    #[arg(help = "单次 prompt（无则进入交互模式）")]
+    #[arg(help = "Single prompt (omit for interactive mode)")]
     prompt: Option<String>,
 
-    #[arg(short = 'm', long = "model", default_value = "deepseek-v4-flash", help = "模型选择")]
+    #[arg(short = 'm', long = "model", default_value = "deepseek-v4-flash", help = "Model to use")]
     model: String,
 
-    #[arg(short = 'w', long = "workspace", default_value = ".", help = "工作目录")]
+    #[arg(short = 'w', long = "workspace", default_value = ".", help = "Working directory")]
     workspace: String,
 
-    #[arg(long = "max-iterations", default_value = "50", help = "最大迭代次数")]
+    #[arg(long = "max-iterations", default_value = "50", help = "Maximum iterations")]
     max_iterations: u32,
 
-    #[arg(long = "max-pdca-cycles", default_value = "7", help = "Recursive 任务最大 PDCA 循环重入次数")]
+    #[arg(long = "max-pdca-cycles", default_value = "7", help = "Maximum PDCA cycle re-entry count for recursive tasks")]
     max_pdca_cycles: u32,
 
-    #[arg(long = "api-key", help = "DeepSeek API key（优先使用环境变量 DEEPSEEK_API_KEY）")]
+    #[arg(long = "api-key", help = "API key (takes precedence over DEEPSEEK_API_KEY env var)")]
     api_key: Option<String>,
 
-    #[arg(long = "api-url", help = "API 地址（优先使用环境变量 DEEPSEEK_API_URL）")]
+    #[arg(long = "api-url", help = "API URL (takes precedence over DEEPSEEK_API_URL env var)")]
     api_url: Option<String>,
 
-    #[arg(short = 'v', long = "verbose", help = "显示详细日志")]
+    #[arg(short = 'v', long = "verbose", help = "Show verbose logs")]
     verbose: bool,
 
-    #[arg(long = "debug", help = "显示调试日志（更详细）")]
+    #[arg(long = "debug", help = "Show debug logs (more detailed)")]
     debug: bool,
 
-    #[arg(long = "resume", help = "从 checkpoint 恢复任务（提供 task_iri）")]
+    #[arg(long = "resume", help = "Resume task from checkpoint (provide task_iri)")]
     resume: Option<String>,
 
-    #[arg(long = "list-checkpoints", help = "列出所有 checkpoint")]
+    #[arg(long = "list-checkpoints", help = "List all checkpoints")]
     list_checkpoints: bool,
 
-    #[arg(long = "workflow", help = "JSON-LD 工作流定义文件路径（可选，替代 LLM 生成的 plan）")]
+    #[arg(long = "workflow", help = "Path to JSON-LD workflow definition file (optional, replaces LLM-generated plan)")]
     workflow: Option<String>,
 
-    #[arg(long = "mcp-server", value_name = "NAME=URL", help = "MCP 服务器配置（可重复，格式 name=url，例如 --mcp-server chrome=http://localhost:3000/sse）")]
+    #[arg(long = "mcp-server", value_name = "NAME=URL", help = "MCP server config (repeatable, format name=url, e.g. --mcp-server chrome=http://localhost:3000/sse)")]
     mcp_server: Vec<String>,
 
-    #[arg(long = "mcp-server-stdio", value_name = "NAME=JSON", help = "MCP Stdio 服务器配置（可重复，格式 name=json，例如 --mcp-server-stdio chrome='{\"command\":\"npx\",\"args\":[\"-y\",\"@anthropic/chrome-mcp\"]}')")]
+    #[arg(long = "mcp-server-stdio", value_name = "NAME=JSON", help = "MCP Stdio server config (repeatable, format name=json, e.g. --mcp-server-stdio chrome='{\"command\":\"npx\",\"args\":[\"-y\",\"@anthropic/chrome-mcp\"]}')")]
     mcp_server_stdio: Vec<String>,
 }
 
@@ -161,13 +161,13 @@ fn list_checkpoints(config: &code_cli::config::CliConfig) -> anyhow::Result<()> 
 
     let checkpoints = rt.block_on(engine.list_checkpoints())?;
     if checkpoints.is_empty() {
-        println!("没有找到 checkpoint。");
+        println!("No checkpoints found.");
     } else {
         println!("Checkpoints:");
         for cp in &checkpoints {
             println!("  {}  {}  turns={}  {}", cp.created_at, cp.name, cp.node_count, cp.task_iri);
         }
-        println!("\n使用 glidingcode --resume <task_iri> 恢复");
+        println!("\nUse glidingcode --resume <task_iri> to resume");
     }
     Ok(())
 }
@@ -177,8 +177,8 @@ fn resume_task(
     task_iri: &str,
     log_buffer: std::sync::Arc<code_cli::log_buffer::LogBuffer>,
 ) -> anyhow::Result<()> {
-    println!("从 checkpoint 恢复任务: {}", task_iri);
-    println!("正在打开控制台...\n");
+    println!("Resuming task from checkpoint: {}", task_iri);
+    println!("Opening console...\n");
     code_cli::tui::App::new(config, log_buffer, Some(task_iri.to_string()))?.run()?;
     Ok(())
 }

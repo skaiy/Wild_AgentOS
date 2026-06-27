@@ -1,6 +1,6 @@
-//! JSON-LD 工具函数
+//! JSON-LD utility functions
 //!
-//! 提供 IRI 生成、解析、验证等工具函数
+//! Provides IRI generation, parsing, validation, and other utility functions
 
 use serde_json::Value;
 
@@ -77,7 +77,7 @@ pub fn extract_namespace_from_iri(iri: &str) -> Option<String> {
     parse_iri(iri).map(|(namespace, _)| namespace)
 }
 
-/// 所有已知的 IRI 命名空间（应与代码中 format!("iri://{}/...", ns) 保持一致）
+/// All known IRI namespaces (should match format!("iri://{}/...", ns) in code)
 pub const KNOWN_NAMESPACES: &[&str] = &[
     "agent", "approval", "archive", "chat", "checkpoint", "concept",
     "emphasis", "entity", "experience", "fragment", "item", "knowledge",
@@ -246,9 +246,9 @@ mod tests {
         assert!(is_valid_namespace("task"));
         assert!(is_valid_namespace("agent"));
         assert!(is_valid_namespace("skill"));
-        assert!(is_valid_namespace("entity"), "扩展后的命名空间应被认可");
-        assert!(is_valid_namespace("share"), "扩展后的命名空间应被认可");
-        assert!(is_valid_namespace("knowledge"), "扩展后的命名空间应被认可");
+assert!(is_valid_namespace("entity"), "Extended namespace should be recognized");
+assert!(is_valid_namespace("share"), "Extended namespace should be recognized");
+assert!(is_valid_namespace("knowledge"), "Extended namespace should be recognized");
         assert!(!is_valid_namespace("invalid_namespace"));
     }
 

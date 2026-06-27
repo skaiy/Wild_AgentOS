@@ -367,7 +367,7 @@ impl MethodologyGate {
                     gate_action: ap.gate_action.to_string(),
                     should_block,
                     message: format!(
-                        "⚠️ 反模式 [{}]: {} — {}\n自问: {}\n行动: {}",
+                        "⚠️ Anti-pattern [{}]: {} — {}\nAsk yourself: {}\nAction: {}",
                         def.name, ap.name, ap.description, ap.gate_ask, ap.gate_action
                     ),
                 });
@@ -387,10 +387,10 @@ impl MethodologyGate {
         for activated in &self.active {
             if let Some(def) = self.registry.all().get(activated.registry_index) {
                 let prefix = match def.methodology_type {
-                    MethodologyType::Discipline => "📜 [严格纪律]",
-                    MethodologyType::Guidance => "💡 [指导建议]",
-                    MethodologyType::Process => "📋 [流程规范]",
-                    MethodologyType::Reference => "📖 [参考资料]",
+                    MethodologyType::Discipline => "📜 [Strict Discipline]",
+                    MethodologyType::Guidance => "💡 [Guidance Suggestion]",
+                    MethodologyType::Process => "📋 [Process Standard]",
+                    MethodologyType::Reference => "📖 [Reference Material]",
                 };
                 for example in def.persuasion.phrasing_examples {
                     directives.push(format!("{} {} ({})", prefix, example, def.name));
@@ -616,7 +616,7 @@ impl MethodologyGateHandle {
 
                     let first = &blocking[0];
                     ctx.error = Some(format!(
-                        "MethodologyGate 反模式阻断 [{}]: {}",
+                        "MethodologyGate anti-pattern block [{}]: {}",
                         first.anti_pattern_name, first.description
                     ));
                     debug!(
@@ -658,14 +658,14 @@ fn tool_name_matches_gate(tool_name: &str, gate_before: &str) -> bool {
     }
 
     let tool_keywords: &[(&str, &[&str])] = &[
-        ("glob", &["glob", "目录遍历", "文件搜索", "find"]),
-        ("grep_search", &["grep", "搜索", "search", "内容查找"]),
-        ("bash", &["bash", "shell", "命令", "终端", "执行"]),
-        ("file_read", &["read", "文件读取", "file_read"]),
-        ("file_write", &["write", "文件写入", "创建文件", "file_write"]),
-        ("file_edit", &["edit", "编辑", "修改文件", "file_edit"]),
-        ("web_fetch", &["fetch", "网络", "http", "web"]),
-        ("web_search", &["web_search", "网络搜索", "搜索"]),
+        ("glob", &["glob", "目录遍历", "文件搜索", "find", "directory traversal", "file search"]),
+        ("grep_search", &["grep", "搜索", "search", "内容查找", "content search"]),
+        ("bash", &["bash", "shell", "命令", "终端", "执行", "command", "terminal"]),
+        ("file_read", &["read", "文件读取", "file_read", "reading file"]),
+        ("file_write", &["write", "文件写入", "创建文件", "file_write", "writing file"]),
+        ("file_edit", &["edit", "编辑", "修改文件", "file_edit", "editing file"]),
+        ("web_fetch", &["fetch", "网络", "http", "web", "website"]),
+        ("web_search", &["web_search", "网络搜索", "搜索", "internet search"]),
     ];
 
     for (key, keywords) in tool_keywords {
@@ -960,7 +960,7 @@ mod tests {
 
         let flags = gate.active_red_flags();
         assert!(!flags.is_empty(), "using-superpowers should have red flags");
-        assert!(flags.iter().any(|(_, rf)| rf.pattern.contains("跳过")));
+        assert!(flags.iter().any(|(_, rf)| rf.pattern.contains("skipping")));
     }
 
     #[test]
@@ -970,7 +970,7 @@ mod tests {
 
         let rationalizations = gate.active_rationalizations();
         assert!(!rationalizations.is_empty(), "index-priority should have rationalization checks");
-        assert!(rationalizations.iter().any(|(_, _, check)| check.contains("目录")));
+        assert!(rationalizations.iter().any(|(_, _, check)| check.contains("directory")));
     }
 
     // ─── Anti-Pattern Gate Checks ───
@@ -1026,8 +1026,8 @@ mod tests {
         gate.activate("methodology:test-driven-development", TriggerSource::Manual);
 
         let directives = gate.persuasive_directives();
-        assert!(directives.iter().any(|d| d.contains("严格纪律")),
-            "Discipline-type methodologies should use 严格纪律 prefix");
+        assert!(directives.iter().any(|d| d.contains("Strict Discipline")),
+            "Discipline-type methodologies should use Strict Discipline prefix");
     }
 
     // ─── Constitution Binding ───

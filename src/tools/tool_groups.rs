@@ -236,14 +236,14 @@ impl ToolGroupManager {
         let mut summary = String::new();
         
         if !available.is_empty() {
-            summary.push_str("## 默认可用工具\n");
+            summary.push_str("## Default available tools\n");
             for tool in available {
                 summary.push_str(&format!("- {}\n", tool));
             }
         }
         
         if !on_demand_available.is_empty() {
-            summary.push_str("\n## 按需工具 (使用 tool_search 查询)\n");
+            summary.push_str("\n## On-demand tools (use tool_search to query)\n");
             for tool in on_demand_available {
                 summary.push_str(&format!("- {}\n", tool));
             }

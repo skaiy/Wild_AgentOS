@@ -312,12 +312,12 @@ impl SkillRegistry {
             SkillMeta {
                 skill_iri: "iri://skills/create_skill".to_string(),
                 name: "create_skill".to_string(),
-                description: "根据自然语言描述自动创建新的 Skill 定义，利用 LLM 生成 JSON-LD 格式的 Skill".to_string(),
+                description: "Automatically create new Skill definitions from natural language descriptions, using LLM to generate JSON-LD Skill format".to_string(),
                 version: "1.0.0".to_string(),
                 category: "meta".to_string(),
                 security_level: "high".to_string(),
                 allowed_roles: vec!["DA".to_string()],
-                input_schema: json!({"type":"object","properties":{"description":{"type":"string","description":"Skill 功能的自然语言描述"},"skill_name_hint":{"type":"string","description":"建议的 Skill 名称（可选）"},"category_hint":{"type":"string","description":"建议的分类（可选）：file|network|ai|execution|validation|data|meta|system"},"security_level_override":{"type":"string","description":"安全等级覆盖（可选）：low|normal|high|critical"}},"required":["description"]}),
+                input_schema: json!({"type":"object","properties":{"description":{"type":"string","description":"Natural language description of Skill functionality"},"skill_name_hint":{"type":"string","description":"Suggested Skill name (optional)"},"category_hint":{"type":"string","description":"Suggested category (optional): file|network|ai|execution|validation|data|meta|system"},"security_level_override":{"type":"string","description":"Security level override (optional): low|normal|high|critical"}},"required":["description"]}),
                 output_schema: json!({"type":"object","properties":{"skill_iri":{"type":"string"},"name":{"type":"string"},"json_ld":{"type":"object"},"registered":{"type":"boolean"}}}),
                 compiled_template: r#"{"description":"___"}"#.into(),
                 signature: None,
@@ -338,12 +338,12 @@ impl SkillRegistry {
             SkillMeta {
                 skill_iri: "iri://skills/convert_skill".to_string(),
                 name: "convert_skill".to_string(),
-                description: "将 Markdown 格式的 Skill 描述自动转换为 JSON-LD 格式的 Skill 定义".to_string(),
+                description: "Automatically convert Markdown Skill descriptions to JSON-LD Skill definitions".to_string(),
                 version: "1.0.0".to_string(),
                 category: "meta".to_string(),
                 security_level: "normal".to_string(),
                 allowed_roles: vec!["DA".to_string(), "CA".to_string()],
-                input_schema: json!({"type":"object","properties":{"markdown_content":{"type":"string","description":"Markdown 格式的 Skill 描述内容"},"source_path":{"type":"string","description":"源文件路径（可选）"}},"required":["markdown_content"]}),
+                input_schema: json!({"type":"object","properties":{"markdown_content":{"type":"string","description":"Markdown formatted Skill description content"},"source_path":{"type":"string","description":"Source file path (optional)"}},"required":["markdown_content"]}),
                 output_schema: json!({"type":"object","properties":{"skill_iri":{"type":"string"},"name":{"type":"string"},"json_ld":{"type":"object"},"registered":{"type":"boolean"}}}),
                 compiled_template: r#"{"markdown_content":"___"}"#.into(),
                 signature: None,
@@ -919,8 +919,8 @@ impl SkillRegistry {
         self.skills.read().len()
     }
 
-    /// 通过语义能力发现Skill
-    /// 根据skill_types中的IRI查找匹配的技能
+    /// Discover skills by semantic capability
+    /// Find matching skills based on skill_types IRIs
     pub fn find_skills_by_semantic_capability(&self, capability_iri: &str) -> Vec<SkillMeta> {
         let skills = self.skills.read();
         skills
@@ -930,8 +930,8 @@ impl SkillRegistry {
             .collect()
     }
 
-    /// 通过输入类型发现Skill
-    /// 根据input_mapping中的值查找匹配的技能
+    /// Discover skills by input type
+    /// Find matching skills based on input_mapping values
     pub fn find_skills_by_input_type(&self, type_iri: &str) -> Vec<SkillMeta> {
         let skills = self.skills.read();
         skills
@@ -941,8 +941,8 @@ impl SkillRegistry {
             .collect()
     }
 
-    /// 将本地参数名映射到统一IRI
-    /// 返回映射后的参数字典，键为IRI，值为原始参数值
+    /// Map local parameter names to unified IRIs
+    /// Returns a mapped parameter dictionary with IRI keys and original parameter values
     pub fn map_input_params(
         &self,
         skill_iri: &str,
@@ -964,7 +964,7 @@ impl SkillRegistry {
         }
     }
 
-    /// 将SkillMeta转换为完整的JSON-LD格式
+    /// Convert SkillMeta to full JSON-LD format
     pub fn to_json_ld(&self, skill_iri: &str) -> Option<serde_json::Value> {
         let skill = self.get_skill(skill_iri)?;
 

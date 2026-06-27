@@ -88,7 +88,7 @@ impl SkillEvolutionEngine {
 
     pub fn record_usage(&mut self, record: UsageRecord) -> Result<(), CoreError> {
         info!(
-            "记录技能使用: {} (success={}, tokens={})",
+            "Recording skill usage: {} (success={}, tokens={})",
             record.skill_iri, record.success, record.token_consumption
         );
 
@@ -121,7 +121,7 @@ impl SkillEvolutionEngine {
         _task_iri: &str,
         _agent_id: &str,
     ) {
-        debug!("分析技能失败: {} - {}", skill_iri, error);
+        debug!("Analyzing skill failure: {} - {}", skill_iri, error);
 
         if let Some(skill) = self.graph_store.get_skill(skill_iri) {
             let similar_failures: Vec<_> = skill
@@ -135,7 +135,7 @@ impl SkillEvolutionEngine {
                 self.pending_suggestions.push(EvolutionSuggestion {
                     suggestion_type: EvolutionSuggestionType::CreateFragment,
                     skill_iri: skill_iri.to_string(),
-                    description: format!("新失败模式: {}", error),
+                    description: format!("New failure mode: {}", error),
                     confidence: 0.7,
                 });
             }
@@ -149,7 +149,7 @@ impl SkillEvolutionEngine {
         recommendation: &str,
         discoverer: &str,
     ) -> Result<KnowledgeFragment, CoreError> {
-        info!("创建知识碎片: {} -> {}", skill_iri, problem);
+        info!("Creating knowledge fragment: {} -> {}", skill_iri, problem);
 
         let fragment_count = self.graph_store.get_fragments_for_skill(skill_iri).len();
         let fragment_iri = format!("{}#fragment_{}", skill_iri, fragment_count + 1);
@@ -170,7 +170,7 @@ impl SkillEvolutionEngine {
         link_type: SkillLinkType,
         description: &str,
     ) -> Result<(), CoreError> {
-        info!("建议链接: {} -> {} ({:?})", source_iri, target_iri, link_type);
+        info!("Suggested link: {} -> {} ({:?})", source_iri, target_iri, link_type);
 
         if self.graph_store.get_skill(source_iri).is_none() {
             return Err(CoreError::SkillNotFound {
@@ -195,7 +195,7 @@ impl SkillEvolutionEngine {
     }
 
     pub fn apply_suggestion(&mut self, suggestion: &EvolutionSuggestion) -> Result<(), CoreError> {
-        info!("应用演化建议: {:?}", suggestion.suggestion_type);
+        info!("Applying evolution suggestion: {:?}", suggestion.suggestion_type);
 
         match suggestion.suggestion_type {
             EvolutionSuggestionType::AddLink => {
@@ -216,16 +216,16 @@ impl SkillEvolutionEngine {
                 }
             }
             EvolutionSuggestionType::UpdateSuccessRate => {
-                debug!("成功率更新建议已自动处理");
+                debug!("Success rate update suggestion auto-processed");
             }
             EvolutionSuggestionType::CreateFragment => {
-                debug!("知识碎片创建建议需要人工确认");
+                debug!("Knowledge fragment creation suggestion requires manual confirmation");
             }
             EvolutionSuggestionType::Deprecate => {
-                warn!("技能弃用建议需要人工确认: {}", suggestion.skill_iri);
+                warn!("Skill deprecation suggestion requires manual confirmation: {}", suggestion.skill_iri);
             }
             EvolutionSuggestionType::Merge | EvolutionSuggestionType::Split => {
-                warn!("技能合并/拆分建议需要人工确认: {}", suggestion.skill_iri);
+                warn!("Skill merge/split suggestion requires manual confirmation: {}", suggestion.skill_iri);
             }
         }
 
@@ -285,7 +285,7 @@ impl SkillEvolutionEngine {
                 success_rate: 0.0,
                 failure_modes: 0,
                 fragment_count: 0,
-                recommendations: vec!["技能未找到".to_string()],
+                recommendations: vec!["Skill not found".to_string()],
             }
         }
     }
@@ -294,19 +294,19 @@ impl SkillEvolutionEngine {
         let mut recommendations = Vec::new();
 
         if skill.graph_meta.usage_count == 0 {
-            recommendations.push("技能尚未被使用，考虑在合适场景中测试".to_string());
+            recommendations.push("Skill has not been used yet, consider testing it in a suitable scenario".to_string());
         }
 
         if skill.graph_meta.success_rate < 0.7 && skill.graph_meta.usage_count > 5 {
-            recommendations.push("成功率较低，建议审查技能实现或添加知识碎片".to_string());
+            recommendations.push("Success rate is low, consider reviewing skill implementation or adding knowledge fragments".to_string());
         }
 
         if skill.links.is_empty() {
-            recommendations.push("技能没有链接，考虑添加相关技能或前置依赖".to_string());
+            recommendations.push("Skill has no links, consider adding related skills or prerequisite dependencies".to_string());
         }
 
         if skill.graph_meta.known_failure_modes.len() > 3 {
-            recommendations.push("已知失败模式较多，考虑拆分技能或更新实现".to_string());
+            recommendations.push("Many known failure modes, consider splitting the skill or updating the implementation".to_string());
         }
 
         recommendations
@@ -358,7 +358,7 @@ impl SkillEvolutionEngine {
                 suggestions.push(EvolutionSuggestion {
                     suggestion_type: EvolutionSuggestionType::Deprecate,
                     skill_iri: skill.skill_iri.clone(),
-                    description: format!("技能健康度低 ({:.2})，考虑弃用或重构", health.health_score),
+                    description: format!("Low skill health ({:.2}), consider deprecating or refactoring", health.health_score),
                     confidence: 0.6,
                 });
             }
@@ -369,7 +369,7 @@ impl SkillEvolutionEngine {
                     suggestions.push(EvolutionSuggestion {
                         suggestion_type: EvolutionSuggestionType::AddLink,
                         skill_iri: skill.skill_iri.clone(),
-                        description: format!("建议添加链接到 {} ({:?})", target, link_type),
+                        description: format!("Consider adding a link to {} ({:?})", target, link_type),
                         confidence,
                     });
                 }

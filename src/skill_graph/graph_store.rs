@@ -51,12 +51,12 @@ impl SkillGraphStore {
 
     pub fn register_skill(&self, skill: SkillGraphNode) -> Result<(), CoreError> {
         let iri = skill.skill_iri.clone();
-        info!("注册技能到图谱: {} ({})", skill.name, iri);
+        info!("Registering skill to graph: {} ({})", skill.name, iri);
 
         if let Some(_blackboard) = &self.blackboard {
             let json_ld = skill.to_json_ld();
             let json_str = serde_json::to_string(&json_ld).unwrap_or_default();
-            debug!("技能 JSON-LD 已生成: {} bytes", json_str.len());
+            debug!("Skill JSON-LD generated: {} bytes", json_str.len());
         }
 
         self.index.index_skill(&skill);
@@ -82,7 +82,7 @@ impl SkillGraphStore {
                 hyperspace_point_id: None,
             };
             l0_store.store(&iri, &serde_json::to_string(&entry).unwrap_or_default())?;
-            debug!("技能已写入 L0 存储: {}", iri);
+            debug!("Skill written to L0 store: {}", iri);
         }
 
         Ok(())
@@ -108,7 +108,7 @@ impl SkillGraphStore {
     pub fn remove_skill(&self, skill_iri: &str) -> Result<(), CoreError> {
         if self.skills.write().remove(skill_iri).is_some() {
             self.index.remove_skill(skill_iri);
-            info!("技能已从图谱移除: {}", skill_iri);
+            info!("Skill removed from graph: {}", skill_iri);
             Ok(())
         } else {
             Err(CoreError::SkillNotFound {
@@ -134,7 +134,7 @@ impl SkillGraphStore {
                 strength,
                 description: description.to_string(),
             });
-            debug!("添加链接: {} -> {} ({:?})", source_iri, target_iri, link_type);
+            debug!("Adding link: {} -> {} ({:?})", source_iri, target_iri, link_type);
 
             let updated = skills.get(source_iri).cloned();
             drop(skills);
@@ -311,7 +311,7 @@ impl SkillGraphStore {
 
     pub fn register_moc(&self, moc: MOCNode) -> Result<(), CoreError> {
         let moc_iri = moc.moc_iri.clone();
-        info!("注册 MOC 节点: {} ({})", moc.name, moc_iri);
+        info!("Registering MOC node: {} ({})", moc.name, moc_iri);
         self.mocs.write().insert(moc_iri, moc);
         Ok(())
     }
@@ -338,7 +338,7 @@ impl SkillGraphStore {
             fragment = fragment.with_discoverer(d);
         }
 
-        info!("创建知识碎片: {} -> {}", attached_to, fragment_iri);
+        info!("Creating knowledge fragment: {} -> {}", attached_to, fragment_iri);
         
         self.fragments.write().insert(fragment_iri.to_string(), fragment.clone());
         
@@ -374,7 +374,7 @@ impl SkillGraphStore {
         if let Some(skill) = skills.get_mut(skill_iri) {
             skill.graph_meta.record_usage(success);
             debug!(
-                "记录技能使用: {} (success={}, rate={:.2})",
+                "Recording skill usage: {} (success={}, rate={:.2})",
                 skill_iri, success, skill.graph_meta.success_rate
             );
 
@@ -626,7 +626,7 @@ impl SkillGraphStore {
                 self.index.remove_skill(skill_iri);
                 self.skills.write().insert(skill_iri.to_string(), skill);
             }
-            info!("技能已标记为弃用: {}", skill_iri);
+            info!("Skill marked as deprecated: {}", skill_iri);
             Ok(())
         } else {
             Err(CoreError::SkillNotFound {
@@ -651,7 +651,7 @@ impl SkillGraphStore {
             match self.add_link(source, target, *link_type, *strength, description) {
                 Ok(()) => success_count += 1,
                 Err(e) => {
-                    warn!("批量添加链接失败 ({} -> {}): {:?}", source, target, e);
+                    warn!("Batch add link failed ({} -> {}): {:?}", source, target, e);
                 }
             }
         }

@@ -59,22 +59,22 @@ impl EmbeddingService for OneApiEmbeddingService {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("Embedding 请求失败: {}", e))?;
+            .map_err(|e| format!("Embedding request failed: {}", e))?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Embedding API 返回错误: {} - {}", status, body));
+            return Err(format!("Embedding API returned error: {} - {}", status, body));
         }
         let result: EmbeddingResponse = resp
             .json()
             .await
-            .map_err(|e| format!("Embedding 响应解析失败: {}", e))?;
+            .map_err(|e| format!("Embedding response parse failed: {}", e))?;
         result
             .data
             .into_iter()
             .next()
             .map(|d| d.embedding)
-            .ok_or_else(|| "Embedding 响应中无数据".to_string())
+            .ok_or_else(|| "No data in Embedding response".to_string())
     }
 
     fn dimension(&self) -> usize {
@@ -171,24 +171,24 @@ impl EmbeddingService for OllamaEmbeddingService {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("Ollama Embedding 请求失败: {}", e))?;
+            .map_err(|e| format!("Ollama Embedding request failed: {}", e))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Ollama Embedding API 返回错误: {} - {}", status, body));
+            return Err(format!("Ollama Embedding API returned error: {} - {}", status, body));
         }
 
         let result: OllamaEmbedResponse = resp
             .json()
             .await
-            .map_err(|e| format!("Ollama Embedding 响应解析失败: {}", e))?;
+            .map_err(|e| format!("Ollama Embedding response parse failed: {}", e))?;
 
         result
             .embeddings
             .into_iter()
             .next()
-            .ok_or_else(|| "Ollama Embedding 响应中无 embeddings 数据".to_string())
+            .ok_or_else(|| "No embeddings data in Ollama Embedding response".to_string())
     }
 
     fn dimension(&self) -> usize {
@@ -200,7 +200,7 @@ pub fn create_embedding_service_from_config(
     config: &crate::config::settings::EmbeddingSettings,
 ) -> Arc<dyn EmbeddingService> {
     if !config.enabled {
-        info!("Embedding 已禁用，使用 Fallback 服务");
+        info!("Embedding disabled, using Fallback service");
         return Arc::new(FallbackEmbeddingService::with_dimension(config.fallback.dimension));
     }
 
@@ -210,7 +210,7 @@ pub fn create_embedding_service_from_config(
                 url = %config.ollama.base_url,
                 model = %config.ollama.model,
                 dim = config.ollama.dimension,
-                "使用 Ollama Embedding 服务"
+                "Using Ollama Embedding service"
             );
             Arc::new(OllamaEmbeddingService::new(
                 &config.ollama.base_url,
@@ -220,14 +220,14 @@ pub fn create_embedding_service_from_config(
         }
         "oneapi" => {
             if config.oneapi.base_url.is_empty() || config.oneapi.api_key.is_empty() {
-                warn!("OneAPI Embedding 配置不完整，退化为 Fallback");
+                warn!("OneAPI Embedding config incomplete, falling back to Fallback");
                 return Arc::new(FallbackEmbeddingService::with_dimension(config.fallback.dimension));
             }
             info!(
                 url = %config.oneapi.base_url,
                 model = %config.oneapi.model,
                 dim = config.oneapi.dimension,
-                "使用 OneAPI Embedding 服务"
+                "Using OneAPI Embedding service"
             );
             Arc::new(OneApiEmbeddingService::new(
                 &config.oneapi.base_url,
@@ -237,11 +237,11 @@ pub fn create_embedding_service_from_config(
             ))
         }
         "fallback" | "" => {
-            info!("使用 Fallback Embedding 服务");
+            info!("Using Fallback Embedding service");
             Arc::new(FallbackEmbeddingService::with_dimension(config.fallback.dimension))
         }
         other => {
-            warn!(provider = other, "未知 Embedding provider，退化为 Fallback");
+            warn!(provider = other, "Unknown Embedding provider, falling back to Fallback");
             Arc::new(FallbackEmbeddingService::with_dimension(config.fallback.dimension))
         }
     }

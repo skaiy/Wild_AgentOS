@@ -81,14 +81,14 @@ impl StdioProcess {
         cmd.stderr(std::process::Stdio::null());
 
         let mut child = cmd.spawn().map_err(|e| CoreError::Internal {
-            message: format!("无法启动 MCP 服务器 '{}': {}", config.command, e),
+            message: format!("Failed to start MCP server '{}': {}", config.command, e),
         })?;
 
         let stdin = child.stdin.take().ok_or_else(|| CoreError::Internal {
-            message: "无法获取 MCP 服务器的 stdin".to_string(),
+            message: "Failed to get MCP server stdin".to_string(),
         })?;
         let stdout = child.stdout.take().ok_or_else(|| CoreError::Internal {
-            message: "无法获取 MCP 服务器的 stdout".to_string(),
+            message: "Failed to get MCP server stdout".to_string(),
         })?;
 
         Ok(Self {
@@ -102,34 +102,34 @@ impl StdioProcess {
     /// Send a JSON-RPC request and read the matching response.
     async fn send_request(&mut self, request: &JsonRpcRequest) -> Result<JsonRpcResponse, CoreError> {
         let json_str = serde_json::to_string(request).map_err(|e| CoreError::Internal {
-            message: format!("JSON 序列化失败: {}", e),
+            message: format!("JSON serialization failed: {}", e),
         })?;
 
         // Write request to stdin (newline-delimited JSON)
         self.stdin.write_all(json_str.as_bytes()).await.map_err(|e| CoreError::Internal {
-            message: format!("写入 MCP stdin 失败: {}", e),
+            message: format!("Failed to write to MCP stdin: {}", e),
         })?;
         self.stdin.write_all(b"\n").await.map_err(|e| CoreError::Internal {
-            message: format!("写入 MCP stdin 换行符失败: {}", e),
+            message: format!("Failed to write newline to MCP stdin: {}", e),
         })?;
         self.stdin.flush().await.map_err(|e| CoreError::Internal {
-            message: format!("刷新 MCP stdin 失败: {}", e),
+            message: format!("Failed to flush MCP stdin: {}", e),
         })?;
 
         // Read response line from stdout
         self.buffer.clear();
         self.stdout.read_line(&mut self.buffer).await.map_err(|e| CoreError::Internal {
-            message: format!("读取 MCP stdout 失败: {}", e),
+            message: format!("Failed to read MCP stdout: {}", e),
         })?;
 
         if self.buffer.is_empty() {
             return Err(CoreError::Internal {
-                message: "MCP 服务器 stdout 已关闭".to_string(),
+                message: "MCP server stdout closed".to_string(),
             });
         }
 
         let response: JsonRpcResponse = serde_json::from_str(self.buffer.trim()).map_err(|e| CoreError::Internal {
-            message: format!("解析 MCP 响应失败: {} (raw: {})", e, self.buffer.trim()),
+            message: format!("Failed to parse MCP response: {} (raw: {})", e, self.buffer.trim()),
         })?;
 
         Ok(response)
@@ -172,7 +172,7 @@ impl McpClient {
 
     /// Register an HTTP MCP server by URL.
     pub fn register_server(&mut self, name: &str, server_url: &str) {
-        info!(server = %name, url = %server_url, transport = "http", "注册 MCP 服务器");
+        info!(server = %name, url = %server_url, transport = "http", "registering MCP server");
         self.servers.insert(
             name.to_string(),
             McpServerState {
@@ -189,7 +189,7 @@ impl McpClient {
 
     /// Register a stdio MCP server (spawns subprocess on connect).
     pub fn register_stdio_server(&mut self, name: &str, config: &McpStdioServerConfig) {
-        info!(server = %name, command = %config.command, transport = "stdio", "注册 MCP Stdio 服务器");
+        info!(server = %name, command = %config.command, transport = "stdio", "registering MCP Stdio server");
         self.servers.insert(
             name.to_string(),
             McpServerState {
@@ -223,7 +223,7 @@ impl McpClient {
     pub async fn connect(&mut self, name: &str) -> Result<Vec<McpTool>, CoreError> {
         let transport = {
             let state = self.servers.get(name).ok_or_else(|| CoreError::Internal {
-                message: format!("MCP 服务器未注册: {}", name),
+                message: format!("MCP server not registered: {}", name),
             })?;
             state.transport.clone()
         };
@@ -232,7 +232,7 @@ impl McpClient {
             "http" => self.connect_http(name).await,
             "stdio" => self.connect_stdio(name).await,
             _ => Err(CoreError::Internal {
-                message: format!("未知的 MCP 传输类型: {}", transport),
+                message: format!("Unknown MCP transport type: {}", transport),
             }),
         }
     }
@@ -240,7 +240,7 @@ impl McpClient {
     async fn connect_http(&mut self, name: &str) -> Result<Vec<McpTool>, CoreError> {
         let url = {
             let state = self.servers.get_mut(name).ok_or_else(|| CoreError::Internal {
-                message: format!("MCP 服务器未注册: {}", name),
+                message: format!("MCP server not registered: {}", name),
             })?;
             state.status = "connecting".to_string();
             state.url.clone()
@@ -264,7 +264,7 @@ impl McpClient {
     async fn connect_stdio(&mut self, name: &str) -> Result<Vec<McpTool>, CoreError> {
         // Get the stdio config
         let config = self.stdio_configs.get(name).cloned().ok_or_else(|| CoreError::Internal {
-            message: format!("MCP Stdio 服务器配置未找到: {}", name),
+                message: format!("MCP Stdio server config not found: {}", name),
         })?;
 
         // Update status
@@ -291,7 +291,7 @@ impl McpClient {
                             state.tools = tools.clone();
                             state.status = "connected".to_string();
                         }
-                        info!(server = %name, tool_count = tools.len(), "MCP Stdio 服务器连接成功");
+                        info!(server = %name, tool_count = tools.len(), "MCP Stdio server connected successfully");
                         Ok(tools)
                     }
                     Err(e) => {
@@ -315,7 +315,7 @@ impl McpClient {
             Ok(tools)
         } else if let Some(ref error) = response.error {
             Err(CoreError::Internal {
-                message: format!("MCP 服务器 '{}' 返回错误: {} ({})", name, error.message, error.code),
+                message: format!("MCP server '{}' returned error: {} ({})", name, error.message, error.code),
             })
         } else {
             Ok(Vec::new())
@@ -328,7 +328,7 @@ impl McpClient {
             state.tools = tools.clone();
             state.status = "connected".to_string();
         }
-        info!(server = %name, tool_count = tools.len(), "MCP 服务器连接成功");
+        info!(server = %name, tool_count = tools.len(), "MCP server connected successfully");
         tools
     }
 
@@ -336,12 +336,12 @@ impl McpClient {
         let tools = vec![
             McpTool {
                 name: "list_resources".to_string(),
-                description: Some("列出可用资源".to_string()),
+                description: Some("List available resources".to_string()),
                 input_schema: None,
             },
             McpTool {
                 name: "read_resource".to_string(),
-                description: Some("按 URI 读取资源".to_string()),
+                description: Some("Read resource by URI".to_string()),
                 input_schema: Some(json!({
                     "type": "object",
                     "properties": { "uri": {"type": "string"} },
@@ -354,7 +354,7 @@ impl McpClient {
             state.status = "connected_fallback".to_string();
             state.error = Some(error.to_string());
         }
-        warn!(server = %name, error = %error, "MCP 服务器连接失败，使用模拟工具");
+        warn!(server = %name, error = %error, "MCP server connection failed, using fallback tools");
         tools
     }
 
@@ -368,22 +368,22 @@ impl McpClient {
     ) -> Result<Value, CoreError> {
         let transport = {
             let state = self.servers.get(server).ok_or_else(|| CoreError::Internal {
-                message: format!("MCP 服务器未找到: {}", server),
+                message: format!("MCP server not found: {}", server),
             })?;
             if state.status.starts_with("error") {
                 return Err(CoreError::Internal {
-                    message: format!("MCP 服务器 {} 状态异常: {}", server, state.status),
+                    message: format!("MCP server {} status abnormal: {}", server, state.status),
                 });
             }
             state.tools.iter()
                 .find(|t| t.name == tool)
                 .ok_or_else(|| CoreError::Internal {
-                    message: format!("工具 {} 在服务器 {} 上未找到", tool, server),
+                    message: format!("Tool {} not found on server {}", tool, server),
                 })?;
             state.transport.clone()
         };
 
-        debug!(server = %server, tool = %tool, transport = %transport, "MCP 工具调用");
+        debug!(server = %server, tool = %tool, transport = %transport, "MCP tool call");
 
         let request = JsonRpcRequest {
             jsonrpc: JSON_RPC_VERSION.to_string(),
@@ -404,7 +404,7 @@ impl McpClient {
                 self.call_tool_stdio(server, &request).await
             }
             _ => Err(CoreError::Internal {
-                message: format!("未知的 MCP 传输类型: {}", transport),
+                message: format!("Unknown MCP transport type: {}", transport),
             }),
         }
     }
@@ -414,20 +414,20 @@ impl McpClient {
             Ok(response) => Self::handle_call_response(response),
             Err(_) => Ok(json!({
                 "status": "simulated",
-                "note": "MCP HTTP 传输层不可用，返回模拟结果",
+                "note": "MCP HTTP transport unavailable, returning simulated result",
             })),
         }
     }
 
     async fn call_tool_stdio(&mut self, server: &str, request: &JsonRpcRequest) -> Result<Value, CoreError> {
         let process = self.processes.get_mut(server).ok_or_else(|| CoreError::Internal {
-            message: format!("MCP Stdio 进程未找到: {}", server),
+            message: format!("MCP Stdio process not found: {}", server),
         })?;
 
         if !process.is_alive() {
             return Ok(json!({
                 "status": "simulated",
-                "note": "MCP Stdio 进程已退出，返回模拟结果",
+                "note": "MCP Stdio process exited, returning simulated result",
             }));
         }
 
@@ -435,7 +435,7 @@ impl McpClient {
             Ok(response) => Self::handle_call_response(response),
             Err(_) => Ok(json!({
                 "status": "simulated",
-                "note": "MCP Stdio 通信失败，返回模拟结果",
+                "note": "MCP Stdio communication failed, returning simulated result",
             })),
         }
     }
@@ -445,7 +445,7 @@ impl McpClient {
             Ok(result)
         } else if let Some(error) = response.error {
             Err(CoreError::Internal {
-                message: format!("MCP 工具调用错误: {} ({})", error.message, error.code),
+                message: format!("MCP tool call error: {} ({})", error.message, error.code),
             })
         } else {
             Ok(json!({"status": "ok"}))
@@ -461,12 +461,12 @@ impl McpClient {
             .send()
             .await
             .map_err(|e| CoreError::Internal {
-                message: format!("MCP HTTP 请求失败: {}", e),
+                message: format!("MCP HTTP request failed: {}", e),
             })?;
 
         let rpc_response: JsonRpcResponse = response.json().await
             .map_err(|e| CoreError::Internal {
-                message: format!("MCP 响应解析失败: {}", e),
+                message: format!("MCP response parse failed: {}", e),
             })?;
 
         Ok(rpc_response)
@@ -515,7 +515,7 @@ impl McpClient {
                     skill_types: vec!["skill-types/MCPOperation".to_string()],
                 };
                 registry.register_skill(skill);
-                debug!(iri = %iri, "MCP 工具已注册到 SkillRegistry");
+                debug!(iri = %iri, "MCP tool registered in SkillRegistry");
             }
         }
     }
@@ -526,7 +526,7 @@ impl McpClient {
             if let Some(mut process) = self.processes.remove(&name) {
                 let _ = process.child.kill().await;
                 let _ = process.child.wait().await;
-                info!(server = %name, "MCP Stdio 进程已终止");
+                info!(server = %name, "MCP Stdio process terminated");
             }
         }
     }
@@ -575,7 +575,7 @@ mod tests {
         client.servers.get_mut("test").unwrap().tools = vec![
             McpTool {
                 name: "test_tool".to_string(),
-                description: Some("测试工具".to_string()),
+                description: Some("Test tool".to_string()),
                 input_schema: Some(json!({"type":"object"})),
             },
         ];

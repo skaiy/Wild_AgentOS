@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// 感知条目的来源类型
+/// Source type for perception entries
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PerceptionSource {
     WorkspaceMonitor,
@@ -17,23 +17,23 @@ pub enum PerceptionSource {
 impl PerceptionSource {
     pub fn prefix(&self) -> &'static str {
         match self {
-            Self::WorkspaceMonitor => "📁 工作区",
+            Self::WorkspaceMonitor => "📁 Workspace",
             Self::BatchAgent => "📊 Batch",
-            Self::PerceptionEngine => "⚠️ 告警",
-            Self::Environment => "🔌 环境",
-            Self::System => "ℹ️ 系统",
+            Self::PerceptionEngine => "⚠️ Alert",
+            Self::Environment => "🔌 Environment",
+            Self::System => "ℹ️ System",
         }
     }
 }
 
-/// 单条感知条目
+/// A single perception entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerceptionEntry {
     pub id: String,
     pub source: PerceptionSource,
     pub content: String,
     pub detail_iri: Option<String>,
-    pub priority: u8, // 0-9, 9=最高
+    pub priority: u8, // 0-9, 9=highest
     pub timestamp: DateTime<Utc>,
     pub consumed: bool,
 }
@@ -61,7 +61,7 @@ impl PerceptionEntry {
         self
     }
 
-    /// 渲染为单行文本，用于感知区域
+    /// Render as a single line of text for the perception area
     pub fn render(&self) -> String {
         let prefix = self.source.prefix();
         if let Some(ref iri) = self.detail_iri {
@@ -72,27 +72,27 @@ impl PerceptionEntry {
     }
 }
 
-/// 感知内容存储
+/// Perception content store
 ///
-/// 作用类似 SupplementaryInputStore，但面向的是系统级主动感知而非任务级补充输入。
+/// Similar to SupplementaryInputStore, but targets system-level proactive perception rather than task-level supplementary input.
 ///
-/// 区别：
-///   - PerceptionStore: 生产者 = 系统组件（WorkspaceMonitor/BatchAgent/PerceptionEngine）
-///   - SupplementaryInputStore: 生产者 = SA（任务级补充输入）
-///   - PerceptionStore 的内容在 exec() 初始组装时注入（messages 头部）
-///   - SupplementaryInputStore 在 CycleStart 逐轮注入（messages 中部）
+/// Differences:
+///   - PerceptionStore: producers = system components (WorkspaceMonitor/BatchAgent/PerceptionEngine)
+///   - SupplementaryInputStore: producer = SA (task-level supplementary input)
+///   - PerceptionStore content is injected during exec() initial assembly (beginning of messages)
+///   - SupplementaryInputStore is injected per CycleStart round (middle of messages)
 ///
-/// # 生命周期
-/// 1. 系统组件调用 `store(task_iri, entry)` 写入感知数据
-/// 2. AgentRunner 在 exec() 初始组装时调用 `take_perception_text()` 获取文本
-/// 3. 文本作为 `role: "system"` 消息注入到 messages[0] 之后
-/// 4. Task 完成后调用 `cleanup(task_iri)` 清理
+/// # Lifecycle
+/// 1. System components call `store(task_iri, entry)` to write perception data
+/// 2. AgentRunner calls `take_perception_text()` during exec() initial assembly
+/// 3. Text is injected as a `role: "system"` message after messages[0]
+/// 4. `cleanup(task_iri)` is called when the task completes
 pub struct PerceptionStore {
-    /// task_iri → 感知条目列表
+    /// task_iri → perception entry list
     pending: Arc<Mutex<HashMap<String, Vec<PerceptionEntry>>>>,
-    /// 全局感知条目（不绑定特定 task），所有 task 可见
+    /// Global perception entries (not bound to a specific task), visible to all tasks
     global: Arc<Mutex<Vec<PerceptionEntry>>>,
-    /// 去重缓存：source+content → 上次写入时间，用于 60 秒去重
+    /// Dedup cache: source+content → last write time, used for 60-second dedup
     dedup_cache: Arc<Mutex<HashMap<(PerceptionSource, String), DateTime<Utc>>>>,
 }
 
@@ -105,8 +105,8 @@ impl PerceptionStore {
         }
     }
 
-    /// 生产者写入: 为指定 task 添加一条感知条目
-    /// 自动去重：同一 source+content 在 60 秒内不重复写入
+    /// Producer write: add a perception entry for a specific task
+    /// Auto-dedup: same source+content within 60 seconds is not written again
     pub fn store(&self, task_iri: &str, entry: PerceptionEntry) {
         let dedup_key = (entry.source, entry.content.clone());
         {
@@ -114,7 +114,7 @@ impl PerceptionStore {
             let now = Utc::now();
             if let Some(last) = dedup.get(&dedup_key) {
                 if now.signed_duration_since(*last).num_seconds() < 60 {
-                    return; // 去重
+                    return; // dedup
                 }
             }
             dedup.insert(dedup_key, now);
@@ -124,7 +124,7 @@ impl PerceptionStore {
         map.entry(task_iri.to_string()).or_default().push(entry);
     }
 
-    /// 生产者写入: 添加全局感知条目（所有 task 可见）
+    /// Producer write: add a global perception entry (visible to all tasks)
     pub fn store_global(&self, entry: PerceptionEntry) {
         let dedup_key = (entry.source, entry.content.clone());
         {
@@ -142,14 +142,14 @@ impl PerceptionStore {
         global.push(entry);
     }
 
-    /// 消费者拉取: 获取所有未消费的感知条目（全局 + task 级别），合并为文本
+    /// Consumer pull: get all unconsumed perception entries (global + task level), merged into text
     ///
-    /// 返回格式化的感知文本，如果没有新内容则返回空字符串。
-    /// 已消费的条目会被标记 consumed 但保留在列表中供审计。
+    /// Returns formatted perception text, or empty string if nothing new.
+    /// Consumed entries are marked consumed but retained in the list for audit.
     pub fn take_perception_text(&self, task_iri: &str) -> String {
         let mut entries: Vec<PerceptionEntry> = Vec::new();
 
-        // 1. 取全局未消费条目
+        // 1. Get global unconsumed entries
         {
             let mut global = self.global.lock().expect("PerceptionStore global lock poisoned");
             for entry in global.iter_mut() {
@@ -160,7 +160,7 @@ impl PerceptionStore {
             }
         }
 
-        // 2. 取 task 级别未消费条目
+        // 2. Get task-level unconsumed entries
         {
             let mut map = self.pending.lock().expect("PerceptionStore lock poisoned");
             if let Some(task_entries) = map.get_mut(task_iri) {
@@ -177,10 +177,10 @@ impl PerceptionStore {
             return String::new();
         }
 
-        // 按优先级排序，高优先级的在前
+        // Sort by priority, highest first
         entries.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.timestamp.cmp(&b.timestamp)));
 
-        // 限制最多 10 条，防膨胀
+        // Limit to 10 entries max to prevent bloat
         if entries.len() > 10 {
             entries.truncate(10);
         }
@@ -189,16 +189,16 @@ impl PerceptionStore {
         lines.join("\n")
     }
 
-    /// 检查指定 task 是否有未消费的感知条目
+    /// Check whether a given task has unconsumed perception entries
     pub fn has_new(&self, task_iri: &str) -> bool {
-        // 检查全局
+        // Check global
         {
             let global = self.global.lock().expect("PerceptionStore global lock poisoned");
             if global.iter().any(|e| !e.consumed) {
                 return true;
             }
         }
-        // 检查 task 级别
+        // Check task-level
         {
             let map = self.pending.lock().expect("PerceptionStore lock poisoned");
             if let Some(entries) = map.get(task_iri) {
@@ -210,13 +210,13 @@ impl PerceptionStore {
         false
     }
 
-    /// 清理已完成 task 的数据
+    /// Clean up data for a completed task
     pub fn cleanup(&self, task_iri: &str) {
         let mut map = self.pending.lock().expect("PerceptionStore lock poisoned");
         map.remove(task_iri);
     }
 
-    /// 清理过期的去重缓存（超过 120 秒的条目）
+    /// Evict expired dedup cache entries (older than 120 seconds)
     pub fn evict_dedup_cache(&self) {
         let mut dedup = self.dedup_cache.lock().expect("dedup_cache lock poisoned");
         let now = Utc::now();
@@ -265,7 +265,7 @@ mod tests {
 
         let text = store.take_perception_text("iri://task/test1");
         assert!(!text.is_empty(), "Should have perception text");
-        assert!(text.contains("工作区"), "Should contain WorkspaceMonitor prefix");
+        assert!(text.contains("Workspace"), "Should contain WorkspaceMonitor prefix");
         assert!(text.contains("Batch"), "Should contain BatchAgent prefix");
     }
 
@@ -295,7 +295,7 @@ mod tests {
         ));
         store.store("iri://task/test1", PerceptionEntry::new(
             PerceptionSource::WorkspaceMonitor,
-            "dedup test", // 重复
+            "dedup test", // duplicate
         ));
 
         let text = store.take_perception_text("iri://task/test1");
@@ -319,7 +319,7 @@ mod tests {
         // High priority should come first
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].contains("告警"), "High priority alert should come first");
+        assert!(lines[0].contains("Alert"), "High priority alert should come first");
     }
 
     #[test]
@@ -370,7 +370,7 @@ mod tests {
         let entry = PerceptionEntry::new(PerceptionSource::WorkspaceMonitor, "file changed")
             .with_detail_iri("iri://detail/1".to_string());
         let text = entry.render();
-        assert!(text.contains("工作区"));
+        assert!(text.contains("Workspace"));
         assert!(text.contains("file changed"));
         assert!(text.contains("iri://detail/1"));
     }
@@ -562,10 +562,10 @@ mod tests {
         let text = store.take_perception_text("iri://task/t");
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 3, "All 3 entries should appear");
-        // First line should be the high-priority one (告警 prefix)
-        assert!(lines[0].contains("告警"), "Highest priority should come first: got {}", lines[0]);
+        // First line should be the high-priority one (Alert prefix)
+        assert!(lines[0].contains("Alert"), "Highest priority should come first: got {}", lines[0]);
         // Last line should be the low priority
-        assert!(lines[2].contains("工作区") || lines[2].contains("系统"), "Lower priority should be last");
+        assert!(lines[2].contains("Workspace") || lines[2].contains("System"), "Lower priority should be last");
     }
 
     #[test]

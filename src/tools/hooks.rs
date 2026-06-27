@@ -436,35 +436,35 @@ impl Default for HookManager {
 }
 
 // ============================================================
-// Human Approval Hook 相关结构
+// Human Approval Hook structures
 // ============================================================
 
 use chrono::{DateTime, Utc};
 use tokio::sync::mpsc;
 
-/// 确认条件
+/// Approval condition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ApprovalCondition {
-    /// 总是需要确认
+    /// Always requires approval
     Always,
-    /// 失败时确认
+    /// Approve on failure
     OnFailure,
-    /// 阶段完成时确认
+    /// Approve on stage completion
     OnStageComplete,
-    /// 自定义条件 (LLM 判断)
+    /// Custom condition (LLM judgement)
     Custom(String),
 }
 
-/// 超时默认行为
+/// Timeout default behavior
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DefaultAction {
-    /// 超时默认批准
+    /// Approve on timeout
     Approve,
-    /// 超时默认拒绝
+    /// Reject on timeout
     Reject,
-    /// 超时重试
+    /// Retry on timeout
     Retry,
-    /// 超时终止
+    /// Abort on timeout
     Abort,
 }
 
@@ -474,20 +474,20 @@ impl Default for DefaultAction {
     }
 }
 
-/// 确认点配置
+/// Approval point configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalPoint {
-    /// 触发的 Hook 点
+    /// Hook point to trigger on
     pub hook_point: HookPoint,
-    /// 触发条件
+    /// Trigger condition
     pub condition: ApprovalCondition,
-    /// 消息模板
+    /// Message template
     pub message_template: String,
-    /// 超时时间（秒）
+    /// Timeout in seconds
     pub timeout_seconds: u64,
-    /// 超时默认行为
+    /// Default action on timeout
     pub default_action: DefaultAction,
-    /// 适用的阶段列表（空表示所有阶段）
+    /// Applicable stages (empty means all stages)
     pub stages: Vec<String>,
 }
 
@@ -496,7 +496,7 @@ impl Default for ApprovalPoint {
         Self {
             hook_point: HookPoint::PhaseEnd,
             condition: ApprovalCondition::OnStageComplete,
-            message_template: "阶段 {stage} 完成，请确认是否继续".to_string(),
+            message_template: "Stage {stage} completed, please confirm whether to continue".to_string(),
             timeout_seconds: 3600,
             default_action: DefaultAction::Approve,
             stages: Vec::new(),
@@ -504,20 +504,20 @@ impl Default for ApprovalPoint {
     }
 }
 
-/// 确认请求
+/// Approval request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalRequest {
-    /// 请求 ID
+    /// Request ID
     pub request_id: String,
-    /// 任务 IRI
+    /// Task IRI
     pub task_iri: String,
-    /// 阶段 ID
+    /// Stage ID
     pub stage_id: String,
-    /// 消息内容
+    /// Message content
     pub message: String,
-    /// 可选项
+    /// Available options
     pub options: Vec<String>,
-    /// 创建时间
+    /// Creation time
     pub created_at: DateTime<Utc>,
 }
 
@@ -534,18 +534,18 @@ impl ApprovalRequest {
     }
 }
 
-/// 确认响应
+/// Approval response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalResponse {
-    /// 对应的请求 ID
+    /// Corresponding request ID
     pub request_id: String,
-    /// 阶段 ID
+    /// Stage ID
     pub stage_id: String,
-    /// 是否批准
+    /// Whether approved
     pub approved: bool,
-    /// 评论
+    /// Comments
     pub comments: Option<String>,
-    /// 响应时间
+    /// Response time
     pub responded_at: DateTime<Utc>,
 }
 
@@ -575,33 +575,33 @@ impl ApprovalResponse {
             request_id,
             stage_id,
             approved: false,
-            comments: Some("确认超时".to_string()),
+            comments: Some("Approval timeout".to_string()),
             responded_at: Utc::now(),
         }
     }
 }
 
-/// 确认状态
+/// Approval state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalState {
-    /// 请求
+    /// The request
     pub request: ApprovalRequest,
-    /// 响应（如果有）
+    /// Response (if any)
     pub response: Option<ApprovalResponse>,
-    /// 是否已处理
+    /// Whether processed
     pub processed: bool,
 }
 
-/// Human Approval Hook 配置
+/// Human Approval Hook configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HumanApprovalConfig {
-    /// 是否启用
+    /// Whether enabled
     pub enabled: bool,
-    /// 确认点列表
+    /// List of approval points
     pub approval_points: Vec<ApprovalPoint>,
-    /// 默认超时时间（秒）
+    /// Default timeout in seconds
     pub default_timeout_seconds: u64,
-    /// 默认超时行为
+    /// Default action on timeout
     pub default_action: DefaultAction,
 }
 
@@ -616,18 +616,18 @@ impl Default for HumanApprovalConfig {
     }
 }
 
-/// 确认通知器 trait
+/// Approval notifier trait
 #[async_trait]
 pub trait ApprovalNotifier: Send + Sync {
-    /// 发送确认请求
+    /// Send an approval request
     async fn notify(&self, request: &ApprovalRequest) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
     
-    /// 等待确认响应
+    /// Wait for an approval response
     async fn wait_for_response(&self, request_id: &str, timeout: std::time::Duration) 
         -> Option<ApprovalResponse>;
 }
 
-/// 基于通道的确认通知器（用于测试和进程内通信）
+/// Channel-based approval notifier (for testing and in-process communication)
 pub struct ChannelApprovalNotifier {
     pending: Arc<RwLock<HashMap<String, ApprovalState>>>,
     response_tx: mpsc::Sender<ApprovalResponse>,
@@ -760,7 +760,7 @@ impl HumanApprovalHook {
                     }
                 }
                 ApprovalCondition::Custom(_) => {
-                    // TODO: 实现自定义条件判断
+                    // TODO: implement custom condition evaluation
                 }
             }
         }
@@ -777,14 +777,14 @@ impl HumanApprovalHook {
         let task_iri = ctx.task_iri.clone().unwrap_or_default();
         
         let message = ctx.error.as_ref()
-            .map(|e| format!("执行出错: {}，请确认是否继续", e))
-            .unwrap_or_else(|| format!("阶段 {} 完成，请确认是否继续", stage_id));
+            .map(|e| format!("Execution error: {}, please confirm whether to continue", e))
+            .unwrap_or_else(|| format!("Stage {} completed, please confirm whether to continue", stage_id));
 
         ApprovalRequest::new(
             task_iri,
             stage_id,
             message,
-            vec!["批准".to_string(), "拒绝".to_string(), "回滚".to_string()],
+            vec!["Approve".to_string(), "Reject".to_string(), "Rollback".to_string()],
         )
     }
 
@@ -818,7 +818,7 @@ impl Hook for HumanApprovalHook {
     }
 
     fn priority(&self) -> i32 {
-        0 // 高优先级
+        0 // high priority
     }
 
     async fn execute(&self, ctx: &mut HookContext) -> HookResult {
@@ -839,30 +839,30 @@ impl Hook for HumanApprovalHook {
         tracing::info!(
             request_id = %request_id,
             stage_id = %request.stage_id,
-            "发送确认请求"
+            "sending approval request"
         );
 
         if let Err(e) = self.notifier.notify(&request).await {
-            tracing::error!("发送确认请求失败: {}", e);
+            tracing::error!("Failed to send approval request: {}", e);
             return HookResult::Continue;
         }
 
         match self.notifier.wait_for_response(&request_id, timeout).await {
             Some(response) if response.approved => {
-                tracing::info!(request_id = %request_id, "用户批准");
+                tracing::info!(request_id = %request_id, "user approved");
                 HookResult::Continue
             }
             Some(response) => {
-                tracing::warn!(request_id = %request_id, comments = ?response.comments, "用户拒绝");
-                ctx.error = Some(format!("用户拒绝: {:?}", response.comments));
+                tracing::warn!(request_id = %request_id, comments = ?response.comments, "user rejected");
+                ctx.error = Some(format!("User rejected: {:?}", response.comments));
                 HookResult::Abort
             }
             None => {
-                tracing::warn!(request_id = %request_id, "确认超时");
+                tracing::warn!(request_id = %request_id, "approval timeout");
                 match default_action {
                     DefaultAction::Approve => HookResult::Continue,
                     DefaultAction::Reject => {
-                        ctx.error = Some("确认超时，自动拒绝".to_string());
+                        ctx.error = Some("Approval timeout, auto-rejected".to_string());
                         HookResult::Abort
                     }
                     DefaultAction::Retry => HookResult::Retry,

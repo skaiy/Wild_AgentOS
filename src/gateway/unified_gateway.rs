@@ -430,15 +430,15 @@ mod tests {
 
         let gateway = UnifiedGateway::new(&settings).unwrap();
 
-        // 测试运行时更新模型
+        // test updating model at runtime
         gateway.set_default_model("deepseek-v4-pro".to_string());
         assert_eq!(gateway.get_model("default"), "deepseek-v4-pro");
 
-        // 测试运行时更新API key
+        // test updating API key at runtime
         gateway.set_api_key("sk-new-key".to_string());
         assert_eq!(*gateway.api_key.read().unwrap(), "sk-new-key");
 
-        // 测试运行时更新base URL
+        // test updating base URL at runtime
         gateway.set_base_url("https://api.new-endpoint.com".to_string());
         assert_eq!(*gateway.base_url.read().unwrap(), "https://api.new-endpoint.com");
     }

@@ -1,6 +1,6 @@
-//! JSON-LD 模块 - 实现 JSON-LD 上下文、类型和工具函数
+//! JSON-LD module - JSON-LD context, types, and utility functions
 //!
-//! 提供全局统一的 @context 定义、JSON-LD 节点类型和 IRI 处理工具
+//! Provides global unified @context definitions, JSON-LD node types, and IRI processing tools
 
 pub mod context;
 pub mod framing;

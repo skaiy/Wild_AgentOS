@@ -25,13 +25,13 @@ pub struct Settings {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct WorkspaceSettings {
-    /// 工作区根目录路径，为空时使用进程 CWD
+    /// Workspace root directory path, uses process CWD if empty
     pub root: Option<String>,
-    /// 文件扫描排除模式
+    /// File scan exclusion patterns
     pub exclude_patterns: Vec<String>,
-    /// 是否启用文件系统监听
+    /// Whether to enable filesystem watching
     pub watch_enabled: bool,
-    /// 内容缓存最大字节数
+    /// Content cache maximum bytes
     pub content_store_max_bytes: usize,
 }
 
@@ -188,16 +188,16 @@ impl Default for EmphasisConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            extraction_prompt: r#"## 强调内容提取
-如果用户输入中包含强调性质的内容（如"必须"、"重要"、"不要忘记"、"关键"等），
-请将这些内容提取出来，放在 JSON 的 "emphasis" 字段中（字符串数组）。
+            extraction_prompt: r#"## Emphasis Content Extraction
+If the user input contains emphatic content (such as "must", "important", "don't forget", "critical", etc.),
+please extract these and place them in the "emphasis" field of the JSON (a string array).
 
-示例：
+Example:
 {
-  "thought": "用户强调了必须使用异步方式...",
-  "content": "好的，我会...",
-  "summary": "确认异步实现",
-  "emphasis": ["必须使用异步方式实现"]
+  "thought": "The user emphasized that async must be used...",
+  "content": "Okay, I will...",
+  "summary": "Confirmed async implementation",
+  "emphasis": ["must use async implementation"]
 }"#.to_string(),
             max_items: 50,
             dedup_threshold: 0.85,
@@ -296,8 +296,8 @@ pub struct ToolResultRouterSettings {
     pub max_micro_tools: usize,
     pub sparql_query_timeout_ms: u64,
     pub auto_cleanup: bool,
-    /// PassThrough 的结果超过此字节数时也持久化并注册 micro-tool，
-    /// 为将来上下文压力下的引用式回收做准备。
+/// Persist and register micro-tool when PassThrough result exceeds this byte size,
+/// preparing for reference-based reclamation under context pressure.
     #[serde(default = "default_prepare_threshold")]
     pub prepare_threshold: usize,
 }
@@ -485,7 +485,7 @@ pub struct ToolResultCompressorSettings {
     pub max_summary_length: usize,
     #[serde(default = "default_compression_trigger")]
     pub compression_trigger: usize,
-    /// Tool 消息内容超过此字节数时，若存在对应 micro-tool 则替换为引用式压缩。
+    /// Replace tool message with reference compression if micro-tool exists and content exceeds this byte size.
     #[serde(default = "default_compress_tool_result_threshold")]
     pub compress_tool_result_threshold: usize,
 }
@@ -540,13 +540,13 @@ impl Default for ContextWindowSettings {
 pub struct ToolResultAgingSettings {
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// 保留完整结果的数量（最新的 N 个 tool 结果保持完整）
+    /// Number of full results to keep (newest N tool results remain intact)
     #[serde(default = "default_aging_keep_full")]
     pub keep_full: usize,
-    /// 对旧结果尝试微工具引用的数量（在 keep_full 之后尝试引用式压缩的数量）
+    /// Number of old results to attempt micro-tool references (after keep_full)
     #[serde(default = "default_aging_try_microtool")]
     pub try_microtool: usize,
-    /// 压缩阈值: 超过此字节数的 tool 消息才被处理
+    /// Compression threshold: only process tool messages exceeding this byte size
     #[serde(default = "default_aging_compress_threshold")]
     pub compress_threshold: usize,
 }

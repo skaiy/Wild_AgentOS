@@ -62,7 +62,7 @@ fn test_parse_jsonld_response_valid() {
         "@id": "iri://task/test123",
         "@type": "TaskNode",
         "summary": "Test task",
-        "emphasis": ["重要约束1", "重要约束2"]
+        "emphasis": ["important_constraint_1", "important_constraint_2"]
     })
     .to_string();
 
@@ -90,44 +90,44 @@ fn test_parse_jsonld_response_invalid() {
 fn test_extract_emphasis_from_array() {
     let runner = create_test_runner();
     let node = JsonLdNode::new("iri://task/test".to_string(), "TaskNode")
-        .with_property("emphasis".to_string(), json!(["约束1", "约束2", "约束3"]));
+        .with_property("emphasis".to_string(), json!(["constraint_1", "constraint_2", "constraint_3"]));
 
     let emphasis = runner.extract_emphasis(&node);
     assert_eq!(emphasis.len(), 3);
-    assert_eq!(emphasis[0], "约束1");
+    assert_eq!(emphasis[0], "constraint_1");
 }
 
 #[test]
 fn test_extract_emphasis_from_string() {
     let runner = create_test_runner();
     let node = JsonLdNode::new("iri://task/test".to_string(), "TaskNode")
-        .with_property("emphasis".to_string(), json!("单个强调内容"));
+        .with_property("emphasis".to_string(), json!("single_emphasis_content"));
 
     let emphasis = runner.extract_emphasis(&node);
     assert_eq!(emphasis.len(), 1);
-    assert_eq!(emphasis[0], "单个强调内容");
+    assert_eq!(emphasis[0], "single_emphasis_content");
 }
 
 #[test]
 fn test_extract_emphasis_with_constraints() {
     let runner = create_test_runner();
     let node = JsonLdNode::new("iri://task/test".to_string(), "TaskNode")
-        .with_property("emphasis".to_string(), json!(["强调1"]))
-        .with_property("constraints".to_string(), json!(["约束A", "约束B"]));
+        .with_property("emphasis".to_string(), json!(["emphasis_1"]))
+        .with_property("constraints".to_string(), json!(["constraint_A", "constraint_B"]));
 
     let emphasis = runner.extract_emphasis(&node);
     assert_eq!(emphasis.len(), 3);
-    assert!(emphasis.contains(&"强调1".to_string()));
-    assert!(emphasis.contains(&"[约束] 约束A".to_string()));
+    assert!(emphasis.contains(&"emphasis_1".to_string()));
+    assert!(emphasis.contains(&"[Constraint] constraint_A".to_string()));
 }
 
 #[test]
 fn test_apply_output_mapping_plan() {
     let runner = create_test_runner();
     let output = json!({
-        "plan": "执行计划内容",
-        "steps": ["步骤1", "步骤2"],
-        "objective": "任务目标"
+        "plan": "execution_plan_content",
+        "steps": ["step_1", "step_2"],
+        "objective": "task_objective"
     });
 
     let result = runner.apply_output_mapping(&output, &AgentRole::Plan, "iri://task/123");
@@ -135,8 +135,8 @@ fn test_apply_output_mapping_plan() {
 
     let jsonld = result.unwrap();
     assert!(jsonld.get("@id").is_some());
-    assert_eq!(jsonld.get("execution_plan"), Some(&json!("执行计划内容")));
-    assert_eq!(jsonld.get("plan_steps"), Some(&json!(["步骤1", "步骤2"])));
+    assert_eq!(jsonld.get("execution_plan"), Some(&json!("execution_plan_content")));
+    assert_eq!(jsonld.get("plan_steps"), Some(&json!(["step_1", "step_2"])));
     assert_eq!(jsonld.get("task_iri"), Some(&json!("iri://task/123")));
     assert_eq!(jsonld.get("agent_role"), Some(&json!("PA")));
 }
@@ -145,23 +145,23 @@ fn test_apply_output_mapping_plan() {
 fn test_apply_output_mapping_do() {
     let runner = create_test_runner();
     let output = json!({
-        "result": "执行结果",
-        "artifacts": ["文件1.py", "文件2.rs"]
+        "result": "execution_result",
+        "artifacts": ["file_1.py", "file_2.rs"]
     });
 
     let result = runner.apply_output_mapping(&output, &AgentRole::Do, "iri://task/456");
     assert!(result.is_some());
 
     let jsonld = result.unwrap();
-    assert_eq!(jsonld.get("execution_result"), Some(&json!("执行结果")));
-    assert_eq!(jsonld.get("created_artifacts"), Some(&json!(["文件1.py", "文件2.rs"])));
+    assert_eq!(jsonld.get("execution_result"), Some(&json!("execution_result")));
+    assert_eq!(jsonld.get("created_artifacts"), Some(&json!(["file_1.py", "file_2.rs"])));
 }
 
 #[test]
 fn test_apply_output_mapping_check() {
     let runner = create_test_runner();
     let output = json!({
-        "review": "检查结果良好",
+        "review": "check_result_ok",
         "passed": true
     });
 
@@ -169,7 +169,7 @@ fn test_apply_output_mapping_check() {
     assert!(result.is_some());
 
     let jsonld = result.unwrap();
-    assert_eq!(jsonld.get("check_review"), Some(&json!("检查结果良好")));
+    assert_eq!(jsonld.get("check_review"), Some(&json!("check_result_ok")));
     assert_eq!(jsonld.get("check_passed"), Some(&json!(true)));
 }
 
@@ -177,28 +177,28 @@ fn test_apply_output_mapping_check() {
 fn test_apply_output_mapping_act() {
     let runner = create_test_runner();
     let output = json!({
-        "decision": "最终决策",
-        "action": "执行下一步"
+        "decision": "final_decision",
+        "action": "execute_next_step"
     });
 
     let result = runner.apply_output_mapping(&output, &AgentRole::Act, "iri://task/abc");
     assert!(result.is_some());
 
     let jsonld = result.unwrap();
-    assert_eq!(jsonld.get("final_decision"), Some(&json!("最终决策")));
-    assert_eq!(jsonld.get("recommended_action"), Some(&json!("执行下一步")));
+    assert_eq!(jsonld.get("final_decision"), Some(&json!("final_decision")));
+    assert_eq!(jsonld.get("recommended_action"), Some(&json!("execute_next_step")));
 }
 
 #[test]
 fn test_apply_output_mapping_string_output() {
     let runner = create_test_runner();
-    let output = json!("简单的字符串输出");
+    let output = json!("simple_string_output");
 
     let result = runner.apply_output_mapping(&output, &AgentRole::Do, "iri://task/xyz");
     assert!(result.is_some());
 
     let jsonld = result.unwrap();
-    assert_eq!(jsonld.get("content"), Some(&json!("简单的字符串输出")));
+    assert_eq!(jsonld.get("content"), Some(&json!("simple_string_output")));
 }
 
 #[test]
@@ -206,12 +206,12 @@ fn test_task_result_jsonld_output() {
     let result = TaskResult {
         task_iri: "iri://task/test".to_string(),
         status: "success".to_string(),
-        summary: "任务完成".to_string(),
-        output: Some(json!("输出内容")),
+        summary: "task_completed".to_string(),
+        output: Some(json!("output_content")),
         jsonld_output: Some(json!({
             "@id": "iri://task/test_output",
             "@type": "DoOutput",
-            "content": "输出内容"
+            "content": "output_content"
         })),
         artifacts: vec![],
         errors: vec![],
@@ -229,7 +229,7 @@ fn test_task_result_jsonld_output() {
 
 #[test]
 fn test_try_extract_json_from_markdown_plain_json() {
-    let input = r#"{"thought": "分析中", "content": "测试", "action": "continue"}"#;
+    let input = r#"{"thought": "analyzing", "content": "testing", "action": "continue"}"#;
     let result = AgentRunner::try_extract_json_from_markdown(input);
     assert!(result.is_some());
     let parsed: Value = serde_json::from_str(&result.unwrap()).unwrap();
@@ -238,7 +238,7 @@ fn test_try_extract_json_from_markdown_plain_json() {
 
 #[test]
 fn test_try_extract_json_from_markdown_json_code_block() {
-    let input = "```json\n{\"thought\": \"思考\", \"content\": \"内容\", \"action\": \"tool_call\"}\n```";
+    let input = "```json\n{\"thought\": \"thinking\", \"content\": \"content\", \"action\": \"tool_call\"}\n```";
     let result = AgentRunner::try_extract_json_from_markdown(input);
     assert!(result.is_some());
     let parsed: Value = serde_json::from_str(&result.unwrap()).unwrap();
@@ -247,16 +247,16 @@ fn test_try_extract_json_from_markdown_json_code_block() {
 
 #[test]
 fn test_try_extract_json_from_markdown_code_block_no_lang() {
-    let input = "```\n{\"thought\": \"思考\", \"content\": \"内容\"}\n```";
+    let input = "```\n{\"thought\": \"thinking\", \"content\": \"content\"}\n```";
     let result = AgentRunner::try_extract_json_from_markdown(input);
     assert!(result.is_some());
     let parsed: Value = serde_json::from_str(&result.unwrap()).unwrap();
-    assert_eq!(parsed["thought"], "思考");
+    assert_eq!(parsed["thought"], "thinking");
 }
 
 #[test]
 fn test_try_extract_json_from_markdown_with_surrounding_text() {
-    let input = "好的，我来分析一下。\n{\"thought\": \"分析\", \"content\": \"结果\", \"action\": \"finish\"}\n以上就是我的分析。";
+    let input = "Okay_let_me_analyze.\n{\"thought\": \"analyze\", \"content\": \"result\", \"action\": \"finish\"}\nThat_is_my_analysis.";
     let result = AgentRunner::try_extract_json_from_markdown(input);
     assert!(result.is_some());
     let parsed: Value = serde_json::from_str(&result.unwrap()).unwrap();
@@ -265,7 +265,7 @@ fn test_try_extract_json_from_markdown_with_surrounding_text() {
 
 #[test]
 fn test_try_extract_json_from_markdown_nested_braces() {
-    let input = r#"{"thought": "嵌套", "content": {"sub": "value"}, "action": "continue"}"#;
+    let input = r#"{"thought": "nested", "content": {"sub": "value"}, "action": "continue"}"#;
     let result = AgentRunner::try_extract_json_from_markdown(input);
     assert!(result.is_some());
     let parsed: Value = serde_json::from_str(&result.unwrap()).unwrap();
@@ -274,21 +274,21 @@ fn test_try_extract_json_from_markdown_nested_braces() {
 
 #[test]
 fn test_try_extract_json_from_markdown_no_json() {
-    let input = "这是一段纯文本，没有JSON内容。";
+    let input = "This_is_plain_text_no_JSON.";
     let result = AgentRunner::try_extract_json_from_markdown(input);
     assert!(result.is_none());
 }
 
 #[test]
 fn test_try_extract_json_from_markdown_incomplete_json() {
-    let input = r#"{"thought": "不完整", "content": "缺少结束括号"#;
+    let input = r#"{"thought": "incomplete", "content": "missing_closing_brace"#;
     let result = AgentRunner::try_extract_json_from_markdown(input);
     assert!(result.is_none());
 }
 
 #[test]
 fn test_try_extract_json_from_markdown_multiple_json_objects() {
-    let input = r#"前一段 {"a": 1} 后一段 {"thought": "第二个", "content": "内容", "action": "finish"}"#;
+    let input = r#"prefix {"a": 1} suffix {"thought": "second", "content": "content", "action": "finish"}"#;
     let result = AgentRunner::try_extract_json_from_markdown(input);
     assert!(result.is_some());
     let parsed: Value = serde_json::from_str(&result.unwrap()).unwrap();
@@ -300,7 +300,7 @@ fn test_task_result_partial_success_status() {
     let result = TaskResult {
         task_iri: "iri://task/test".to_string(),
         status: "partial_success".to_string(),
-        summary: "任务部分完成".to_string(),
+        summary: "task_partially_completed".to_string(),
         output: None,
         jsonld_output: None,
         artifacts: vec![],
@@ -313,5 +313,5 @@ fn test_task_result_partial_success_status() {
     };
     assert_eq!(result.status, "partial_success");
     assert!(!result.errors.is_empty());
-    assert!(result.summary.contains("部分完成"));
+    assert!(result.summary.contains("partially_completed"));
 }

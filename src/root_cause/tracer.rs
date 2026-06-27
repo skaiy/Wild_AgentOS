@@ -66,43 +66,43 @@ impl BackwardTracer {
             ErrorPattern {
                 pattern: "connection refused|connection reset|timeout",
                 root_cause_label: "network_error",
-                root_cause_description: "网络连接失败 — 目标服务不可用或网络不通",
+                root_cause_description: "Network connection failed — target service unavailable or network unreachable",
                 confidence: 0.9,
             },
             ErrorPattern {
                 pattern: "not found|no such file|enoent|no such",
                 root_cause_label: "resource_not_found",
-                root_cause_description: "资源不存在 — 路径/文件/URL 不正确或已被移除",
+                root_cause_description: "Resource not found — path/file/URL is incorrect or has been removed",
                 confidence: 0.85,
             },
             ErrorPattern {
                 pattern: "permission denied|access denied|forbidden|eacces",
                 root_cause_label: "permission_error",
-                root_cause_description: "权限不足 — 当前环境无权访问该资源",
+                root_cause_description: "Permission denied — current environment lacks access to this resource",
                 confidence: 0.9,
             },
             ErrorPattern {
                 pattern: "syntax error|parse error|invalid syntax",
                 root_cause_label: "syntax_error",
-                root_cause_description: "语法错误 — 输入数据格式不符合预期",
+                root_cause_description: "Syntax error — input data format does not match expectations",
                 confidence: 0.8,
             },
             ErrorPattern {
                 pattern: "out of memory|oom|no space|disk full",
                 root_cause_label: "resource_exhausted",
-                root_cause_description: "资源耗尽 — 内存/磁盘/连接数达到上限",
+                root_cause_description: "Resource exhausted — memory/disk/connections at capacity",
                 confidence: 0.9,
             },
             ErrorPattern {
                 pattern: "null pointer|undefined|cannot read property|unwrap.*none",
                 root_cause_label: "null_reference",
-                root_cause_description: "空引用 — 访问了未初始化或不存在的值",
+                root_cause_description: "Null reference — accessed uninitialized or non-existent value",
                 confidence: 0.85,
             },
             ErrorPattern {
                 pattern: "invalid argument|invalid input|bad request|400",
                 root_cause_label: "invalid_input",
-                root_cause_description: "无效输入 — 参数值不在预期范围内",
+                root_cause_description: "Invalid input — parameter value outside expected range",
                 confidence: 0.8,
             },
         ]
@@ -129,7 +129,7 @@ impl BackwardTracer {
         let symptom_level = TraceLevel {
             level: 1,
             label: "symptom".to_string(),
-            description: format!("错误发生: {}", error_message),
+            description: format!("Error occurred: {}", error_message),
             source_location: source_location.to_string(),
             is_root_cause: false,
             evidence: Evidence::new(
@@ -164,7 +164,7 @@ impl BackwardTracer {
         if root_confidence < self.config.min_confidence
         {
             return Err(RootCauseError::InsufficientEvidence {
-                message: "根因证据置信度不足，需补充更多上下文".to_string(),
+                message: "Root cause evidence confidence insufficient, need more context".to_string(),
                 min_confidence: self.config.min_confidence,
                 actual_confidence: root_confidence,
             });
@@ -186,7 +186,7 @@ impl BackwardTracer {
             level: 2,
             label: "intermediate".to_string(),
             description: format!(
-                "调用者: {} (调用位置: {}:{})",
+                "Caller: {} (call site: {}:{})",
                 caller_info.function, caller_info.file, caller_info.line
             ),
             source_location: format!("{}:{}", caller_info.file, caller_info.line),
@@ -213,7 +213,7 @@ impl BackwardTracer {
             level: 3,
             label: "intermediate".to_string(),
             description: format!(
-                "上下文状态: 任务类型={}, 失败描述={}, 可用日志数={}",
+                "Context state: task_type={}, failure_description={}, available_logs={}",
                 context.task_type,
                 context.failure_description,
                 context.available_logs.len(),
@@ -238,7 +238,7 @@ impl BackwardTracer {
         Ok(TraceLevel {
             level: 4,
             label: "intermediate".to_string(),
-            description: format!("触发事件: 任务 '{}' 执行过程中发生异常", context.task_type),
+            description: format!("Trigger event: exception occurred during task '{}' execution", context.task_type),
             source_location: "trace_trigger".to_string(),
             is_root_cause: false,
             evidence: Evidence::new(
@@ -290,14 +290,14 @@ impl BackwardTracer {
         Ok(TraceLevel {
             level: 5,
             label: "root_cause".to_string(),
-            description: "根因未匹配已知模式 — 需要人工分析".to_string(),
+            description: "Root cause did not match any known pattern — requires manual analysis".to_string(),
             source_location: "unknown".to_string(),
             is_root_cause: true,
             evidence: Evidence::new(
                 "unknown",
                 json!({
                     "error": error_message,
-                    "note": "未匹配到已知错误模式",
+                    "note": "No known error pattern matched",
                 }),
                 0.5,
             ),

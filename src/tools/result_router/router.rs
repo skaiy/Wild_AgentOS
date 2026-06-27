@@ -27,7 +27,7 @@ impl ResultRouter {
 
         let size = result_str.len();
 
-        // file_read 按行数判断大文件：多行 ≤1000 行直接放行，单行 ≤32KB 直接放行
+        // file_read: multi-line ≤1000 lines passes through, single-line ≤32KB passes through
         if tool_name == "file_read" {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(result_str) {
                 if let Some(total_lines) = val.get("total_lines").and_then(|v| v.as_u64()) {
@@ -47,7 +47,7 @@ impl ResultRouter {
             return RouteDecision::PassThrough;
         }
 
-        // >= micro_tool_threshold: 生成 IRI + 微工具 (原来 Truncate 路径改为 Summarize)
+        // >= micro_tool_threshold: generate IRI + micro-tools (original Truncate path changed to Summarize)
         if size >= self.micro_tool_threshold && size <= self.threshold_large {
             return RouteDecision::Summarize {
                 call_id: call_id.to_string(),

@@ -73,14 +73,14 @@ pub struct CoreConfig {
     pub l0_storage_path: String,
     pub event_buffer_size: usize,
     pub enable_metrics: bool,
-    /// 全局 L1 淘汰策略配置 (None = 按 Agent Role 自动选择)
+    /// Global L1 eviction policy config (None = auto-select by Agent Role)
     pub eviction_config: Option<EvictionConfig>,
 }
 
 impl Default for CoreConfig {
     fn default() -> Self {
         Self {
-            max_node_size: 5_242_880, // 5MB: agent 全量 content 可能达数百 KB
+            max_node_size: 5_242_880, // 5MB: agent full content can reach hundreds of KB
             max_projection_size: 500,
             l0_storage_path: "./data/l0".to_string(),
             event_buffer_size: 1000,

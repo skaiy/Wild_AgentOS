@@ -46,14 +46,14 @@ pub struct Blackboard {
     node_count: AtomicU64,
     total_bytes: AtomicU64,
     permission_matrix: PermissionMatrix,
-    // 作战地图: Agent 态势感知
+    // Battle map: Agent situational awareness
     agent_registry: RwLock<HashMap<String, AgentStatus>>,
-    // 作战地图: 资源锁表
+    // Battle map: Resource lock table
     resource_locks: RwLock<Vec<ResourceLock>>,
 }
 
 impl Blackboard {
-    /// 使用共享的统一存储创建 Blackboard
+    /// Create Blackboard with a shared unified store
     pub fn with_store(store: Arc<Store>) -> Result<Self, CoreError> {
         info!("Initializing L2 Blackboard with shared store");
         Ok(Self {
@@ -476,7 +476,7 @@ impl Blackboard {
         self.total_bytes.load(Ordering::Relaxed)
     }
 
-    /// 自动垃圾回收：释放已完成且无后续引用的任务节点
+    /// Auto garbage collection: release completed task nodes with no remaining references
     pub fn gc_completed_tasks(&self) -> Result<usize, CoreError> {
         let mut released = 0;
         let mut tasks_to_release = Vec::new();
@@ -508,7 +508,7 @@ impl Blackboard {
         Ok(released)
     }
 
-    /// 检查并返回需要垃圾回收的任务列表
+    /// Check and return tasks that need garbage collection
     pub fn get_gc_candidates(&self) -> Vec<(String, String)> {
         let tree = self.task_tree.read();
         tree.iter()
@@ -916,7 +916,7 @@ impl Blackboard {
         &self.permission_matrix
     }
 
-    // ========== Agent 态势感知 ==========
+    // ========== Agent Situational Awareness ==========
 
     pub fn register_agent(&self, agent_id: &str, role: &str, task_iri: &str) {
         let mut registry = self.agent_registry.write();
@@ -978,12 +978,12 @@ impl Blackboard {
         stale
     }
 
-    // ========== 资源锁管理 ==========
+    // ========== Resource Lock Management ==========
 
     pub fn acquire_resource(&self, lock: ResourceLock) -> Result<bool, CoreError> {
         let mut locks = self.resource_locks.write();
 
-        // 检查冲突: 同一资源且锁类型互斥
+        // Check conflict: same resource and mutually exclusive lock types
         let has_conflict = locks.iter().any(|existing| {
             existing.resource_id == lock.resource_id
                 && existing.acquired_by != lock.acquired_by
@@ -1024,7 +1024,7 @@ impl Blackboard {
         })
     }
 
-    // ========== 跨任务依赖 ==========
+    // ========== Cross-task Dependencies ==========
 
     pub fn add_task_dependency(&self, task_iri: &str, depends_on: &str) {
         let mut tree = self.task_tree.write();
@@ -1166,7 +1166,7 @@ impl Blackboard {
         Ok(layers)
     }
 
-    // ========== blackboard:shared 协调区域 ==========
+    // ========== blackboard:shared Coordination Zone ==========
 
     pub fn publish_coordination(&self, msg: &CoordinationMessage) -> Result<(), CoreError> {
         let iri = format!("iri://coordination/{}", uuid::Uuid::new_v4().hyphenated());
@@ -1322,7 +1322,7 @@ fn extract_jsonld_types(parsed: &serde_json::Value) -> Vec<String> {
     }
 }
 
-// ========== 作战地图类型定义 ==========
+// ========== Battle Map Type Definitions ==========
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AgentActivity {
@@ -1801,7 +1801,7 @@ mod tests {
         assert!(node_after.is_none(), "Node should be deleted from cache");
     }
 
-    // ========== Agent 态势感知测试 ==========
+    // ========== Agent Situational Awareness Tests ==========
 
     #[test]
     fn test_agent_register_and_status() {
@@ -1862,7 +1862,7 @@ mod tests {
         assert!(stale.is_empty(), "Fresh agent should not be stale");
     }
 
-    // ========== 资源锁测试 ==========
+    // ========== Resource Lock Tests ==========
 
     #[test]
     fn test_acquire_and_release_lock() {
@@ -1975,7 +1975,7 @@ mod tests {
         assert!(bb.check_resource_available("file:///data/other.csv", LockType::Write));
     }
 
-    // ========== 跨任务依赖测试 ==========
+    // ========== Cross-task Dependency Tests ==========
 
     #[test]
     fn test_task_dependency_tracking() {
@@ -2012,7 +2012,7 @@ mod tests {
         assert_eq!(bb.get_task_dependencies("iri://task/b").len(), 1);
     }
 
-    // ========== 协调消息测试 ==========
+    // ========== Coordination Message Tests ==========
 
     #[test]
     fn test_publish_and_read_coordination() {
@@ -2041,7 +2041,7 @@ mod tests {
         assert!(!results.is_empty(), "blackboard:shared should have snapshot data");
     }
 
-    // ========== DAG 拓扑层级测试 ==========
+    // ========== DAG Topology Layer Tests ==========
 
     #[test]
     fn test_get_task_dag_simple_chain() {
@@ -2093,7 +2093,7 @@ mod tests {
         assert_eq!(dag[2], vec!["iri://task/d"]);
     }
 
-    // ========== 共享状态测试 ==========
+    // ========== Shared State Tests ==========
 
     #[test]
     fn test_publish_and_read_shared_state() {

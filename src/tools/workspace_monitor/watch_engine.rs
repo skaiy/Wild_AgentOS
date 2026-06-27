@@ -193,7 +193,7 @@ impl WatchEngine {
         let mut debouncer = new_debouncer(
             debounce,
             move |result: DebounceEventResult| {
-                // 直接从 watcher 线程更新 inventory（无需 tokio::spawn）
+                // update inventory directly from the watcher thread (no tokio::spawn needed)
                 if let Some(ref inv) = inventory {
                     if let Ok(events) = &result {
                         for event in events {

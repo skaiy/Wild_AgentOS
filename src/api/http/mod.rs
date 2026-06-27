@@ -276,7 +276,7 @@ async fn get_execution_details_handler(
         "current_phase": "do",
         "plan": {
             "plan_id": "plan_001",
-            "description": "执行任务",
+            "description": "Execute task",
             "steps": []
         },
         "steps": [],

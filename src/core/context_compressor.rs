@@ -7,7 +7,7 @@ use crate::gateway::unified_gateway::ChatMessage;
 pub struct ToolResultEntry {
     pub turn: u32,
     pub tool_name: String,
-    /// 精确 tool_call_id，用于可靠映射回 messages 中的 tool 消息
+    /// Exact tool_call_id for reliable mapping back to tool messages in messages
     pub tool_call_id: String,
     pub content: String,
     pub is_compressed: bool,
@@ -18,7 +18,7 @@ pub struct ToolResultCompressor {
     max_full_results: usize,
     max_summary_length: usize,
     compression_trigger: usize,
-    /// 超过此字节数的 tool 消息尝试用 micro-tool 引用替换
+    /// Tool messages exceeding this byte threshold attempt micro-tool reference replacement
     compress_tool_result_threshold: usize,
     results: VecDeque<ToolResultEntry>,
 }
@@ -82,21 +82,21 @@ impl ToolResultCompressor {
             lines.join("\n")
         };
         
-        format!("[摘要 {}字节] {}... (共 {} 字符)", 
+        format!("[Summary {} bytes] {}... (total {} chars)", 
             self.max_summary_length, 
             preview,
             content.len()
         )
     }
     
-    /// 压缩 messages 中的 tool 结果内容。
-    /// 与 compress_old_results() 配合使用：后者压缩 compressor 内部的 entry，
-    /// 此方法通过 tool_call_id 精确匹配将压缩结果写回 messages 中对应的 tool 消息。
+    /// Compress tool result content in messages.
+    /// Used together with compress_old_results(): the latter compresses entries inside the compressor,
+    /// this method writes compressed results back to the corresponding tool messages via tool_call_id matching.
     pub fn compress_tool_messages(&self, messages: &mut Vec<ChatMessage>) {
         if !self.enabled {
             return;
         }
-        // 构建已压缩 entry 的映射: tool_call_id -> compressed_content
+        // Build compressed entry map: tool_call_id -> compressed_content
         let compressed_map: std::collections::HashMap<&str, &str> = self
             .results
             .iter()
@@ -108,7 +108,7 @@ impl ToolResultCompressor {
             return;
         }
 
-        // 通过 tool_call_id 精确匹配 messages 中对应的 tool 消息
+        // Match tool messages in messages by exact tool_call_id
         for msg in messages.iter_mut() {
             if msg.role != "tool" {
                 continue;
@@ -157,7 +157,7 @@ impl ContextWindowManager {
         }
     }
     
-    /// 估算消息列表的 token 消耗（4 字符 ≈ 1 token，中英文混合估算）
+    /// Estimate token consumption of a message list (4 chars ≈ 1 token, mixed CJK/Latin estimation)
     pub fn estimate_tokens(messages: &[ChatMessage]) -> usize {
         messages.iter().map(|m| {
             let mut total = m.content.len() / 4 + m.role.len() / 4;
@@ -176,7 +176,7 @@ impl ContextWindowManager {
         }).sum()
     }
 
-    /// 判断是否需要压缩。同时检查消息数和预估 token 数两个维度。
+    /// Determine whether compression is needed. Checks both message count and estimated token count.
     pub fn should_compress(&self, message_count: usize, messages: &[ChatMessage]) -> bool {
         if message_count > self.max_messages {
             return true;
@@ -228,7 +228,7 @@ impl ContextWindowManager {
         if !summary.is_empty() {
             compressed.push(ChatMessage {
                 role: "user".to_string(),
-                content: format!("[历史摘要] {}", summary),
+                content: format!("[History Summary] {}", summary),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -337,15 +337,15 @@ impl ContextWindowManager {
         
         if !tool_calls.is_empty() {
             let unique_tools: std::collections::HashSet<_> = tool_calls.into_iter().collect();
-            parts.push(format!("调用工具: {}", unique_tools.into_iter().collect::<Vec<_>>().join(", ")));
+            parts.push(format!("Tools called: {}", unique_tools.into_iter().collect::<Vec<_>>().join(", ")));
         }
         
         if !errors.is_empty() {
-            parts.push(format!("错误: {} 个", errors.len()));
+            parts.push(format!("Errors: {}", errors.len()));
         }
         
         if !summaries.is_empty() {
-            parts.push(format!("关键内容: {}", summaries.join("; ")));
+            parts.push(format!("Key content: {}", summaries.join("; ")));
         }
         
         parts.join(" | ")
@@ -411,14 +411,14 @@ mod tests {
     fn test_compress_tool_messages_by_call_id() {
         let mut compressor = ToolResultCompressor::new(&default_settings());
         
-        // 添加结果并触发压缩
+        // Add results and trigger compression
         let long = "y".repeat(500);
         for i in 1..=6 {
             compressor.add_result(i, "file_read", &format!("call_{}", i), &long);
         }
         assert!(compressor.get_results().front().unwrap().is_compressed);
         
-        // 构建 messages: system + 若干 tool 消息
+        // Build messages: system + several tool messages
         let mut msgs = vec![ChatMessage {
             role: "system".to_string(), content: "sys".to_string(),
             name: None, tool_calls: None, tool_call_id: None, reasoning_content: None,
@@ -434,7 +434,7 @@ mod tests {
         
         compressor.compress_tool_messages(&mut msgs);
         
-        // call_1 和 call_2 已被压缩（前两个 entry）
+        // call_1 and call_2 are compressed (first two entries)
         let compressed_ids: std::collections::HashSet<String> = compressor.results.iter()
             .filter(|e| e.is_compressed)
             .map(|e| e.tool_call_id.clone())
@@ -442,7 +442,7 @@ mod tests {
         for msg in msgs.iter().filter(|m| m.role == "tool") {
             let cid = msg.tool_call_id.as_ref().unwrap();
             if compressed_ids.contains(cid) {
-                assert!(msg.content.starts_with("[摘要"), 
+                assert!(msg.content.starts_with("[Summary"), 
                     "tool_call_id={} should be compressed", cid);
             } else {
                 assert_eq!(msg.content.len(), long.len(), 

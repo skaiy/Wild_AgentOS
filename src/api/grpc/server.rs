@@ -55,7 +55,7 @@ pub struct AgentOSService {
     prefetch: Arc<PrefetchEngine>,
     unified_graph: Arc<UnifiedGraphStore>,
     execution_states: Arc<RwLock<HashMap<String, ExecutionState>>>,
-    /// Batch Agent 管理器，post-new 异步初始化
+    /// Batch Agent manager, post-new async initialization
     batch_manager: tokio::sync::Mutex<Option<BatchAgentManager>>,
 }
 
@@ -85,7 +85,7 @@ impl AgentOSService {
             .unwrap_or("src/templates/templates");
         let templates = Arc::new(
             TemplateEngine::new(std::path::Path::new(templates_path))
-                .map_err(|e| format!("模板引擎初始化失败 (路径={}): {}", templates_path, e))?
+                .map_err(|e| format!("Template engine init failed (path={}): {}", templates_path, e))?
         );
         let event_bus = Arc::new(EventBus::new(settings.agents.event_bus_capacity));
 
@@ -137,7 +137,7 @@ impl AgentOSService {
                     tracing::warn!(
                         event_type = %et,
                         task_iri = %event.task_iri,
-                        "5W2H 约束告警消费: 需要关注"
+                        "5W2H constraint alert consumed: needs attention"
                     );
                 }
             },
@@ -155,7 +155,7 @@ impl AgentOSService {
                     tracing::info!(
                         event_type = %event.event_type,
                         task_iri = %event.task_iri,
-                        "缓存失效事件已消费"
+                        "Cache invalidation event consumed"
                     );
                     let _ = (l0, bb);
                 }
@@ -174,7 +174,7 @@ impl AgentOSService {
                     tracing::info!(
                         event_type = %event.event_type,
                         task_iri = %event.task_iri,
-                        "预取请求事件已消费"
+                        "Prefetch request event consumed"
                     );
                     let _ = (bb, proj);
                 }
@@ -197,7 +197,7 @@ impl AgentOSService {
                                 event_type = %event.event_type,
                                 task_iri = %event.task_iri,
                                 source = %event.source_agent_iri,
-                                "任务失败事件"
+                                "Task failure event"
                             );
                         }
                         _ => {
@@ -205,7 +205,7 @@ impl AgentOSService {
                                 event_type = %event.event_type,
                                 task_iri = %event.task_iri,
                                 source = %event.source_agent_iri,
-                                "任务生命周期事件"
+                                "Task lifecycle event"
                             );
                         }
                     }
@@ -213,7 +213,7 @@ impl AgentOSService {
             },
         );
 
-        // ── BatchAgent 管理器（同步注册，异步 start） ──
+        // ── BatchAgent manager (sync register, async start) ──
         let batch_mgr = {
             let skill_graph = Arc::new(
                 SkillGraphStore::new()
@@ -230,11 +230,11 @@ impl AgentOSService {
                 let ok = results.iter().filter(|r| r.is_ok()).count();
                 let err = results.len() - ok;
                 tracing::info!(
-                    "BatchAgent 注册完成: {} OK, {} 失败, 共 {} 个配置",
+                    "BatchAgent registration complete: {} OK, {} failed, {} total configs",
                     ok, err, results.len()
                 );
                 for r in results.iter().filter_map(|r| r.as_ref().err()) {
-                    tracing::warn!("BatchAgent 注册失败: {:?}", r);
+                    tracing::warn!("BatchAgent registration failed: {:?}", r);
                 }
             }
             mgr
@@ -261,8 +261,8 @@ impl AgentOSService {
         Ok(s)
     }
 
-    /// 装配 axum HTTP/SSE 路由，复用本服务的运行期共享状态（EventBus / Blackboard /
-    /// SkillRegistry 等），使 HTTP `/api/v1/tasks/stream` 与 gRPC 任务执行处于同一事件总线。
+/// Assemble axum HTTP/SSE routes, reusing the service's runtime shared state (EventBus / Blackboard /
+/// SkillRegistry etc.), so HTTP `/api/v1/tasks/stream` and gRPC task execution share the same event bus.
     pub fn build_http_router(&self) -> axum::Router {
         use crate::core::core_types::SemanticCore;
         use crate::core::validation::ValidationEngine;
@@ -281,21 +281,21 @@ impl AgentOSService {
         crate::api::http::build_router(core, self.unified_graph.store())
     }
 
-    /// 异步启动 BatchAgent 系统。在 gRPC serve 之前调用。
+    /// Async start BatchAgent system. Call before gRPC serve.
     pub async fn init_batch_system(&self) {
         let mut guard = self.batch_manager.lock().await;
         if let Some(ref mut mgr) = *guard {
             match mgr.start(None).await {
-                Ok(()) => tracing::info!("BatchAgent 系统已启动"),
-                Err(e) => tracing::warn!("BatchAgent 启动部分失败: {:?}", e),
+                Ok(()) => tracing::info!("BatchAgent system started"),
+                Err(e) => tracing::warn!("BatchAgent partial startup failure: {:?}", e),
             }
         } else {
-            tracing::info!("BatchAgent 已初始化完毕或已禁用");
+            tracing::info!("BatchAgent initialized or disabled");
         }
     }
 
     fn create_sa(&self, settings: &Settings) -> SupervisorAgent {
-        // 初始化 WorkspaceMonitor（如果配置了工作区根目录）
+        // initialize WorkspaceMonitor (if workspace root is configured)
         let workspace_root_path: Option<std::path::PathBuf> = settings.workspace.root.as_ref().map(|s| std::path::PathBuf::from(s));
         let workspace_monitor_opt: Option<Arc<WorkspaceMonitor>> = if let Some(ref ws_root) = workspace_root_path {
             let ws_config = WorkspaceMonitorConfig {
@@ -307,11 +307,11 @@ impl AgentOSService {
             };
             match WorkspaceMonitor::initialize(ws_config, Some(self.blackboard.clone()), Some(self.event_bus.clone())) {
                 Ok(ws) => {
-                    tracing::info!(root = %ws_root.display(), "WorkspaceMonitor 已初始化");
+                    tracing::info!(root = %ws_root.display(), "WorkspaceMonitor initialized");
                     Some(Arc::new(ws))
                 }
                 Err(e) => {
-                    tracing::warn!("WorkspaceMonitor 初始化失败: {}，将使用默认工作区设置", e);
+                    tracing::warn!("WorkspaceMonitor init failed: {}, using default workspace settings", e);
                     None
                 }
             }
@@ -341,18 +341,18 @@ impl AgentOSService {
             let ug_store = self.unified_graph.store();
             let mut executor = runner.tool_executor.write().expect("tool_executor RwLock poisoned");
             executor.set_unified_kg_store(ug_store);
-            // 设置 workspace_monitor 到 ToolExecutor
+            // set workspace_monitor on ToolExecutor
             if let Some(ref wm) = workspace_monitor_opt {
                 executor.set_workspace_monitor(wm.clone());
             }
         }
 
-        // 注册 WorkspaceMonitor hooks 到 AgentRunner 的 hook_manager
+        // register WorkspaceMonitor hooks into AgentRunner's hook_manager
         if let Some(ref wm) = workspace_monitor_opt {
             wm.register_hooks(&runner.hook_manager);
         }
 
-        // 完成 AgentRunner 初始化接线：perception_store → WorkspaceMonitor
+        // complete AgentRunner init wiring: perception_store → WorkspaceMonitor
         runner.finalize_setup();
 
         let mut sa = SupervisorAgent::with_pdca_cycles(
@@ -385,7 +385,7 @@ impl AgentOSService {
         task_iri: &str,
         content: &str,
     ) {
-        tracing::info!(task_iri = %task_iri, "收到用户补充输入");
+        tracing::info!(task_iri = %task_iri, "Received user supplementary input");
         self.event_bus.emit(
             task_iri,
             "USER_SUPPLEMENTARY_INPUT",

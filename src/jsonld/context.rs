@@ -1,23 +1,23 @@
-//! JSON-LD Context 定义
+//! JSON-LD Context Definition
 //!
-//! 提供全局统一的 @context 定义，包含系统命名空间和字段映射
+//! Provides a global unified @context definition, including system namespaces and field mappings
 //!
-//! # 设计说明
+//! # Design Notes
 //!
-//! ## 单 @context 源
+//! ## Single @context Source
 //!
-//! context.json 是权威的 @context 定义来源，编译期嵌入二进制。
-//! `context_value()` 提供懒加载的 `Arc<Value>` 访问。
-//! 除 context.json 外不维护任何独立的上下文 HashMap。
+//! context.json is the authoritative @context definition source, embedded at compile time.
+//! `context_value()` provides lazy `Arc<Value>` access.
+//! No separate context HashMap is maintained beyond context.json.
 //!
-//! ## map_field_to_iri() = 轻量级 Expansion
+//! ## map_field_to_iri() = Lightweight Expansion
 //!
-//! 这是一个有意简化的 JSON-LD key 展开——从 context_value() 中读取字段→IRI 映射，
-//! O(1) 查表而非完整 JSON-LD 1.1 Expansion 算法的 O(n) 递归树遍历。
+//! This is a deliberately simplified JSON-LD key expansion — reads field→IRI mappings from context_value(),
+//! O(1) lookup instead of the O(n) recursive tree traversal of the full JSON-LD 1.1 Expansion algorithm.
 //!
-//! ## 不加载远程 @context
+//! ## No Remote @context Loading
 //!
-//! 封闭系统中 @context 编译期已知，不引入远程加载的延迟和失败模式。
+//! In a closed system, @context is known at compile time, avoiding remote loading latency and failure modes.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -93,15 +93,15 @@ impl JsonLdContext {
         self.mappings.insert(field, iri);
     }
 
-    /// 构建统一的 @context 对象
+    /// Build the unified @context object
     ///
-    /// 从 context.json 加载基础定义（类型映射 + 字段映射 + 领域命名空间），
-    /// 再追加编程方式注入的命名空间前缀作为安全兜底。
+    /// Loads base definitions (type mappings + field mappings + domain namespaces) from context.json,
+    /// then appends programmatically injected namespace prefixes as a safety fallback.
     ///
-    /// 结果会被 OnceLock 缓存，此后 O(1) 访问。
+    /// The result is cached by OnceLock, providing O(1) access thereafter.
     fn build_unified_context() -> Arc<Value> {
         let raw: Value = serde_json::from_str(include_str!("context.json"))
-            .expect("context.json 解析失败");
+            .expect("failed to parse context.json");
 
         let mut context_map = raw
             .get("@context")
@@ -109,9 +109,9 @@ impl JsonLdContext {
             .cloned()
             .unwrap_or_default();
 
-        // context.json 已包含这些命名空间定义（作为基础字段），
-        // 此处通过入名常量再注入一次确保不会被误删的 context.json 字段破坏。
-        // 值相同（由 const URI_* 常量保证），重复插入不产生副作用。
+        // context.json already contains these namespace definitions (as base fields),
+        // re-injecting them via named constants ensures they aren't broken by accidentally deleted context.json fields.
+        // Values are identical (guaranteed by const URI_* constants), duplicate insertion is a no-op.
         for (prefix, uri) in [
             ("agent", URI_AGENT),
             ("task", URI_TASK),
@@ -136,7 +136,7 @@ impl JsonLdContext {
             .clone()
     }
 
-    /// 向 JSON 值注入 @context（如果没有的话）
+    /// Inject @context into a JSON value (if not already present)
     pub fn inject(value: &mut Value) {
         if let Some(obj) = value.as_object_mut() {
             if !obj.contains_key("@context") {
@@ -146,16 +146,16 @@ impl JsonLdContext {
     }
 }
 
-/// 将字段名映射为完整 IRI
+/// Map a field name to its full IRI
 ///
-/// # 有意设计：轻量级 Expansion
+/// # Design Intent: Lightweight Expansion
 ///
-/// 这不是 JSON-LD 1.1 标准的 Expansion 算法（递归树遍历 + 值展开），
-/// 而是从 context.json 读取字段→IRI 映射的 flat lookup。
-/// 对于封闭系统（@context 编译期已知）这提供了等价的语义，
-/// 但成本从 O(n) 递归变为 O(1) 查表。
+/// This is NOT the JSON-LD 1.1 standard Expansion algorithm (recursive tree traversal + value expansion),
+/// but rather a flat lookup of field→IRI mappings from context.json.
+/// For a closed system (@context known at compile time) this provides equivalent semantics,
+/// at a cost reduced from O(n) recursion to O(1) lookup.
 ///
-/// 不在 context.json 中定义的字段回退到 `node:{field}`。
+/// Fields not defined in context.json fall back to `node:{field}`.
 pub fn map_field_to_iri(field: &str) -> String {
     if field == "@id" || field == "@type" {
         return field.to_string();
@@ -171,7 +171,7 @@ pub fn map_field_to_iri(field: &str) -> String {
         .unwrap_or_else(|| format!("node:{}", field))
 }
 
-/// 创建 Skill 专用的 @context（追加 skill_name / skill_version）
+/// Create a Skill-specific @context (appends skill_name / skill_version)
 pub fn create_context_for_skill(_skill_name: &str, _skill_version: &str) -> HashMap<String, serde_json::Value> {
     let ctx = JsonLdContext::context_value();
     let mut context: HashMap<String, Value> = ctx

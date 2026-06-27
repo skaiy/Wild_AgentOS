@@ -49,18 +49,18 @@ pub fn execute_rag_search(input: &Value) -> Result<Value, String> {
             "query": query,
             "results": [],
             "count": 0,
-            "message": "RAG 索引目录不存在，请先使用 rag_index 工具索引文档"
+            "message": "RAG index directory does not exist. Please use rag_index to index documents first"
         }));
     }
 
     let mut results = Vec::new();
-    let entries = std::fs::read_dir(index_dir).map_err(|e| format!("读取索引目录失败: {}", e))?;
+    let entries = std::fs::read_dir(index_dir).map_err(|e| format!("Failed to read index directory: {}", e))?;
 
     for entry in entries.flatten() {
         if !entry.file_name().to_string_lossy().ends_with(".json") {
             continue;
         }
-        let content = std::fs::read_to_string(entry.path()).map_err(|e| format!("读取索引文件失败: {}", e))?;
+        let content = std::fs::read_to_string(entry.path()).map_err(|e| format!("Failed to read index file: {}", e))?;
         let doc: Value = serde_json::from_str(&content).unwrap_or_default();
 
         let text = doc["content"].as_str().unwrap_or("").to_lowercase();
@@ -97,7 +97,7 @@ pub fn execute_rag_index(input: &Value) -> Result<Value, String> {
         serde_json::from_value(input.clone()).map_err(|e| format!("Invalid input: {}", e))?;
 
     let index_dir = rag_index_dir();
-    std::fs::create_dir_all(&index_dir).map_err(|e| format!("创建索引目录失败: {}", e))?;
+    std::fs::create_dir_all(&index_dir).map_err(|e| format!("Failed to create index directory: {}", e))?;
 
     let iri = params.iri.unwrap_or_else(|| {
         format!("iri://rag/{}", uuid::Uuid::new_v4())
@@ -113,9 +113,9 @@ pub fn execute_rag_index(input: &Value) -> Result<Value, String> {
     let file_name = iri.replace([':', '/', '#'], "_");
     let file_path = index_dir.join(format!("{}.json", file_name));
     let json_str = serde_json::to_string_pretty(&doc)
-        .map_err(|e| format!("序列化索引文档失败: {}", e))?;
+        .map_err(|e| format!("Failed to serialize index document: {}", e))?;
     std::fs::write(&file_path, json_str)
-        .map_err(|e| format!("写入索引文件失败: {}", e))?;
+        .map_err(|e| format!("Failed to write index file: {}", e))?;
 
     Ok(json!({
         "iri": iri,
@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn test_rag_chunk() {
         let input = json!({
-            "content": "这是一段测试文本，用于验证文档分块功能是否正常工作。文档分块是RAG系统的核心功能之一。",
+            "content": "This is a test text for verifying document chunking. Chunking is a core feature of the RAG system.",
             "chunk_size": 20,
             "overlap": 5
         });
@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn test_rag_chunk_short() {
         let input = json!({
-            "content": "短文本"
+            "content": "Short text"
         });
         let result = execute_rag_chunk(&input).unwrap();
         assert_eq!(result["count"].as_u64().unwrap(), 1);
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn test_rag_search_no_index() {
         let input = json!({
-            "query": "测试查询"
+            "query": "Test query"
         });
         let result = execute_rag_search(&input).unwrap();
         assert_eq!(result["count"].as_u64().unwrap(), 0);

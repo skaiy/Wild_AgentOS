@@ -35,9 +35,9 @@ impl DefenseInDepthManager {
         // Layer 1: Entry validation — validate inputs/preconditions at entry point
         recommendations.push(DefenseRecommendation {
             layer: DefenseLayer::EntryValidation,
-            title: "入口参数校验".to_string(),
+            title: "Entry Parameter Validation".to_string(),
             description: format!(
-                "在根因位置 '{}' 添加输入参数校验和前置条件检查，确保调用时参数在预期范围内",
+                "Add input parameter validation and precondition checks at root cause location '{}', ensuring parameters are within expected range",
                 root.source_location
             ),
             priority: 1,
@@ -46,9 +46,9 @@ impl DefenseInDepthManager {
         // Layer 2: Business logic — add defensive checks in business logic
         recommendations.push(DefenseRecommendation {
             layer: DefenseLayer::BusinessLogic,
-            title: "业务逻辑防御".to_string(),
+            title: "Business Logic Defense".to_string(),
             description: format!(
-                "围绕 '{}' 添加业务逻辑层防御性检查，包括空值保护、边界校验和状态验证",
+                "Add business logic layer defensive checks around '{}', including null protection, boundary checks, and state validation",
                 root.description.chars().take(50).collect::<String>()
             ),
             priority: 2,
@@ -57,17 +57,17 @@ impl DefenseInDepthManager {
         // Layer 3: Environment guard — add guard clauses for environmental issues
         recommendations.push(DefenseRecommendation {
             layer: DefenseLayer::EnvironmentGuard,
-            title: "环境异常防护".to_string(),
-            description: "添加环境检查保护（磁盘空间、网络连通性、服务健康检查等），在操作前验证环境就绪".to_string(),
+            title: "Environment Anomaly Protection".to_string(),
+            description: "Add environment check guards (disk space, network connectivity, service health checks, etc.), verify environment readiness before operations".to_string(),
             priority: 3,
         });
 
         // Layer 4: Instrumentation — add logging and monitoring
         recommendations.push(DefenseRecommendation {
             layer: DefenseLayer::Instrumentation,
-            title: "关键路径监控".to_string(),
+            title: "Critical Path Monitoring".to_string(),
             description: format!(
-                "在根因路径 '{}' 添加追踪日志和性能监控，便于未来快速定位类似问题",
+                "Add tracing logs and performance monitoring on root cause path '{}', enabling fast identification of similar issues in the future",
                 root.source_location
             ),
             priority: 4,
@@ -89,32 +89,32 @@ impl DefenseInDepthManager {
 
         match label {
             "network_error" => vec![
-                DefenseRecommendation { layer: DefenseLayer::EntryValidation, title: "连接超时重试".into(), description: "添加指数退避重试机制".into(), priority: 1 },
-                DefenseRecommendation { layer: DefenseLayer::Instrumentation, title: "网络探测".into(), description: "添加连接前的网络健康检查".into(), priority: 2 },
+                DefenseRecommendation { layer: DefenseLayer::EntryValidation, title: "Connection Timeout Retry".into(), description: "Add exponential backoff retry mechanism".into(), priority: 1 },
+                DefenseRecommendation { layer: DefenseLayer::Instrumentation, title: "Network Probing".into(), description: "Add pre-connection network health check".into(), priority: 2 },
             ],
             "resource_not_found" => vec![
-                DefenseRecommendation { layer: DefenseLayer::EntryValidation, title: "路径校验".into(), description: "访问资源前验证路径/URL存在".into(), priority: 1 },
-                DefenseRecommendation { layer: DefenseLayer::BusinessLogic, title: "降级处理".into(), description: "资源不存在时提供降级替代方案".into(), priority: 2 },
+                DefenseRecommendation { layer: DefenseLayer::EntryValidation, title: "Path Validation".into(), description: "Verify path/URL exists before accessing resource".into(), priority: 1 },
+                DefenseRecommendation { layer: DefenseLayer::BusinessLogic, title: "Degradation Handling".into(), description: "Provide degradation alternatives when resource does not exist".into(), priority: 2 },
             ],
             "permission_error" => vec![
-                DefenseRecommendation { layer: DefenseLayer::BusinessLogic, title: "权限预检".into(), description: "操作前检查当前权限是否满足需求".into(), priority: 1 },
-                DefenseRecommendation { layer: DefenseLayer::EnvironmentGuard, title: "提权提示".into(), description: "权限不足时给出明确的提权建议".into(), priority: 2 },
+                DefenseRecommendation { layer: DefenseLayer::BusinessLogic, title: "Permission Pre-check".into(), description: "Check current permissions meet requirements before operation".into(), priority: 1 },
+                DefenseRecommendation { layer: DefenseLayer::EnvironmentGuard, title: "Escalation Advice".into(), description: "Provide clear escalation guidance when permissions are insufficient".into(), priority: 2 },
             ],
             "null_reference" => vec![
-                DefenseRecommendation { layer: DefenseLayer::EntryValidation, title: "空值保护".into(), description: "在解引用前检查是否为 null/None".into(), priority: 1 },
-                DefenseRecommendation { layer: DefenseLayer::BusinessLogic, title: "缺省值".into(), description: "为可能为空的字段提供安全的缺省值".into(), priority: 2 },
+                DefenseRecommendation { layer: DefenseLayer::EntryValidation, title: "Null Protection".into(), description: "Check for null/None before dereferencing".into(), priority: 1 },
+                DefenseRecommendation { layer: DefenseLayer::BusinessLogic, title: "Default Values".into(), description: "Provide safe defaults for potentially null fields".into(), priority: 2 },
             ],
             "resource_exhausted" => vec![
-                DefenseRecommendation { layer: DefenseLayer::EnvironmentGuard, title: "资源监控".into(), description: "操作前检查资源使用率，超过阈值时预警".into(), priority: 1 },
-                DefenseRecommendation { layer: DefenseLayer::BusinessLogic, title: "限流熔断".into(), description: "添加限流和熔断机制防止雪崩".into(), priority: 2 },
+                DefenseRecommendation { layer: DefenseLayer::EnvironmentGuard, title: "Resource Monitoring".into(), description: "Check resource usage before operations, alert when exceeding thresholds".into(), priority: 1 },
+                DefenseRecommendation { layer: DefenseLayer::BusinessLogic, title: "Rate Limiting & Circuit Breaker".into(), description: "Add rate limiting and circuit breaker to prevent cascading failures".into(), priority: 2 },
             ],
             "invalid_input" => vec![
-                DefenseRecommendation { layer: DefenseLayer::EntryValidation, title: "参数校验".into(), description: "在入口处对参数做完整校验".into(), priority: 1 },
-                DefenseRecommendation { layer: DefenseLayer::Instrumentation, title: "参数日志".into(), description: "记录关键参数值便于调试".into(), priority: 2 },
+                DefenseRecommendation { layer: DefenseLayer::EntryValidation, title: "Parameter Validation".into(), description: "Perform complete parameter validation at entry point".into(), priority: 1 },
+                DefenseRecommendation { layer: DefenseLayer::Instrumentation, title: "Parameter Logging".into(), description: "Log key parameter values for debugging".into(), priority: 2 },
             ],
             "syntax_error" => vec![
-                DefenseRecommendation { layer: DefenseLayer::EntryValidation, title: "格式校验".into(), description: "在解析前验证输入格式".into(), priority: 1 },
-                DefenseRecommendation { layer: DefenseLayer::BusinessLogic, title: "格式规范".into(), description: "输入格式不符合预期时给出明确错误信息".into(), priority: 2 },
+                DefenseRecommendation { layer: DefenseLayer::EntryValidation, title: "Format Validation".into(), description: "Validate input format before parsing".into(), priority: 1 },
+                DefenseRecommendation { layer: DefenseLayer::BusinessLogic, title: "Format Specification".into(), description: "Provide clear error when input format does not meet expectations".into(), priority: 2 },
             ],
             _ => self.generate_recommendations(chain),
         }
@@ -137,9 +137,9 @@ impl DefenseInDepthManager {
     /// Summary of all recommendations
     pub fn summary(&self, recommendations: &[DefenseRecommendation]) -> String {
         if recommendations.is_empty() {
-            return "无防御建议".to_string();
+            return "No defense recommendations".to_string();
         }
-        let mut s = String::from("防御深度建议:\n");
+        let mut s = String::from("Defense-in-Depth Recommendations:\n");
         for rec in recommendations {
             s.push_str(&format!(
                 "  [{}.{}] {}: {}\n",
@@ -202,7 +202,7 @@ mod tests {
         let chain = make_chain_with_root("network_error");
         let recs = manager.targeted_recommendations(&chain);
         assert_eq!(recs.len(), 2);
-        assert!(recs[0].title.contains("重试"));
+        assert!(recs[0].title.contains("Retry"));
     }
 
     #[test]
@@ -211,7 +211,7 @@ mod tests {
         let chain = make_chain_with_root("null_reference");
         let recs = manager.targeted_recommendations(&chain);
         assert_eq!(recs.len(), 2);
-        assert!(recs[0].title.contains("空值保护"));
+        assert!(recs[0].title.contains("Null Protection"));
     }
 
     #[test]
@@ -240,7 +240,7 @@ mod tests {
         let chain = make_chain_with_root("network_error");
         let recs = manager.generate_recommendations(&chain);
         let summary = manager.summary(&recs);
-        assert!(summary.contains("防御深度建议"));
-        assert!(summary.contains("入口校验"));
+        assert!(summary.contains("Defense-in-Depth"));
+        assert!(summary.contains("Entry"));
     }
 }

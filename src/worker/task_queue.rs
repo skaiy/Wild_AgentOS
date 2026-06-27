@@ -5,45 +5,45 @@ use std::io;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// 任务队列错误
+/// Task queue error
 #[derive(Debug, Error)]
 pub enum QueueError {
-    #[error("IO 错误: {0}")]
+    #[error("IO error: {0}")]
     Io(#[from] io::Error),
     
-    #[error("序列化错误: {0}")]
+    #[error("Serialization error: {0}")]
     Serialize(#[from] serde_json::Error),
     
-    #[error("队列错误: {0}")]
+    #[error("Queue error: {0}")]
     Queue(String),
     
-    #[error("超时")]
+    #[error("Timeout")]
     Timeout,
     
-    #[error("队列已关闭")]
+    #[error("Queue closed")]
     Closed,
 }
 
-/// 任务上下文数据
+/// Task context data
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskContextData {
-    /// 阶段 ID
+    /// Stage ID
     pub stage_id: String,
-    /// 阶段类型
+    /// Stage type
     pub stage_type: String,
-    /// 项目 ID
+    /// Project ID
     pub project_id: String,
-    /// 项目目录
+    /// Project directory
     pub project_dir: String,
-    /// 用户需求
+    /// User requirement
     pub user_requirement: String,
-    /// 前一阶段输出
+    /// Previous stage outputs
     pub prev_outputs: HashMap<String, serde_json::Value>,
-    /// LLM 配置
+    /// LLM configuration
     pub llm_config: LlmConfig,
 }
 
-/// LLM 配置
+/// LLM configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     pub api_key: String,
@@ -61,18 +61,18 @@ impl Default for LlmConfig {
     }
 }
 
-/// Agent OS 任务
+/// Agent OS task
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentOsTask {
-    /// 任务 ID
+    /// Task ID
     pub task_id: String,
-    /// 任务 IRI
+    /// Task IRI
     pub task_iri: String,
-    /// 提示词
+    /// Prompt
     pub prompt: String,
-    /// 任务上下文
+    /// Task context
     pub context: TaskContextData,
-    /// 创建时间戳
+    /// Creation timestamp
     pub created_at: u64,
 }
 
@@ -91,28 +91,28 @@ impl AgentOsTask {
     }
 }
 
-/// Agent OS 执行结果
+/// Agent OS execution result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentOsResult {
-    /// 对应的任务 ID
+    /// Corresponding task ID
     pub task_id: String,
-    /// 执行状态
+    /// Execution status
     pub status: String,
-    /// 摘要
+    /// Summary
     pub summary: String,
-    /// 输出数据
+    /// Output data
     pub output: Option<serde_json::Value>,
-    /// JSON-LD 输出
+    /// JSON-LD output
     pub jsonld_output: Option<serde_json::Value>,
-    /// 工件列表
+    /// Artifacts list
     pub artifacts: Vec<String>,
-    /// 错误列表
+    /// Errors list
     pub errors: Vec<String>,
-    /// 执行时间（毫秒）
+    /// Execution duration (milliseconds)
     pub duration_ms: u64,
-    /// 工具调用次数
+    /// Tool call count
     pub tool_call_count: u32,
-    /// 轮次计数
+    /// Turn count
     pub turn_count: u32,
 }
 
@@ -168,12 +168,12 @@ impl From<crate::core::agent_runner::TaskResult> for AgentOsResult {
 }
 
 // ============================================================
-// yaque 队列实现
+// yaque queue implementation
 // ============================================================
 
 use yaque::queue::{Sender, Receiver};
 
-/// Activity 端任务队列
+/// Activity-side task queue
 pub struct TaskQueue {
     task_sender: Sender,
     result_receiver: Receiver,
@@ -182,7 +182,7 @@ pub struct TaskQueue {
 }
 
 impl TaskQueue {
-    /// 创建新的任务队列（完整版，同时持有 sender 和 receiver）
+    /// Create a new task queue (full version, holds both sender and receiver)
     pub fn new(base_path: &str) -> Result<Self, QueueError> {
         let task_path = format!("{}/tasks", base_path);
         let result_path = format!("{}/results", base_path);
@@ -198,7 +198,7 @@ impl TaskQueue {
         })
     }
     
-    /// 创建客户端队列（只发送任务，接收结果）
+    /// Create a client queue (only sends tasks, receives results)
     pub fn new_client(base_path: &str) -> Result<Self, QueueError> {
         let task_path = format!("{}/tasks", base_path);
         let result_path = format!("{}/results", base_path);
@@ -214,21 +214,21 @@ impl TaskQueue {
         })
     }
     
-    /// 发送任务
+    /// Send task
     pub async fn send_task(&mut self, task: &AgentOsTask) -> Result<(), QueueError> {
         let data = serde_json::to_vec(task)?;
-        tracing::info!(task_id = %task.task_id, task_iri = %task.task_iri, data_len = data.len(), "发送任务到队列");
+        tracing::info!(task_id = %task.task_id, task_iri = %task.task_iri, data_len = data.len(), "Sending task to queue");
         self.task_sender.send(data).await?;
-        tracing::info!(task_id = %task.task_id, "任务已成功发送");
+        tracing::info!(task_id = %task.task_id, "Task sent successfully");
         Ok(())
     }
     
-    /// 接收指定任务的结果（带超时，按 task_id 匹配）
+    /// Receive result for a specific task (with timeout, matched by task_id)
     pub async fn recv_result_for_task(&mut self, task_id: &str, timeout: Duration) -> Result<Option<AgentOsResult>, QueueError> {
-        tracing::info!(expected_task_id = %task_id, "开始等待结果");
+        tracing::info!(expected_task_id = %task_id, "Starting to wait for result");
         
         if let Some(result) = self.pending_results.remove(task_id) {
-            tracing::info!(task_id = %task_id, "从缓存中找到匹配结果");
+            tracing::info!(task_id = %task_id, "Found matching result from cache");
             return Ok(Some(result));
         }
         
@@ -237,7 +237,7 @@ impl TaskQueue {
         loop {
             let remaining = deadline.duration_since(tokio::time::Instant::now());
             if remaining.is_zero() {
-                tracing::warn!(expected_task_id = %task_id, "等待结果超时");
+                tracing::warn!(expected_task_id = %task_id, "Timed out waiting for result");
                 return Ok(None);
             }
             
@@ -251,26 +251,26 @@ impl TaskQueue {
                         expected_task_id = %task_id,
                         got_task_id = %result.task_id,
                         status = %result.status,
-                        "收到结果"
+                        "Result received"
                     );
                     
                     if result.task_id == task_id {
-                        tracing::info!(task_id = %task_id, "结果匹配，返回");
+                        tracing::info!(task_id = %task_id, "Result matched, returning");
                         return Ok(Some(result));
                     } else {
-                        tracing::warn!(expected_task_id = %task_id, got_task_id = %result.task_id, "结果不匹配，缓存");
+                        tracing::warn!(expected_task_id = %task_id, got_task_id = %result.task_id, "Result does not match, caching");
                         self.pending_results.insert(result.task_id.clone(), result);
                     }
                 }
                 Err(_) => {
-                    tracing::warn!(expected_task_id = %task_id, "接收结果超时");
+                    tracing::warn!(expected_task_id = %task_id, "Timed out receiving result");
                     return Ok(None);
                 }
             }
         }
     }
     
-    /// 接收结果（带超时，不匹配 task_id）
+    /// Receive result (with timeout, no task_id matching)
     pub async fn recv_result_timeout(&mut self, timeout: Duration) -> Result<Option<AgentOsResult>, QueueError> {
         let deadline = tokio::time::Instant::now() + timeout;
         
@@ -281,17 +281,17 @@ impl TaskQueue {
         
         let result: AgentOsResult = serde_json::from_slice(&*guard)?;
         let _ = guard.commit();
-        tracing::debug!(task_id = %result.task_id, status = %result.status, "收到结果");
+        tracing::debug!(task_id = %result.task_id, status = %result.status, "Result received");
         Ok(Some(result))
     }
     
-    /// 获取队列基础路径
+    /// Get queue base path
     pub fn base_path(&self) -> &str {
         &self.base_path
     }
 }
 
-/// Worker 端任务队列
+/// Worker-side task queue
 pub struct WorkerQueue {
     task_receiver: Receiver,
     result_sender: Sender,
@@ -299,7 +299,7 @@ pub struct WorkerQueue {
 }
 
 impl WorkerQueue {
-    /// 创建新的 Worker 队列
+    /// Create a new Worker queue
     pub fn new(base_path: &str) -> Result<Self, QueueError> {
         let task_path = format!("{}/tasks", base_path);
         let result_path = format!("{}/results", base_path);
@@ -314,33 +314,33 @@ impl WorkerQueue {
         })
     }
     
-    /// 接收任务
+    /// Receive task
     pub async fn recv_task(&mut self) -> Result<AgentOsTask, QueueError> {
         let guard = self.task_receiver.recv().await
             .map_err(|e| QueueError::Queue(e.to_string()))?;
         let task: AgentOsTask = serde_json::from_slice(&*guard)?;
         let _ = guard.commit();
-        tracing::debug!(task_id = %task.task_id, "收到任务");
+        tracing::debug!(task_id = %task.task_id, "Task received");
         Ok(task)
     }
     
-    /// 发送结果
+    /// Send result
     pub async fn send_result(&mut self, result: &AgentOsResult) -> Result<(), QueueError> {
         let data = serde_json::to_vec(result)?;
-        tracing::info!(task_id = %result.task_id, status = %result.status, data_len = data.len(), "发送结果到队列");
+        tracing::info!(task_id = %result.task_id, status = %result.status, data_len = data.len(), "Sending result to queue");
         self.result_sender.send(data).await?;
-        tracing::info!(task_id = %result.task_id, "结果已成功发送");
+        tracing::info!(task_id = %result.task_id, "Result sent successfully");
         Ok(())
     }
     
-    /// 获取队列基础路径
+    /// Get queue base path
     pub fn base_path(&self) -> &str {
         &self.base_path
     }
 }
 
 // ============================================================
-// Unix Domain Socket 实现（备选方案）
+// Unix Domain Socket implementation (alternative)
 // ============================================================
 
 #[cfg(unix)]
@@ -350,7 +350,7 @@ pub mod uds {
     use tokio_util::codec::{Framed, LengthDelimitedCodec};
     use futures::{SinkExt, StreamExt};
 
-    /// UDS 任务客户端
+    /// UDS task client
     pub struct UdsTaskClient {
         stream: Framed<UnixStream, LengthDelimitedCodec>,
     }
@@ -386,7 +386,7 @@ pub mod uds {
         }
     }
 
-    /// UDS 任务服务器
+    /// UDS task server
     pub struct UdsTaskServer {
         listener: UnixListener,
     }
@@ -408,7 +408,7 @@ pub mod uds {
         }
     }
 
-    /// UDS 连接
+    /// UDS connection
     pub struct UdsTaskConnection {
         stream: Framed<UnixStream, LengthDelimitedCodec>,
     }
@@ -446,13 +446,13 @@ mod tests {
         
         let task = AgentOsTask::new(
             "iri://task/test".to_string(),
-            "测试任务".to_string(),
+            "Test task".to_string(),
             TaskContextData {
                 stage_id: "test".to_string(),
                 stage_type: "requirement".to_string(),
                 project_id: "proj_1".to_string(),
                 project_dir: "/tmp".to_string(),
-                user_requirement: "测试".to_string(),
+                user_requirement: "test".to_string(),
                 prev_outputs: HashMap::new(),
                 llm_config: LlmConfig::default(),
             },
@@ -463,7 +463,7 @@ mod tests {
         let received = worker_queue.recv_task().await.unwrap();
         assert_eq!(received.task_iri, "iri://task/test");
         
-        let result = AgentOsResult::success(task.task_id.clone(), "完成".to_string());
+        let result = AgentOsResult::success(task.task_id.clone(), "completed".to_string());
         worker_queue.send_result(&result).await.unwrap();
         
         let received_result = task_queue.recv_result_timeout(Duration::from_secs(5)).await.unwrap().unwrap();

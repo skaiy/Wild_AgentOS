@@ -1,6 +1,6 @@
-//! JSON-LD 类型定义
+//! JSON-LD type definitions
 //!
-//! 定义 JSON-LD 关键字、节点结构和相关方法
+//! Defines JSON-LD keywords, node structures, and related methods
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

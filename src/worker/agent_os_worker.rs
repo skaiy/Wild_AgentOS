@@ -22,20 +22,20 @@ use crate::core::EventBus;
 
 use super::task_queue::{WorkerQueue, AgentOsTask, AgentOsResult, QueueError};
 
-/// Agent OS Worker 配置
+/// Agent OS Worker Configuration
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
-    /// 队列基础路径
+    /// Queue base path
     pub queue_base_path: String,
-    /// L0 存储路径
+    /// L0 storage path
     pub l0_path: String,
-    /// 并发数
+    /// Concurrency level
     pub concurrency: usize,
-    /// LLM 网关配置
+    /// LLM gateway configuration
     pub gateway: Option<GatewaySettings>,
-    /// Human Approval 配置
+    /// Human Approval configuration
     pub approval_config: Option<HumanApprovalConfig>,
-    /// 工作区根目录（可选）
+    /// Workspace root directory (optional)
     pub workspace_root: Option<String>,
 }
 
@@ -76,7 +76,7 @@ impl WorkerConfig {
                 approval_points: vec![ApprovalPoint {
                     hook_point: crate::tools::hooks::HookPoint::PhaseEnd,
                     condition: ApprovalCondition::OnStageComplete,
-                    message_template: "阶段 {stage} 完成，请确认是否继续".to_string(),
+                    message_template: "Phase {stage} completed, please confirm whether to continue".to_string(),
                     timeout_seconds: std::env::var("AGENT_OS_APPROVAL_TIMEOUT")
                         .ok()
                         .and_then(|v| v.parse().ok())
@@ -116,15 +116,15 @@ pub struct AgentOsWorker {
 }
 
 impl AgentOsWorker {
-    /// 创建新的 Worker
+    /// Create a new Worker
     pub fn new(config: WorkerConfig) -> Result<Self, QueueError> {
         let queue = WorkerQueue::new(&config.queue_base_path)?;
         
         let l0 = Arc::new(L0Store::new(&config.l0_path)
-            .map_err(|e| QueueError::Queue(format!("创建 L0 失败: {}", e)))?);
+            .map_err(|e| QueueError::Queue(format!("Failed to create L0: {}", e)))?);
         
         let blackboard = Arc::new(Blackboard::new()
-            .map_err(|e| QueueError::Queue(format!("创建 Blackboard 失败: {}", e)))?);
+            .map_err(|e| QueueError::Queue(format!("Failed to create Blackboard: {}", e)))?);
         
         let gateway_settings = config.gateway.clone().unwrap_or_else(|| {
             GatewaySettings {
@@ -142,11 +142,11 @@ impl AgentOsWorker {
         });
         
         let gateway = Arc::new(UnifiedGateway::new(&gateway_settings)
-            .map_err(|e| QueueError::Queue(format!("创建 Gateway 失败: {}", e)))?);
+            .map_err(|e| QueueError::Queue(format!("Failed to create Gateway: {}", e)))?);
         
         let templates_dir = std::env::temp_dir();
         let templates_engine = Arc::new(TemplateEngine::new(&templates_dir)
-            .map_err(|e| QueueError::Queue(format!("创建模板引擎失败: {}", e)))?);
+            .map_err(|e| QueueError::Queue(format!("Failed to create template engine: {}", e)))?);
         
         let skills = Arc::new(SkillRegistry::new());
         
@@ -181,11 +181,11 @@ impl AgentOsWorker {
                 let (hook, notifier) = HumanApprovalHook::with_channel_notifier(approval_cfg.clone());
                 hook_manager.register(hook);
                 approval_notifier = Some(notifier);
-                info!("HumanApprovalHook 已注册");
+                info!("HumanApprovalHook registered");
             }
         }
         
-        // 初始化 WorkspaceMonitor（如果配置了工作区根目录）
+        // Initialize WorkspaceMonitor (if workspace root is configured)
         let workspace_root_path: Option<std::path::PathBuf> = config.workspace_root.as_ref().map(|s| std::path::PathBuf::from(s));
         let workspace_monitor_opt: Option<Arc<WorkspaceMonitor>> = if let Some(ref ws_root) = workspace_root_path {
             let ws_config = WorkspaceMonitorConfig {
@@ -195,11 +195,11 @@ impl AgentOsWorker {
             match WorkspaceMonitor::initialize(ws_config, None, None) {
                 Ok(ws) => {
                     ws.register_hooks(&hook_manager);
-                    info!(root = %ws_root.display(), "WorkspaceMonitor 已初始化");
+                    info!(root = %ws_root.display(), "WorkspaceMonitor initialized");
                     Some(Arc::new(ws))
                 }
                 Err(e) => {
-                    warn!("WorkspaceMonitor 初始化失败: {}，将使用默认工作区设置", e);
+                    warn!("WorkspaceMonitor initialization failed: {}, using default workspace settings", e);
                     None
                 }
             }
@@ -221,13 +221,13 @@ impl AgentOsWorker {
         }
         let runner = Arc::new(runner_builder);
         
-        // 设置 workspace_monitor 到 ToolExecutor
+        // Set workspace_monitor on ToolExecutor
         if let Some(ref wm) = workspace_monitor_opt {
             let mut executor = runner.tool_executor.write().expect("tool_executor RwLock poisoned");
             executor.set_workspace_monitor(wm.clone());
         }
         
-        // 完成 AgentRunner 初始化接线：perception_store → WorkspaceMonitor
+        // Finalize AgentRunner initialization wiring: perception_store → WorkspaceMonitor
         runner.finalize_setup();
         
         let sa = SupervisorAgent::new(
@@ -241,45 +241,45 @@ impl AgentOsWorker {
         Ok(Self { config, queue, sa, approval_notifier })
     }
     
-    /// 获取确认通知器（用于外部提交确认）
+    /// Get the approval notifier (for external approval submission)
     pub fn approval_notifier(&self) -> Option<&Arc<ChannelApprovalNotifier>> {
         self.approval_notifier.as_ref()
     }
     
-    /// 运行 Worker 主循环
+    /// Run the Worker main loop
     pub async fn run(&mut self) -> Result<(), QueueError> {
         info!(
             queue_path = %self.config.queue_base_path,
             concurrency = self.config.concurrency,
             approval_enabled = self.approval_notifier.is_some(),
-            "Agent OS Worker 启动"
+            "Agent OS Worker started"
         );
         
         loop {
             match self.queue.recv_task().await {
                 Ok(task) => {
-                    info!(task_id = %task.task_id, task_iri = %task.task_iri, "收到任务");
+                    info!(task_id = %task.task_id, task_iri = %task.task_iri, "Task received");
                     
                     let result = self.execute_task(task).await;
                     
                     if let Err(e) = self.queue.send_result(&result).await {
-                        error!(error = %e, "发送结果失败");
+                        error!(error = %e, "Failed to send result");
                     }
                 }
                 Err(e) => {
-                    error!(error = %e, "接收任务失败");
+                    error!(error = %e, "Failed to receive task");
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 }
             }
         }
     }
     
-    /// 执行单个任务
+    /// Execute a single task
     async fn execute_task(&mut self, task: AgentOsTask) -> AgentOsResult {
         let start = Instant::now();
         let original_task_id = task.task_id.clone();
         
-        info!(task_id = %original_task_id, "开始执行任务");
+        info!(task_id = %original_task_id, "Starting task execution");
         
         match self.sa.process_task(&task.prompt, &task.task_iri).await {
             Ok(task_result) => {
@@ -288,7 +288,7 @@ impl AgentOsWorker {
                     task_id = %original_task_id,
                     status = %task_result.status,
                     duration_ms = duration_ms,
-                    "任务执行完成"
+                    "Task execution completed"
                 );
                 
                 let mut result = AgentOsResult::from(task_result);
@@ -298,12 +298,12 @@ impl AgentOsWorker {
             }
             Err(e) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                error!(task_id = %original_task_id, error = %e, duration_ms = duration_ms, "任务执行失败");
+                error!(task_id = %original_task_id, error = %e, duration_ms = duration_ms, "Task execution failed");
                 
                 AgentOsResult {
                     task_id: original_task_id,
                     status: "failed".to_string(),
-                    summary: format!("任务执行失败: {}", e),
+                    summary: format!("Task execution failed: {}", e),
                     output: None,
                     jsonld_output: None,
                     artifacts: Vec::new(),
@@ -317,7 +317,7 @@ impl AgentOsWorker {
     }
 }
 
-/// 启动 Worker 的辅助函数
+/// Helper function to start a Worker
 pub async fn run_worker(config: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
     let mut worker = AgentOsWorker::new(config)?;
     worker.run().await?;

@@ -277,38 +277,38 @@ impl MetaValidator {
     pub fn new() -> Self {
         let mut schemas = HashMap::new();
         
-        // Plan - 任务计划，适用于任何类型的任务
+        // Plan - task plan, applicable to any task type
         schemas.insert("plan".to_string(), serde_json::json!({
             "type": "object",
             "required": ["summary"],
             "properties": {
                 "summary": {"type": "string", "maxLength": 200},
-                "goal": {"type": "string", "description": "任务目标"},
-                "approach": {"type": "string", "description": "执行方法/策略"},
-                "sub_tasks": {"type": "array", "items": {"type": "string"}, "description": "子任务列表"},
+                "goal": {"type": "string", "description": "Task goal"},
+                "approach": {"type": "string", "description": "Execution method/strategy"},
+                "sub_tasks": {"type": "array", "items": {"type": "string"}, "description": "Sub-task list"},
                 "priority": {"type": "string", "enum": ["high", "medium", "low"]},
                 "estimated_complexity": {"type": "string", "enum": ["simple", "medium", "complex"]},
-                "risks": {"type": "array", "items": {"type": "string"}, "description": "潜在风险"},
-                "constraints": {"type": "array", "items": {"type": "string"}, "description": "约束条件"},
+                "risks": {"type": "array", "items": {"type": "string"}, "description": "Potential risks"},
+                "constraints": {"type": "array", "items": {"type": "string"}, "description": "Constraints"},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                "key_entities": {"type": "array", "items": {"type": "string"}, "description": "关键实体"},
-                "dependencies": {"type": "array", "items": {"type": "string"}, "description": "依赖项"},
+                "key_entities": {"type": "array", "items": {"type": "string"}, "description": "Key entities"},
+                "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Dependencies"},
                 "tags": {"type": "array", "items": {"type": "string"}},
             }
         }));
         
-        // Execution - 执行结果，通用于任何类型的任务执行产物
+        // Execution - execution result, applicable to any task type
         schemas.insert("execution".to_string(), serde_json::json!({
             "type": "object",
             "required": ["summary"],
             "properties": {
                 "summary": {"type": "string", "maxLength": 200},
-                "result_type": {"type": "string", "description": "结果类型（如：document, data, artifact, report 等）"},
-                "output_location": {"type": "string", "description": "输出位置（文件路径、URL 等）"},
-                "output_format": {"type": "string", "description": "输出格式"},
-                "steps_completed": {"type": "array", "items": {"type": "string"}, "description": "已完成的步骤"},
-                "artifacts": {"type": "array", "items": {"type": "string"}, "description": "生成的产物"},
-                "metrics": {"type": "object", "description": "执行指标"},
+                "result_type": {"type": "string", "description": "Result type (e.g., document, data, artifact, report, etc.)"},
+                "output_location": {"type": "string", "description": "Output location (file path, URL, etc.)"},
+                "output_format": {"type": "string", "description": "Output format"},
+                "steps_completed": {"type": "array", "items": {"type": "string"}, "description": "Completed steps"},
+                "artifacts": {"type": "array", "items": {"type": "string"}, "description": "Generated artifacts"},
+                "metrics": {"type": "object", "description": "Execution metrics"},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                 "key_entities": {"type": "array", "items": {"type": "string"}},
                 "dependencies": {"type": "array", "items": {"type": "string"}},
@@ -316,35 +316,35 @@ impl MetaValidator {
             }
         }));
         
-        // Check - 检查/验证结果，通用于任何类型的质量检查
+        // Check - check/validation result, applicable to any type of quality check
         schemas.insert("check".to_string(), serde_json::json!({
             "type": "object",
             "required": ["summary", "verdict"],
             "properties": {
                 "summary": {"type": "string", "maxLength": 200},
                 "verdict": {"type": "string", "enum": ["pass", "fail", "partial", "inconclusive"]},
-                "quality_score": {"type": "number", "minimum": 0, "maximum": 100, "description": "质量评分"},
-                "issues": {"type": "array", "items": {"type": "object"}, "description": "发现的问题"},
-                "strengths": {"type": "array", "items": {"type": "string"}, "description": "优点"},
-                "weaknesses": {"type": "array", "items": {"type": "string"}, "description": "不足之处"},
-                "recommendations": {"type": "array", "items": {"type": "string"}, "description": "改进建议"},
+                "quality_score": {"type": "number", "minimum": 0, "maximum": 100, "description": "Quality score"},
+                "issues": {"type": "array", "items": {"type": "object"}, "description": "Issues found"},
+                "strengths": {"type": "array", "items": {"type": "string"}, "description": "Strengths"},
+                "weaknesses": {"type": "array", "items": {"type": "string"}, "description": "Weaknesses"},
+                "recommendations": {"type": "array", "items": {"type": "string"}, "description": "Recommendations"},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                 "key_entities": {"type": "array", "items": {"type": "string"}},
                 "tags": {"type": "array", "items": {"type": "string"}},
             }
         }));
         
-        // Analysis - 分析/研究结果，通用于任何类型的信息收集和分析
+        // Analysis - analysis/research result, applicable to any type of information gathering and analysis
         schemas.insert("analysis".to_string(), serde_json::json!({
             "type": "object",
             "required": ["summary"],
             "properties": {
                 "summary": {"type": "string", "maxLength": 200},
-                "findings": {"type": "array", "items": {"type": "string"}, "description": "发现/结论"},
-                "data_sources": {"type": "array", "items": {"type": "string"}, "description": "数据来源"},
-                "methodology": {"type": "string", "description": "分析方法"},
-                "coverage": {"type": "string", "description": "覆盖范围"},
-                "gaps": {"type": "array", "items": {"type": "string"}, "description": "信息缺口"},
+                "findings": {"type": "array", "items": {"type": "string"}, "description": "Findings/conclusions"},
+                "data_sources": {"type": "array", "items": {"type": "string"}, "description": "Data sources"},
+                "methodology": {"type": "string", "description": "Analysis methodology"},
+                "coverage": {"type": "string", "description": "Coverage scope"},
+                "gaps": {"type": "array", "items": {"type": "string"}, "description": "Information gaps"},
                 "reliability": {"type": "string", "enum": ["high", "medium", "low"]},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                 "key_entities": {"type": "array", "items": {"type": "string"}},
@@ -353,17 +353,17 @@ impl MetaValidator {
             }
         }));
         
-        // Decision - 决策结果，通用于任何类型的决策
+        // Decision - decision result, applicable to any type of decision making
         schemas.insert("decision".to_string(), serde_json::json!({
             "type": "object",
             "required": ["summary", "action"],
             "properties": {
                 "summary": {"type": "string", "maxLength": 200},
                 "action": {"type": "string", "enum": ["continue", "retry", "stop", "escalate", "pivot"]},
-                "reasoning": {"type": "string", "description": "决策理由"},
-                "alternatives_considered": {"type": "array", "items": {"type": "string"}, "description": "考虑的替代方案"},
+                "reasoning": {"type": "string", "description": "Decision reasoning"},
+                "alternatives_considered": {"type": "array", "items": {"type": "string"}, "description": "Alternatives considered"},
                 "iteration_count": {"type": "integer", "minimum": 0},
-                "next_steps": {"type": "array", "items": {"type": "string"}, "description": "后续步骤"},
+                "next_steps": {"type": "array", "items": {"type": "string"}, "description": "Next steps"},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                 "key_entities": {"type": "array", "items": {"type": "string"}},
                 "dependencies": {"type": "array", "items": {"type": "string"}},
@@ -371,7 +371,7 @@ impl MetaValidator {
             }
         }));
         
-        // 兼容旧名称的别名
+        // Compatibility aliases for old names
         schemas.insert("code".to_string(), schemas.get("execution").cloned().unwrap());
         schemas.insert("review".to_string(), schemas.get("check").cloned().unwrap());
         schemas.insert("research".to_string(), schemas.get("analysis").cloned().unwrap());
@@ -417,7 +417,7 @@ impl MetaValidator {
     ) -> Result<serde_json::Value, CoreError> {
         let node_iri = format!("iri://node_{}", uuid::Uuid::new_v4().hyphenated());
         
-        // 通用类型名称映射
+        // Generic type name mapping
         let type_name = match content_type {
             "plan" => "PlanNode",
             "execution" | "code" => "ExecutionResult",
@@ -605,7 +605,7 @@ mod tests {
     fn test_backward_compatibility() {
         let validator = MetaValidator::new();
         
-        // 旧名称 "code" 应该映射到 "execution" schema
+        // Old name "code" should map to "execution" schema
         let code = serde_json::json!({
             "summary": "Task completed",
             "confidence": 0.9
@@ -614,7 +614,7 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap().get("@type").and_then(|t| t.as_str()), Some("ExecutionResult"));
         
-        // 旧名称 "review" 应该映射到 "check" schema
+        // Old name "review" should map to "check" schema
         let review = serde_json::json!({
             "summary": "Review completed",
             "verdict": "pass",
@@ -624,7 +624,7 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap().get("@type").and_then(|t| t.as_str()), Some("CheckResult"));
         
-        // 旧名称 "research" 应该映射到 "analysis" schema
+        // Old name "research" should map to "analysis" schema
         let research = serde_json::json!({
             "summary": "Research completed",
             "confidence": 0.8
@@ -645,7 +645,7 @@ mod tests {
         assert!(types.contains(&"analysis".to_string()));
         assert!(types.contains(&"decision".to_string()));
         
-        // 别名不应该出现在列表中
+        // Aliases should not appear in the list
         assert!(!types.contains(&"code".to_string()));
         assert!(!types.contains(&"review".to_string()));
         assert!(!types.contains(&"research".to_string()));

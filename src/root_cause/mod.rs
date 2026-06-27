@@ -196,7 +196,7 @@ impl RootCauseEngine {
                     if let Some(task_id) = &ctx.task_id {
                         if engine.has_unresolved_trace(task_id) {
                             ctx.error = Some(
-                                "行为准则违反: 根因分析未完成就进行修复。在修复前必须先完成根因追溯。".to_string()
+                                "Conduct violation: Root cause analysis incomplete before fix. Complete root cause tracing before fixing.".to_string()
                             );
                             tracing::warn!(
                                 "RootCause principle violation: unresolved trace for task {}",
@@ -296,7 +296,7 @@ mod tests {
             "src/auth.rs:10",
             &context,
         ).unwrap();
-        assert!(result.evidence_report.contains("证据链报告"));
+        assert!(result.evidence_report.contains("Evidence Chain Report"));
         assert!(result.chain.trace_id.starts_with("trace_") || result.chain.trace_id.starts_with("rc"));
     }
 }

@@ -43,24 +43,24 @@ pub enum ReActPhase {
 }
 
 const LLM_RESPONSE_FORMAT_WITH_THOUGHT: &str = r#"
-返回 JSON: {"thought": "...", "content": "...", "summary": "...", "action": "tool_call|finish|continue", "emphasis": []}
-- thought: 思考过程
-- summary: ≤50字摘要
-- action: tool_call(调用工具) / finish(任务完成) / continue(继续思考)
-- emphasis: 识别的重要约束（数组）
+Return JSON: {"thought": "...", "content": "...", "summary": "...", "action": "tool_call|finish|continue", "emphasis": []}
+- thought: Reasoning process
+- summary: ≤50 char summary
+- action: tool_call(invoke tool) / finish(task complete) / continue(continue reasoning)
+- emphasis: Identified important constraints (array)
 
-示例:
-{"thought": "需要创建文件", "content": "创建 calculator.py", "summary": "创建主文件", "action": "tool_call", "emphasis": []}
+Example:
+{"thought": "Need to create file", "content": "Create calculator.py", "summary": "Create main file", "action": "tool_call", "emphasis": []}
 "#;
 
 const LLM_RESPONSE_FORMAT_NO_THOUGHT: &str = r#"
-返回 JSON: {"content": "...", "summary": "...", "action": "tool_call|finish|continue", "emphasis": []}
-- summary: ≤50字摘要
-- action: tool_call(调用工具) / finish(任务完成) / continue(继续思考)
-- emphasis: 识别的重要约束（数组）
+Return JSON: {"content": "...", "summary": "...", "action": "tool_call|finish|continue", "emphasis": []}
+- summary: ≤50 char summary
+- action: tool_call(invoke tool) / finish(task complete) / continue(continue reasoning)
+- emphasis: Identified important constraints (array)
 
-示例:
-{"content": "查看文件内容", "summary": "读取文件", "action": "tool_call", "emphasis": []}
+Example:
+{"content": "View file contents", "summary": "Read file", "action": "tool_call", "emphasis": []}
 "#;
 
 #[derive(Debug, Clone)]
@@ -77,17 +77,17 @@ pub struct TaskContext {
     pub pending_steps: Vec<String>,
     pub five_w2h_iri: String,
     pub five_w2h_snapshot: Option<crate::core::five_w2h::Task5W2H>,
-    /// 从 checkpoint 恢复的历史消息，用于 resume 模式
+    /// Historical messages restored from checkpoint, for resume mode
     pub resumed_messages: Option<Vec<ChatMessage>>,
-    /// 从 checkpoint 恢复的 turn 计数
+    /// Turn count restored from checkpoint
     pub resumed_turn_count: u32,
-    /// 从 checkpoint 恢复的 tool call 计数
+    /// Tool call count restored from checkpoint
     pub resumed_tool_count: u32,
-    /// JSON-LD 工作流定义（可选，替代 LLM 生成的 plan）
+    /// JSON-LD workflow definition (optional, replaces LLM-generated plan)
     pub workflow_jsonld: Option<String>,
-    /// 预期输出（从 PlanStep 传递，供 DA/CA 参考）
+    /// Expected output (passed from PlanStep, for DA/CA reference)
     pub expected_output: String,
-    /// 成功标准（从 PlanStep 传递，供 DA/CA 参考）
+    /// Success criteria (passed from PlanStep, for DA/CA reference)
     pub success_criteria: String,
 }
 
@@ -121,7 +121,7 @@ impl TaskContext {
         self
     }
 
-    /// 设置 JSON-LD 工作流定义（替代 LLM 生成的 plan）
+    /// Set JSON-LD workflow definition (replaces LLM-generated plan)
     pub fn with_workflow(mut self, jsonld: &str) -> Self {
         self.workflow_jsonld = Some(jsonld.to_string());
         self
@@ -152,7 +152,7 @@ impl TaskContext {
         self
     }
 
-    /// 设置从 checkpoint 恢复的历史消息（resume 模式）
+    /// Set historical messages restored from checkpoint (resume mode)
     pub fn with_resumed_messages(mut self, messages: Vec<ChatMessage>, turn_count: u32, tool_count: u32) -> Self {
         self.resumed_messages = Some(messages);
         self.resumed_turn_count = turn_count;
@@ -241,7 +241,7 @@ pub struct AgentRunner {
     pub tool_controller: Option<crate::core::tool_controller::ToolController>,
     pub total_prompt_tokens: Arc<AtomicU64>,
     pub total_completion_tokens: Arc<AtomicU64>,
-    /// 上一次 API 调用的 prompt/completion token 数（非累计，只存最新一轮）
+    /// Prompt/completion token count from the last API call (non-cumulative, stores only the latest round)
     pub last_prompt_tokens: Arc<AtomicU64>,
     pub last_completion_tokens: Arc<AtomicU64>,
     pub tool_result_compressor: Option<Arc<std::sync::Mutex<ToolResultCompressor>>>,
@@ -250,15 +250,15 @@ pub struct AgentRunner {
     pub prompt_loader: Option<Arc<crate::core::prompt_loader::PromptLoader>>,
     pub methodology_gate: Option<MethodologyGateHandle>,
     pub root_cause_engine: Option<Arc<RootCauseEngine>>,
-    /// 补充输入共享存储（SA 写入 → AgentRunner 在 CycleStart 消费）
+    /// Supplementary input store (SA writes → AgentRunner consumes at CycleStart)
     pub supplement_store: crate::core::supplementary_store::SupplementaryInputStore,
-    /// 感知内容存储（系统组件写入 → 在 exec() 初始组装时注入 messages 头部）
+    /// Perception content store (system components write → injected into messages header during exec() initial assembly)
     pub perception_store: crate::core::perception_store::PerceptionStore,
-    /// 嵌入服务（用于计算 turn embedding 和 relevance_score）
+    /// Embedding service (for computing turn embedding and relevance_score)
     pub embedder: Option<Arc<dyn EmbeddingService>>,
-    /// 相关性跟踪器（计算每轮 turn 与 task 的语义相关度）
+    /// Relevance tracker (computes semantic relevance between each turn and the task)
     pub relevance_tracker: Option<Arc<std::sync::Mutex<RelevanceTracker>>>,
-    /// 工作区根目录路径（所有 Agent 的文件操作限制在此范围内）
+    /// Workspace root directory path (all Agent file operations are restricted to this scope)
     pub workspace_root: Option<PathBuf>,
 }
 
@@ -440,27 +440,27 @@ impl AgentRunner {
         self.event_bus = Some(event_bus);
     }
 
-    /// 设置补充输入共享存储（由 SA 创建时注入，确保 SA 和 AgentRunner 共享同一实例）
+    /// Set supplementary input store (injected by SA during creation, ensures SA and AgentRunner share the same instance)
     pub fn with_supplement_store(mut self, store: crate::core::supplementary_store::SupplementaryInputStore) -> Self {
         self.supplement_store = store;
         self
     }
 
-    /// 设置主动感知存储（系统组件如 WorkspaceMonitor/BatchAgent 写入感知数据）
+    /// Set up active perception store (system components like WorkspaceMonitor/BatchAgent write perception data)
     pub fn with_perception_store(mut self, store: crate::core::perception_store::PerceptionStore) -> Self {
         self.perception_store = store;
         self
     }
 
-    /// 设置嵌入服务 + 相关性跟踪器
+    /// Set up embedding service + relevance tracker
     pub fn with_embedder(mut self, embedder: Arc<dyn EmbeddingService>) -> Self {
         self.embedder = Some(embedder);
         self.relevance_tracker = Some(Arc::new(std::sync::Mutex::new(RelevanceTracker::new(0.6))));
         self
     }
 
-    /// 完成初始化接线：将 AgentRunner 的 perception_store 连接到 WorkspaceMonitor。
-    /// 在 AgentRunner 构建完成、所有子组件就绪后调用一次。
+    /// Complete initialization wiring: connect AgentRunner's perception_store to WorkspaceMonitor.
+    /// Called once after AgentRunner construction and all sub-components are ready.
     pub fn finalize_setup(&self) {
         
         if let Ok(executor) = self.tool_executor.read() {

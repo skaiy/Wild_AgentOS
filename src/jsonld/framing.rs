@@ -1,6 +1,6 @@
-//! JSON-LD Framing 实现
+//! JSON-LD Framing Implementation
 //!
-//! 提供按需投影与上下文裁剪功能,支持 Token 预算控制
+//! Provides on-demand projection and context trimming with token budget control
 
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -618,7 +618,7 @@ mod tests {
     
     #[test]
     fn test_estimate_tokens_string() {
-        let value = json!("这是一个测试字符串");
+        let value = json!("This is a test string");
         let tokens = estimate_tokens(&value);
         assert!(tokens > 0);
     }

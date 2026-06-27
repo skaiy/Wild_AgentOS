@@ -573,13 +573,13 @@ mod tests {
             timestamp: 4000,
             event: ExecutionEventKind::Thought(Thought {
                 agent_id: "pa_001".to_string(),
-                thought: "需要分析用户需求".to_string(),
+                thought: "Need to analyze user requirements".to_string(),
                 action: "continue".to_string(),
-                emphasis: vec!["必须完成".to_string()],
+                emphasis: vec!["Must complete".to_string()],
             }),
         };
         state.update_from_event(&event);
-        assert_eq!(state.current_thought_preview, "需要分析用户需求");
+        assert_eq!(state.current_thought_preview, "Need to analyze user requirements");
     }
 
     #[test]
@@ -592,7 +592,7 @@ mod tests {
             timestamp: 5000,
             event: ExecutionEventKind::Completion(Completion {
                 status: "success".to_string(),
-                summary: "任务完成".to_string(),
+                summary: "Task completed".to_string(),
                 total_turns: 5,
                 total_tool_calls: 3,
                 total_tokens: 1500,
@@ -613,13 +613,13 @@ mod tests {
             event: ExecutionEventKind::LlmContent(LlmContent {
                 agent_id: "da_001".to_string(),
                 role: "DA".to_string(),
-                content_delta: "正在思考方案".to_string(),
+                content_delta: "Planning solution".to_string(),
                 is_reasoning: true,
                 token_count: 10,
             }),
         };
         state.update_from_event(&event);
-        assert_eq!(state.current_thought_preview, "正在思考方案");
+        assert_eq!(state.current_thought_preview, "Planning solution");
     }
 
     #[tokio::test]

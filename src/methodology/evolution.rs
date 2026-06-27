@@ -372,14 +372,14 @@ impl EvolutionEngine {
         let report = self.generate_report();
 
         let mut sections = vec![
-            "\n## 📊 方法论进化报告".to_string(),
-            format!("系统健康评分: {:.1}%", report.health_score * 100.0),
-            format!("记录违规总数: {}", report.total_violations),
-            format!("活跃方法论数: {}", report.active_methodologies),
+            "\n## 📊 Methodology Evolution Report".to_string(),
+            format!("System Health Score: {:.1}%", report.health_score * 100.0),
+            format!("Total Violations Recorded: {}", report.total_violations),
+            format!("Active Methodologies: {}", report.active_methodologies),
         ];
 
         if !report.top_patterns.is_empty() {
-            sections.push("\n### 高频违规模式".to_string());
+            sections.push("\n### High-Frequency Violation Patterns".to_string());
             for (i, p) in report.top_patterns.iter().enumerate().take(5) {
                 let sev = match p.severity {
                     RedFlagSeverity::Critical => "🔴",
@@ -387,7 +387,7 @@ impl EvolutionEngine {
                     RedFlagSeverity::Info => "🔵",
                 };
                 sections.push(format!(
-                    "{}. {} {} (频率: {}, 角色: {})",
+                    "{}. {} {} (frequency: {}, roles: {})",
                     i + 1,
                     sev,
                     p.pattern_description,
@@ -398,7 +398,7 @@ impl EvolutionEngine {
         }
 
         if !report.methodology_metrics.is_empty() {
-            sections.push("\n### 方法论有效性".to_string());
+            sections.push("\n### Methodology Effectiveness".to_string());
             for m in report.methodology_metrics.iter().take(5) {
                 let status = if m.effectiveness_score > 0.8 {
                     "✅"
@@ -408,7 +408,7 @@ impl EvolutionEngine {
                     "🔴"
                 };
                 sections.push(format!(
-                    "{} {} — 有效度: {:.1}% (激活{}次 / 违规{}次 / 通过{}次)",
+                    "{} {} — effectiveness: {:.1}% (activated {} times / violations {} / passes {})",
                     status,
                     m.methodology_id,
                     m.effectiveness_score * 100.0,
@@ -558,7 +558,7 @@ mod tests {
         assert_eq!(engine.violation_count(), 0);
 
         engine.record_violation(sample_violation(
-            "methodology:index-priority", "全量遍历", RedFlagSeverity::Critical, "DA", true,
+            "methodology:index-priority", "full traversal", RedFlagSeverity::Critical, "DA", true,
         ));
 
         assert_eq!(engine.violation_count(), 1);
@@ -600,13 +600,13 @@ mod tests {
     fn test_learn_patterns_groups_by_pattern() {
         let mut engine = EvolutionEngine::new();
         engine.record_violation(sample_violation(
-            "methodology:index-priority", "全量遍历", RedFlagSeverity::Critical, "DA", true,
+            "methodology:index-priority", "full traversal", RedFlagSeverity::Critical, "DA", true,
         ));
         engine.record_violation(sample_violation(
-            "methodology:index-priority", "全量遍历", RedFlagSeverity::Critical, "DA", true,
+            "methodology:index-priority", "full traversal", RedFlagSeverity::Critical, "DA", true,
         ));
         engine.record_violation(sample_violation(
-            "methodology:cost-awareness", "无比较方案", RedFlagSeverity::Warning, "PA", false,
+            "methodology:cost-awareness", "no alternative comparison", RedFlagSeverity::Warning, "PA", false,
         ));
 
         let patterns = engine.learn_patterns();
@@ -674,7 +674,7 @@ mod tests {
     fn test_report_with_data() {
         let mut engine = EvolutionEngine::new();
         engine.record_violation(sample_violation(
-            "methodology:index-priority", "全量遍历", RedFlagSeverity::Critical, "DA", true,
+            "methodology:index-priority", "full traversal", RedFlagSeverity::Critical, "DA", true,
         ));
         engine.record_pass("methodology:index-priority");
         engine.record_activation("methodology:index-priority");
@@ -688,12 +688,12 @@ mod tests {
     fn test_aa_briefing_not_empty() {
         let mut engine = EvolutionEngine::new();
         engine.record_violation(sample_violation(
-            "methodology:index-priority", "全量遍历", RedFlagSeverity::Critical, "DA", true,
+            "methodology:index-priority", "full traversal", RedFlagSeverity::Critical, "DA", true,
         ));
         let briefing = engine.aa_evolution_briefing();
         assert!(!briefing.is_empty());
-        assert!(briefing.contains("进化报告"));
-        assert!(briefing.contains("健康评分"));
+        assert!(briefing.contains("Evolution Report"));
+        assert!(briefing.contains("System Health"));
     }
 
     #[test]
@@ -701,7 +701,7 @@ mod tests {
         let engine = EvolutionEngine::new();
         let briefing = engine.aa_evolution_briefing();
         assert!(!briefing.is_empty());
-        assert!(briefing.contains("健康评分: 100.0%"));
+        assert!(briefing.contains("System Health Score: 100.0%"));
     }
 
     // ─── ViolationReporter ───

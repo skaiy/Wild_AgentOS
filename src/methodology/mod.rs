@@ -165,40 +165,40 @@ pub fn global_registry() -> &'static MethodologyRegistry {
 ///
 /// These correspond to the 14 superpowers-main skills plus 5 new methodologies
 /// that fill gaps identified during Constitution analysis:
-/// - Index-Priority (行为准则 "索引优先" had no Superpowers equivalent)
-/// - Cost-Awareness (行为准则 "成本意识" was only implicit in DA/PA)
-/// - Least-Privilege (行为准则 "最小权限" had no formal protocol)
-/// - Complexity-Assessment (行为准则 "复杂度诚实评估" had no Superpowers equivalent)
-/// - Boundary-Enforcement (行为准则 "边界拒绝" + "边界原则" aggregation)
+    /// - Index-Priority (constitution rule "index-priority" had no Superpowers equivalent)
+    /// - Cost-Awareness (constitution rule "cost-awareness" was only implicit in DA/PA)
+    /// - Least-Privilege (constitution rule "least-privilege" had no formal protocol)
+    /// - Complexity-Assessment (constitution rule "honest-complexity-assessment" had no Superpowers equivalent)
+    /// - Boundary-Enforcement (constitution rule "boundary-rejection" + "boundary-principle" aggregation)
 pub fn builtin_methodologies() -> Vec<MethodologyDefinition> {
     vec![
         // ── 1. Index-Priority (NEW) ──
         MethodologyDefinition {
             id: "methodology:index-priority",
-            name: "索引优先策略",
-            description: "面对大量文件或数据时，先用搜索工具获取索引/概览，再按需精确读取",
+            name: "Index-First Strategy",
+            description: "When facing large volumes of files or data, first use search tools to get an index/overview, then read precisely as needed",
             methodology_type: MethodologyType::Discipline,
             domain: "general",
             source: "new — constitution gap fill for uni-perception-2",
             red_flags: &[
                 RedFlagEntry {
-                    pattern: "盲目遍历目录",
+                    pattern: "blind directory traversal",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『目录不大，直接看完更快』— 先搜索再读取总是更优"),
+                    rationalization_check: Some("\"The directory is small, faster to read it all\" — searching then reading is always better"),
                 },
                 RedFlagEntry {
-                    pattern: "基于文件名猜测内容",
+                    pattern: "guessing content by filename",
                     severity: RedFlagSeverity::Warning,
-                    rationalization_check: Some("『看名字就知道是什么』— 实际内容可能与文件名不符"),
+                    rationalization_check: Some("\"I know what it is from the name\" — actual content may not match the filename"),
                 },
             ],
             anti_patterns: &[
                 AntiPatternEntry {
-                    name: "全量遍历",
-                    description: "使用 ls -R / find . 遍历整个目录而非精确搜索",
-                    gate_before: "执行目录遍历工具前",
-                    gate_ask: "能否用 grep/glob 缩小范围后再遍历?",
-                    gate_action: "STOP — 先搜索索引，再按需读取",
+                    name: "full traversal",
+                    description: "Using ls -R / find . to traverse entire directories instead of precise search",
+                    gate_before: "before executing directory traversal tools",
+                    gate_ask: "Can you narrow the scope with grep/glob before traversing?",
+                    gate_action: "STOP — search index first, then read on demand",
                 },
             ],
             persuasion: PersuasionProfile {
@@ -212,37 +212,37 @@ pub fn builtin_methodologies() -> Vec<MethodologyDefinition> {
         // ── 2. Cost-Awareness (NEW) ──
         MethodologyDefinition {
             id: "methodology:cost-awareness",
-            name: "成本意识协议",
-            description: "在所有决策中显式评估 Token、时间、计算资源的成本，选择整体成本最低的路径",
+            name: "Cost-Awareness Protocol",
+            description: "Explicitly evaluate token, time, and compute resource costs in all decisions; choose the lowest overall cost path",
             methodology_type: MethodologyType::Discipline,
             domain: "general",
             source: "new — constitution gap fill for pa-4, da-6, aa-3, sa-decision-3, uni-perception-3",
             red_flags: &[
                 RedFlagEntry {
-                    pattern: "不必要的大输出",
+                    pattern: "unnecessary large output",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『全都看看比较保险』— 用 grep 过滤出需要的信息即可"),
+                    rationalization_check: Some("\"Safer to look at everything\" — just use grep to filter what's needed"),
                 },
                 RedFlagEntry {
-                    pattern: "忽略 Token 预算",
+                    pattern: "ignoring token budget",
                     severity: RedFlagSeverity::Warning,
                     rationalization_check: None,
                 },
             ],
             anti_patterns: &[
                 AntiPatternEntry {
-                    name: "盲目全量",
-                    description: "不指定范围、不加 grep 过滤的大输出工具调用",
-                    gate_before: "执行 bash / file_read 等可能产生大输出的工具前",
-                    gate_ask: "输出可能超过 100 行吗? 能否用 | head / | grep 限制?",
-                    gate_action: "STOP — 精确搜索替代全量扫描",
+                    name: "blind full scan",
+                    description: "Large-output tool calls without specifying scope or grep filtering",
+                    gate_before: "before executing bash / file_read or other large-output tools",
+                    gate_ask: "Could output exceed 100 lines? Can you use | head / | grep to limit?",
+                    gate_action: "STOP — use precise search instead of full scan",
                 },
                 AntiPatternEntry {
-                    name: "无比较方案",
-                    description: "提出方案时只给一个选项，没有成本对比",
-                    gate_before: "提交计划/决策前",
-                    gate_ask: "有没有成本更低的替代方案?",
-                    gate_action: "STOP — 至少提供 2 个选项及其成本对比",
+                    name: "no alternative comparison",
+                    description: "Proposing a plan with only one option and no cost comparison",
+                    gate_before: "before submitting a plan/decision",
+                    gate_ask: "Is there a lower-cost alternative?",
+                    gate_action: "STOP — provide at least 2 options with cost comparison",
                 },
             ],
             persuasion: PersuasionProfile {
@@ -256,30 +256,30 @@ pub fn builtin_methodologies() -> Vec<MethodologyDefinition> {
         // ── 3. Least-Privilege (NEW) ──
         MethodologyDefinition {
             id: "methodology:least-privilege",
-            name: "最小权限协议",
-            description: "工具调用和数据访问严格限制在任务所需的最小范围，禁止访问无关资源",
+            name: "Least-Privilege Protocol",
+            description: "Tool calls and data access strictly limited to the minimum scope required by the task; no access to unrelated resources",
             methodology_type: MethodologyType::Discipline,
             domain: "general",
             source: "new — constitution gap fill for uni-boundary-1",
             red_flags: &[
                 RedFlagEntry {
-                    pattern: "访问无关目录/文件",
+                    pattern: "accessing unrelated directories/files",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『看一眼不会有什么』— 权限应当最小化，与任务无关即禁止"),
+                    rationalization_check: Some("\"Just a peek won't hurt\" — permissions should be minimized; task-irrelevant access is prohibited"),
                 },
                 RedFlagEntry {
-                    pattern: "使用危险命令",
+                    pattern: "using dangerous commands",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『我就用一次』— 高风险操作必须走审批流程"),
+                    rationalization_check: Some("\"Just this once\" — high-risk operations must go through approval"),
                 },
             ],
             anti_patterns: &[
                 AntiPatternEntry {
-                    name: "权限越界",
-                    description: "执行与当前任务目标无关的工具调用或数据访问",
-                    gate_before: "执行任何工具前",
-                    gate_ask: "这个工具/数据对当前任务目标是必要的吗?",
-                    gate_action: "STOP — 移除非必要操作",
+                    name: "privilege escalation",
+                    description: "Executing tool calls or data access unrelated to the current task goal",
+                    gate_before: "before executing any tool",
+                    gate_ask: "Is this tool/data necessary for the current task goal?",
+                    gate_action: "STOP — remove unnecessary operations",
                 },
             ],
             persuasion: PersuasionProfile {
@@ -293,30 +293,30 @@ pub fn builtin_methodologies() -> Vec<MethodologyDefinition> {
         // ── 4. Complexity-Assessment (NEW) ──
         MethodologyDefinition {
             id: "methodology:complexity-assessment",
-            name: "复杂度诚实评估",
-            description: "根据任务实际情况客观选择复杂度级别，禁止为省事降级或为炫耀升级",
+            name: "Honest Complexity Assessment",
+            description: "Objectively select the complexity level based on task reality; no downgrading for convenience or upgrading for show",
             methodology_type: MethodologyType::Guidance,
             domain: "general",
             source: "new — constitution gap fill for sa-perception-3, uni-boundary-4",
             red_flags: &[
                 RedFlagEntry {
-                    pattern: "省事降级",
+                    pattern: "convenience downgrade",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『这个很容易，简单处理就行』— 复杂度应基于任务客观特征"),
+                    rationalization_check: Some("\"This is easy, just keep it simple\" — complexity should be based on objective task characteristics"),
                 },
                 RedFlagEntry {
-                    pattern: "炫耀升级",
+                    pattern: "show-off upgrade",
                     severity: RedFlagSeverity::Warning,
-                    rationalization_check: Some("『用高级功能才显得专业』— 最简单能解决问题的方案最优"),
+                    rationalization_check: Some("\"Using advanced features looks professional\" — the simplest solution that works is best"),
                 },
             ],
             anti_patterns: &[
                 AntiPatternEntry {
-                    name: "复杂度偏差",
-                    description: "选择的复杂度级别与任务实际需求不匹配",
-                    gate_before: "SA 选择复杂度级别前",
-                    gate_ask: "评估因素: 1) 目标明确度 2) 步骤数量 3) 风险等级 4) 资源约束",
-                    gate_action: "STOP — 用 complexity_matrix 重新评估",
+                    name: "complexity bias",
+                    description: "Selected complexity level does not match actual task requirements",
+                    gate_before: "before SA selects complexity level",
+                    gate_ask: "Evaluation factors: 1) Goal clarity 2) Step count 3) Risk level 4) Resource constraints",
+                    gate_action: "STOP — re-evaluate with complexity_matrix",
                 },
             ],
             persuasion: PersuasionProfile {
@@ -330,37 +330,37 @@ pub fn builtin_methodologies() -> Vec<MethodologyDefinition> {
         // ── 5. Boundary-Enforcement (NEW) ──
         MethodologyDefinition {
             id: "methodology:boundary-enforcement",
-            name: "边界强制执行",
-            description: "在遇到安全边界、能力边界或伦理边界时，必须拒绝、预警或退出",
+            name: "Boundary Enforcement",
+            description: "When encountering safety, capability, or ethical boundaries, must reject, warn, or exit",
             methodology_type: MethodologyType::Discipline,
             domain: "general",
             source: "new — constitution gap fill for uni-boundary-2, uni-boundary-3, sa-safety-4",
             red_flags: &[
                 RedFlagEntry {
-                    pattern: "在能力范围内硬撑",
+                    pattern: "overextending within capability",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『再试一次可能就行了』— 超过能力边界应及时求助"),
+                    rationalization_check: Some("\"One more try might work\" — seek help when exceeding capability boundaries"),
                 },
                 RedFlagEntry {
-                    pattern: "忽略风险",
+                    pattern: "ignoring risk",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『应该没问题』— 必须有风险评估"),
+                    rationalization_check: Some("\"Should be fine\" — risk assessment is mandatory"),
                 },
             ],
             anti_patterns: &[
                 AntiPatternEntry {
-                    name: "非法请求",
-                    description: "涉及非法、不安全、不道德内容的请求",
-                    gate_before: "响应任何请求前",
-                    gate_ask: "这是安全/合法/道德的请求吗?",
-                    gate_action: "ABORT — 明确拒绝并说明原因",
+                    name: "illegal request",
+                    description: "Requests involving illegal, unsafe, or unethical content",
+                    gate_before: "before responding to any request",
+                    gate_ask: "Is this a safe/legal/ethical request?",
+                    gate_action: "ABORT — explicitly refuse and explain why",
                 },
                 AntiPatternEntry {
-                    name: "越界执行",
-                    description: "执行超出自身能力范围或任务授权的操作",
-                    gate_before: "执行可能越界的操作前",
-                    gate_ask: "我有权/有能力执行这个操作吗?",
-                    gate_action: "STOP — 建议缩小范围或申请授权",
+                    name: "boundary overstep",
+                    description: "Executing operations beyond your capability or task authorization",
+                    gate_before: "before executing potentially overstepping operations",
+                    gate_ask: "Am I authorized/capable of performing this operation?",
+                    gate_action: "STOP — suggest narrowing scope or requesting authorization",
                 },
             ],
             persuasion: PersuasionProfile {
@@ -374,30 +374,30 @@ pub fn builtin_methodologies() -> Vec<MethodologyDefinition> {
         // ── 6. Using-Superpowers (existing skill → methodology) ──
         MethodologyDefinition {
             id: "methodology:using-superpowers",
-            name: "技能使用方法论",
-            description: "在任何响应或操作之前调用相关的技能，检查红线表防止常见错误",
+            name: "Using Superpowers Methodology",
+            description: "Invoke relevant skills before any response or operation; check red-flag lists to prevent common errors",
             methodology_type: MethodologyType::Discipline,
             domain: "general",
             source: "superpowers-main/skills/using-superpowers/SKILL.md",
             red_flags: &[
                 RedFlagEntry {
-                    pattern: "跳过技能检查",
+                    pattern: "skipping skill check",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『这只是一个简单的问题』— 问题就是任务，检查方法论"),
+                    rationalization_check: Some("\"This is just a simple question\" — a question is a task; check the methodology"),
                 },
                 RedFlagEntry {
-                    pattern: "基于文件名猜测内容",
+                    pattern: "guessing content by filename",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『我知道那是什么意思』— 知道概念 ≠ 不使用方法论"),
+                    rationalization_check: Some("\"I know what that means\" — knowing the concept ≠ skipping the methodology"),
                 },
             ],
             anti_patterns: &[
                 AntiPatternEntry {
-                    name: "假设即答案",
-                    description: "仅凭文件名或部分信息推测内容",
-                    gate_before: "对文件/代码做判断前",
-                    gate_ask: "已经完整阅读了吗?",
-                    gate_action: "STOP — 先 Read，后判断",
+                    name: "assumption as answer",
+                    description: "Making judgments based solely on filenames or partial information",
+                    gate_before: "before making judgments about files/code",
+                    gate_ask: "Have you read it completely?",
+                    gate_action: "STOP — Read first, then judge",
                 },
             ],
             persuasion: PersuasionProfile {
@@ -411,25 +411,25 @@ pub fn builtin_methodologies() -> Vec<MethodologyDefinition> {
         // ── 7. Brainstorming ──
         MethodologyDefinition {
             id: "methodology:brainstorming",
-            name: "头脑风暴方法论",
-            description: "在任何创造性工作之前必须使用——先探索用户意图、需求和设计",
+            name: "Brainstorming Methodology",
+            description: "Must use before any creative work — first explore user intent, requirements, and design",
             methodology_type: MethodologyType::Process,
             domain: "general",
             source: "superpowers-main/skills/brainstorming/SKILL.md",
             red_flags: &[
                 RedFlagEntry {
-                    pattern: "设计前不探索",
+                    pattern: "designing without exploration",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『需求很清楚，不需要探索』— 先探索再设计"),
+                    rationalization_check: Some("\"Requirements are clear, no exploration needed\" — explore first, then design"),
                 },
             ],
             anti_patterns: &[
                 AntiPatternEntry {
-                    name: "跳过澄清",
-                    description: "需求模糊时直接实现而非先追问",
-                    gate_before: "进入实现前",
-                    gate_ask: "所有需求都已澄清无疑问?",
-                    gate_action: "STOP — 先澄清再实现",
+                    name: "skipping clarification",
+                    description: "Implementing directly when requirements are ambiguous instead of asking first",
+                    gate_before: "before entering implementation",
+                    gate_ask: "Are all requirements clarified without ambiguity?",
+                    gate_action: "STOP — clarify first, then implement",
                 },
             ],
             persuasion: PersuasionProfile {
@@ -443,37 +443,37 @@ pub fn builtin_methodologies() -> Vec<MethodologyDefinition> {
         // ── 8. TDD ──
         MethodologyDefinition {
             id: "methodology:test-driven-development",
-            name: "测试驱动开发",
-            description: "在实现任何功能或修复 bug 时，先编写测试再编写实现代码",
+            name: "Test-Driven Development",
+            description: "When implementing any feature or fixing a bug, write tests first then implementation code",
             methodology_type: MethodologyType::Discipline,
             domain: "programming",
             source: "superpowers-main/skills/test-driven-development/SKILL.md",
             red_flags: &[
                 RedFlagEntry {
-                    pattern: "先实现后测试",
+                    pattern: "implement-then-test",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『先写代码，测试后面补』— 必须先写测试"),
+                    rationalization_check: Some("\"Write code first, tests later\" — must write tests first"),
                 },
                 RedFlagEntry {
-                    pattern: "删除测试通过",
+                    pattern: "delete-to-pass",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『测试写得不对，删了重来』— 先看测试失败原因"),
+                    rationalization_check: Some("\"Tests are wrong, delete and restart\" — first check why the test failed"),
                 },
             ],
             anti_patterns: &[
                 AntiPatternEntry {
-                    name: "实现先行",
-                    description: "不先写测试就开始编写实现代码",
-                    gate_before: "编写任何实现代码前",
-                    gate_ask: "测试写了吗? 测试通过了吗（红）?",
-                    gate_action: "STOP — 先写测试，看到红，再写实现",
+                    name: "implementation first",
+                    description: "Starting implementation code without writing tests first",
+                    gate_before: "before writing any implementation code",
+                    gate_ask: "Are tests written? Are they failing (red)?",
+                    gate_action: "STOP — write test, see red, then implement",
                 },
                 AntiPatternEntry {
-                    name: "Mock 代替真实行为",
-                    description: "用 mock 替代了真实行为的验证",
-                    gate_before: "对 mock 断言前",
-                    gate_ask: "测试的是真实行为还是 mock 行为?",
-                    gate_action: "STOP — 测试真实行为而非 mock",
+                    name: "mock replacing real behavior",
+                    description: "Using mocks instead of verifying real behavior",
+                    gate_before: "before asserting on mocks",
+                    gate_ask: "Are you testing real behavior or mock behavior?",
+                    gate_action: "STOP — test real behavior, not mocks",
                 },
             ],
             persuasion: PersuasionProfile {
@@ -487,30 +487,30 @@ pub fn builtin_methodologies() -> Vec<MethodologyDefinition> {
         // ── 9. Systematic Debugging ──
         MethodologyDefinition {
             id: "methodology:systematic-debugging",
-            name: "系统化调试",
-            description: "遇到任何 bug、测试失败或异常行为时，先系统化分析根因再修复",
+            name: "Systematic Debugging",
+            description: "When encountering any bug, test failure, or unexpected behavior, systematically analyze root cause before fixing",
             methodology_type: MethodologyType::Process,
             domain: "programming",
             source: "superpowers-main/skills/systematic-debugging/SKILL.md",
             red_flags: &[
                 RedFlagEntry {
-                    pattern: "盲目重试",
+                    pattern: "blind retry",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『再试一次可能就好了』— 先分析日志定位根因"),
+                    rationalization_check: Some("\"One more retry might work\" — analyze logs to find root cause first"),
                 },
                 RedFlagEntry {
-                    pattern: "随机修改",
+                    pattern: "random modification",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『改改这里试试』— 一次改一个变量，验证再改"),
+                    rationalization_check: Some("\"Let's try changing this\" — change one variable at a time, verify, then change"),
                 },
             ],
             anti_patterns: &[
                 AntiPatternEntry {
                     name: "Shotgun Debugging",
-                    description: "同时修改多处，期望某处修复问题",
-                    gate_before: "同时修改多个文件/变量前",
-                    gate_ask: "每个修改有针对根因吗? 一次只改一处?",
-                    gate_action: "STOP — 一次改一处，验证后再改下一处",
+                    description: "Modifying multiple things at once hoping one will fix the issue",
+                    gate_before: "before modifying multiple files/variables simultaneously",
+                    gate_ask: "Does each change target a root cause? One change at a time?",
+                    gate_action: "STOP — change one thing at a time, verify, then move to the next",
                 },
             ],
             persuasion: PersuasionProfile {
@@ -524,25 +524,25 @@ pub fn builtin_methodologies() -> Vec<MethodologyDefinition> {
         // ── 10. Verification Before Completion ──
         MethodologyDefinition {
             id: "methodology:verification-before-completion",
-            name: "完成前验证",
-            description: "在宣称工作完成前，必须运行验证命令并确认输出后才能声称成功",
+            name: "Verification Before Completion",
+            description: "Before claiming work is done, must run verification commands and confirm output before declaring success",
             methodology_type: MethodologyType::Discipline,
             domain: "general",
             source: "superpowers-main/skills/verification-before-completion/SKILL.md",
             red_flags: &[
                 RedFlagEntry {
-                    pattern: "『测试通过』但未运行",
+                    pattern: "claiming pass without running",
                     severity: RedFlagSeverity::Critical,
-                    rationalization_check: Some("『代码很简单，肯定没问题』— 必须运行验证"),
+                    rationalization_check: Some("\"The code is simple, it must be fine\" — verification must be run"),
                 },
             ],
             anti_patterns: &[
                 AntiPatternEntry {
-                    name: "无证据声明",
-                    description: "宣称工作完成但没有提供任何验证证据",
-                    gate_before: "报告任务完成前",
-                    gate_ask: "运行了验证命令? 输出了什么? 诊断通过了?",
-                    gate_action: "STOP — 运行验证并附上输出证据",
+                    name: "no-evidence claim",
+                    description: "Claiming work is complete without providing any verification evidence",
+                    gate_before: "before reporting task completion",
+                    gate_ask: "Did you run verification? What was the output? Did diagnostics pass?",
+                    gate_action: "STOP — run verification and attach output evidence",
                 },
             ],
             persuasion: PersuasionProfile {
@@ -573,7 +573,7 @@ mod tests {
     fn test_get_methodology_by_id() {
         let registry = MethodologyRegistry::new();
         let idx = registry.get("methodology:index-priority").unwrap();
-        assert_eq!(idx.name, "索引优先策略");
+        assert_eq!(idx.name, "Index-First Strategy");
     }
 
     #[test]
