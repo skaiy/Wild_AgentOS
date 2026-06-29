@@ -184,7 +184,7 @@ impl SkillEvolutionEngine {
         // No propagation found — treat as potential root cause
         self.causal_model.record_failure(skill_iri, &error_hash);
 
-        let event_id = event.event_id.clone();
+        let _event_id = event.event_id.clone();
         self.push_event(event);
 
         // Create knowledge fragment suggestion
@@ -236,7 +236,7 @@ impl SkillEvolutionEngine {
         let mut current = event;
 
         while let Some(ref from_id) = current.propagation_from {
-            if let Some(parent) = self.event_history.iter().find(|e| e.event_id == from_id) {
+            if let Some(parent) = self.event_history.iter().find(|e| e.event_id == *from_id) {
                 path.push(parent.clone());
                 current = parent;
             } else {
@@ -517,7 +517,7 @@ impl SkillEvolutionEngine {
         }
     }
 
-    pub fn suggest_improvements(&mut self) -> Vec<EvolutionSuggestion> {
+    pub async fn suggest_improvements(&mut self) -> Vec<EvolutionSuggestion> {
         let mut suggestions = Vec::new();
 
         for skill in self.graph_store.list_all_skills() {
@@ -532,7 +532,7 @@ impl SkillEvolutionEngine {
                 });
             }
 
-            let link_suggestions = self.graph_store.suggest_links(&skill.skill_iri);
+            let link_suggestions = self.graph_store.suggest_links(&skill.skill_iri, None).await;
             for (target, link_type, confidence) in link_suggestions {
                 if confidence > 0.5 {
                     suggestions.push(EvolutionSuggestion {
