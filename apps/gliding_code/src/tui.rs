@@ -813,6 +813,27 @@ impl App {
             });
         }
 
+        #[cfg(not(unix))]
+        {
+            let sigquit_clone = sigquit.clone();
+            self.rt.spawn(async move {
+                match tokio::signal::ctrl_c().await {
+                    Ok(()) => {
+                        sigquit_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                        // Best-effort terminal restore
+                        let _ = disable_raw_mode();
+                        let mut stdout = std::io::stdout();
+                        let _ = execute!(
+                            stdout,
+                            LeaveAlternateScreen,
+                            crossterm::event::DisableMouseCapture
+                        );
+                    }
+                    Err(_) => {}
+                }
+            });
+        }
+
         loop {
             // Check signal-triggered quit (SIGTERM / SIGINT)
             if sigquit.load(std::sync::atomic::Ordering::SeqCst) {
