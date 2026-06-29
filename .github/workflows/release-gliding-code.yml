@@ -125,7 +125,7 @@ jobs:
       - name: Verify static linking (Linux musl)
         if: contains(matrix.target, 'musl')
         run: |
-          BIN="apps/gliding_code/target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}"
+          BIN="target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}"
           file "$BIN"
           if ldd "$BIN" 2>&1 | grep -q "not a dynamic"; then
             echo "Static linking confirmed."
@@ -139,13 +139,13 @@ jobs:
       # ----- Packaging -----
       - name: Package tar.gz (Linux/macOS)
         if: runner.os != 'Windows'
-        working-directory: apps/gliding_code/target/${{ matrix.target }}/release
+        working-directory: target/${{ matrix.target }}/release
         run: tar czvf ${{ github.workspace }}/glidingcode-${{ matrix.target }}.tar.gz ${{ env.BINARY_NAME }}
 
       - name: Package zip (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        working-directory: apps/gliding_code/target/${{ matrix.target }}/release
+        working-directory: target/${{ matrix.target }}/release
         run: Compress-Archive -Path ${{ env.BINARY_NAME }}.exe -DestinationPath ${{ github.workspace }}/glidingcode-${{ matrix.target }}.zip
 
       # ----- 新增：手动触发时上传构建产物 (用于测试下载) -----
