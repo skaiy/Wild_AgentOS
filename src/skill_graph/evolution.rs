@@ -1,5 +1,8 @@
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
+use chrono::Utc;
+use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
 use crate::skill_graph::graph_store::SkillGraphStore;
@@ -75,6 +78,10 @@ pub struct SkillEvolutionEngine {
     graph_store: Arc<SkillGraphStore>,
     usage_history: Vec<UsageRecord>,
     pending_suggestions: Vec<EvolutionSuggestion>,
+    // P1-3: Causal failure analysis
+    causal_model: SkillCausalModel,
+    event_history: VecDeque<CausalEvent>,
+    max_events: usize,
 }
 
 impl SkillEvolutionEngine {
@@ -83,7 +90,16 @@ impl SkillEvolutionEngine {
             graph_store,
             usage_history: Vec::new(),
             pending_suggestions: Vec::new(),
+            causal_model: SkillCausalModel::new(),
+            event_history: VecDeque::new(),
+            max_events: 10_000,
         }
+    }
+
+    /// Enable causal analysis with configurable event history size.
+    pub fn with_causal_analysis(mut self, max_events: usize) -> Self {
+        self.max_events = max_events;
+        self
     }
 
     pub fn record_usage(&mut self, record: UsageRecord) -> Result<(), CoreError> {
@@ -114,32 +130,185 @@ impl SkillEvolutionEngine {
         Ok(())
     }
 
+    /// P1-3: Causal failure analysis replacing substring match.
     fn analyze_failure(
         &mut self,
         skill_iri: &str,
         error: &str,
-        _task_iri: &str,
-        _agent_id: &str,
+        task_iri: &str,
+        agent_id: &str,
     ) {
-        debug!("Analyzing skill failure: {} - {}", skill_iri, error);
+        debug!("Analyzing skill failure (causal): {} - {}", skill_iri, error);
 
+        let error_hash = self.compute_error_signature(error);
+        let error_class = self.classify_error(error);
+
+        // Build causal event
+        let event = CausalEvent {
+            event_id: format!("event:{}", uuid::Uuid::new_v4()),
+            timestamp: Utc::now(),
+            skill_iri: skill_iri.to_string(),
+            error_class: error_class.clone(),
+            error_signature: error_hash.clone(),
+            context: {
+                let mut ctx = HashMap::new();
+                ctx.insert("task_iri".to_string(), task_iri.to_string());
+                ctx.insert("agent_id".to_string(), agent_id.to_string());
+                ctx
+            },
+            propagation_from: None,
+        };
+
+        // Check if any dependency failed recently (within 60 seconds)
         if let Some(skill) = self.graph_store.get_skill(skill_iri) {
-            let similar_failures: Vec<_> = skill
-                .graph_meta
-                .known_failure_modes
-                .iter()
-                .filter(|fm| error.contains(&fm.mode))
-                .collect();
-
-            if similar_failures.is_empty() {
-                self.pending_suggestions.push(EvolutionSuggestion {
-                    suggestion_type: EvolutionSuggestionType::CreateFragment,
-                    skill_iri: skill_iri.to_string(),
-                    description: format!("New failure mode: {}", error),
-                    confidence: 0.7,
-                });
+            for link in &skill.links {
+                if link.link_type == SkillLinkType::Prerequisite {
+                    for past_event in self.event_history.iter().rev() {
+                        if past_event.skill_iri == link.target_iri
+                            && (Utc::now() - past_event.timestamp).num_seconds() < 60
+                        {
+                            // Propagation detected
+                            self.causal_model
+                                .record_propagation(&link.target_iri, skill_iri);
+                            let mut propagated = event.clone();
+                            propagated.propagation_from =
+                                Some(past_event.event_id.clone());
+                            self.push_event(propagated);
+                            return;
+                        }
+                    }
+                }
             }
         }
+
+        // No propagation found — treat as potential root cause
+        self.causal_model.record_failure(skill_iri, &error_hash);
+
+        let event_id = event.event_id.clone();
+        self.push_event(event);
+
+        // Create knowledge fragment suggestion
+        self.pending_suggestions.push(EvolutionSuggestion {
+            suggestion_type: EvolutionSuggestionType::CreateFragment,
+            skill_iri: skill_iri.to_string(),
+            description: format!("Causal failure in {}: {} (class={})", skill_iri, error, error_class),
+            confidence: 0.7,
+        });
+    }
+
+    fn compute_error_signature(&self, error: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(error.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    fn classify_error(&self, error: &str) -> String {
+        let lower = error.to_lowercase();
+        if lower.contains("timeout") || lower.contains("timed out") {
+            "timeout".to_string()
+        } else if lower.contains("permission") || lower.contains("denied") || lower.contains("forbidden") {
+            "permission".to_string()
+        } else if lower.contains("not found") || lower.contains("404") {
+            "not_found".to_string()
+        } else if lower.contains("network") || lower.contains("connection") {
+            "network".to_string()
+        } else if lower.contains("parse") || lower.contains("syntax") || lower.contains("invalid") {
+            "validation".to_string()
+        } else if lower.contains("rate") || lower.contains("limit") || lower.contains("quota") {
+            "rate_limit".to_string()
+        } else {
+            "unknown".to_string()
+        }
+    }
+
+    fn push_event(&mut self, event: CausalEvent) {
+        if self.event_history.len() >= self.max_events {
+            self.event_history.pop_front();
+        }
+        self.event_history.push_back(event);
+    }
+
+    /// Trace back from an event to find the root cause chain.
+    pub fn find_root_cause(&self, event_id: &str) -> Option<CausalChain> {
+        let event = self.event_history.iter().find(|e| e.event_id == event_id)?;
+
+        let mut path = vec![event.clone()];
+        let mut current = event;
+
+        while let Some(ref from_id) = current.propagation_from {
+            if let Some(parent) = self.event_history.iter().find(|e| e.event_id == from_id) {
+                path.push(parent.clone());
+                current = parent;
+            } else {
+                break;
+            }
+        }
+
+        path.reverse();
+        let root = path.remove(0);
+        let confidence = if path.len() <= 2 {
+            0.9
+        } else {
+            0.9 - ((path.len() as f32 - 2.0) * 0.1).max(0.0)
+        };
+
+        Some(CausalChain {
+            root_cause: root,
+            propagation_path: path,
+            confidence,
+        })
+    }
+
+    /// Recommend preventive actions for a skill based on its causal history.
+    pub fn suggest_preventive_action(&self, skill_iri: &str) -> Vec<String> {
+        let mut actions = Vec::new();
+
+        // Check error profiles
+        if let Some(profiles) = self.causal_model.error_profiles.get(skill_iri) {
+            let total: u32 = profiles.values().sum();
+            if total > 5 {
+                actions.push(format!(
+                    "Skill {} has {} recorded failures — consider adding knowledge fragments",
+                    skill_iri, total
+                ));
+            }
+
+            for (error_sig, count) in profiles.iter() {
+                if *count > 3 {
+                    let display = &error_sig[..error_sig.len().min(16)];
+                    actions.push(format!(
+                        "Frequent error pattern {} ({}) detected — investigate root cause",
+                        display, count
+                    ));
+                }
+            }
+        }
+
+        // Check propagation patterns
+        let propagated_to: Vec<String> = self
+            .event_history
+            .iter()
+            .filter(|e| {
+                e.propagation_from
+                    .as_ref()
+                    .and_then(|from| {
+                        self.event_history
+                            .iter()
+                            .find(|pe| pe.event_id == *from)
+                    })
+                    .map_or(false, |pe| pe.skill_iri == skill_iri)
+            })
+            .map(|e| e.skill_iri.clone())
+            .collect();
+
+        if !propagated_to.is_empty() {
+            actions.push(format!(
+                "Failures in {} propagate to {:?} — add guards before depending skills",
+                skill_iri, propagated_to
+            ));
+        }
+
+        actions
     }
 
     pub fn create_fragment(

@@ -2,12 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
+use oxigraph::store::Store;
 use parking_lot::RwLock;
 use serde_json::Value;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::memory::l0_store::L0Store;
 use crate::memory::l2_blackboard::Blackboard;
+use crate::skill_graph::discovery::SkillDiscoveryEngine;
 use crate::skill_graph::index::PreAggregatedIndex;
 use crate::skill_graph::types::*;
 use crate::CoreError;
@@ -18,9 +20,12 @@ pub struct SkillGraphStore {
     skills: RwLock<HashMap<String, SkillGraphNode>>,
     mocs: RwLock<HashMap<String, MOCNode>>,
     fragments: RwLock<HashMap<String, KnowledgeFragment>>,
+    hyperedges: RwLock<HashMap<String, Hyperedge>>,
+    snapshot_history: RwLock<Vec<SnapshotRecord>>,
     index: PreAggregatedIndex,
     blackboard: Option<Arc<Blackboard>>,
     l0_store: Option<Arc<L0Store>>,
+    oxi_store: Option<Arc<Store>>,
 }
 
 impl SkillGraphStore {
@@ -29,9 +34,12 @@ impl SkillGraphStore {
             skills: RwLock::new(HashMap::new()),
             mocs: RwLock::new(HashMap::new()),
             fragments: RwLock::new(HashMap::new()),
+            hyperedges: RwLock::new(HashMap::new()),
+            snapshot_history: RwLock::new(Vec::new()),
             index: PreAggregatedIndex::new(),
             blackboard: None,
             l0_store: None,
+            oxi_store: None,
         }
     }
 
@@ -45,8 +53,39 @@ impl SkillGraphStore {
         self
     }
 
+    pub fn with_oxi_store(mut self, store: Arc<Store>) -> Self {
+        self.oxi_store = Some(store);
+        self
+    }
+
     pub fn get_index(&self) -> &PreAggregatedIndex {
         &self.index
+    }
+
+    // ── P0-1: Oxigraph sync helpers ─────────────────────────────────────
+
+    fn sync_sparql(&self, sparql: &str) {
+        if let Some(ref store) = self.oxi_store {
+            if let Err(e) = store.update(sparql) {
+                error!("Oxigraph sync failed: {}. SPARQL was: {}", e, sparql);
+            }
+        }
+    }
+
+    fn sync_skill_insert(&self, skill: &SkillGraphNode) {
+        if skill.storage_tier == StorageTier::L1Session {
+            return;
+        }
+        let sparql = skill.to_sparql_insert(SKILL_GRAPH_NAMED_GRAPH);
+        self.sync_sparql(&sparql);
+    }
+
+    fn sync_skill_delete(&self, iri: &str) {
+        let sparql = format!(
+            "DELETE WHERE {{ GRAPH <{}> {{ <{}> ?p ?o }} }}",
+            SKILL_GRAPH_NAMED_GRAPH, iri
+        );
+        self.sync_sparql(&sparql);
     }
 
     pub fn register_skill(&self, skill: SkillGraphNode) -> Result<(), CoreError> {
@@ -61,6 +100,11 @@ impl SkillGraphStore {
 
         self.index.index_skill(&skill);
         self.skills.write().insert(iri.clone(), skill);
+
+        // P0-1: sync to Oxigraph
+        if let Some(skill) = self.skills.read().get(&iri) {
+            self.sync_skill_insert(skill);
+        }
 
         if let Some(ref l0_store) = self.l0_store {
             let now = Utc::now();
@@ -96,6 +140,9 @@ impl SkillGraphStore {
         let iri = skill.skill_iri.clone();
         if self.skills.read().contains_key(&iri) {
             self.index.update_skill(&skill);
+            // P0-1: sync update to Oxigraph (delete old + insert new)
+            self.sync_skill_delete(&iri);
+            self.sync_skill_insert(&skill);
             self.skills.write().insert(iri, skill);
             Ok(())
         } else {
@@ -108,6 +155,8 @@ impl SkillGraphStore {
     pub fn remove_skill(&self, skill_iri: &str) -> Result<(), CoreError> {
         if self.skills.write().remove(skill_iri).is_some() {
             self.index.remove_skill(skill_iri);
+            // P0-1: sync delete from Oxigraph
+            self.sync_skill_delete(skill_iri);
             info!("Skill removed from graph: {}", skill_iri);
             Ok(())
         } else {
@@ -140,6 +189,8 @@ impl SkillGraphStore {
             drop(skills);
             if let Some(skill) = updated {
                 self.index.update_skill(&skill);
+                // P0-1: sync link triple to Oxigraph
+                self.sync_skill_insert(&skill);
             }
             Ok(())
         } else {
@@ -500,13 +551,232 @@ impl SkillGraphStore {
         self.skills.read().len()
     }
 
-    pub fn suggest_links(&self, skill_iri: &str) -> Vec<(String, SkillLinkType, f32)> {
+    // ── P1-1: Hyperedge CRUD ───────────────────────────────────────────
+
+    pub fn register_hyperedge(&self, hyperedge: Hyperedge) -> Result<(), CoreError> {
+        let id = hyperedge.hyperedge_id.clone();
+        info!("Registering hyperedge: {} ({})", hyperedge.name, id);
+        self.hyperedges.write().insert(id, hyperedge);
+        Ok(())
+    }
+
+    pub fn get_hyperedge(&self, hyperedge_id: &str) -> Option<Hyperedge> {
+        self.hyperedges.read().get(hyperedge_id).cloned()
+    }
+
+    pub fn list_hyperedges(&self) -> Vec<Hyperedge> {
+        self.hyperedges.read().values().cloned().collect()
+    }
+
+    pub fn remove_hyperedge(&self, hyperedge_id: &str) -> Result<(), CoreError> {
+        if self.hyperedges.write().remove(hyperedge_id).is_some() {
+            info!("Hyperedge removed: {}", hyperedge_id);
+            Ok(())
+        } else {
+            Err(CoreError::SkillNotFound {
+                iri: format!("Hyperedge not found: {}", hyperedge_id),
+            })
+        }
+    }
+
+    pub fn get_composites_containing(&self, skill_iri: &str) -> Vec<Hyperedge> {
+        self.hyperedges
+            .read()
+            .values()
+            .filter(|he| he.components.contains(&skill_iri.to_string()))
+            .cloned()
+            .collect()
+    }
+
+    pub fn resolve_hyperedge(&self, hyperedge_id: &str) -> Result<Vec<SkillGraphNode>, CoreError> {
+        let he = self
+            .hyperedges
+            .read()
+            .get(hyperedge_id)
+            .cloned()
+            .ok_or_else(|| CoreError::SkillNotFound {
+                iri: format!("Hyperedge not found: {}", hyperedge_id),
+            })?;
+
+        let skills = self.skills.read();
+        let mut resolved = Vec::new();
+        for comp_iri in &he.components {
+            if let Some(skill) = skills.get(comp_iri) {
+                resolved.push(skill.clone());
+            } else {
+                warn!("Hyperedge {} references missing skill {}", hyperedge_id, comp_iri);
+            }
+        }
+        Ok(resolved)
+    }
+
+    pub fn migrate_composition_links(&self) -> Result<usize, CoreError> {
+        let skills = self.skills.read();
+        let mut hyperedges_to_create = Vec::new();
+        let mut processed = 0usize;
+
+        // Find all skills that have Composition links pointing to the same composite target
+        let mut target_to_components: HashMap<String, Vec<String>> = HashMap::new();
+        for (iri, skill) in skills.iter() {
+            for link in &skill.links {
+                if link.link_type == SkillLinkType::Composition
+                    && link.strength == LinkStrength::Required
+                {
+                    target_to_components
+                        .entry(link.target_iri.clone())
+                        .or_default()
+                        .push(iri.clone());
+                }
+            }
+        }
+
+        for (target, components) in target_to_components {
+            if components.len() >= 2 {
+                let he = Hyperedge::new(
+                    &format!("hyperedge:composite/{}", target.trim_start_matches("iri://skills/")),
+                    &format!("Hyperedge for {}", target),
+                    &format!("Migrated from Composition links targeting {}", target),
+                    components,
+                );
+                hyperedges_to_create.push(he);
+                processed += 1;
+            }
+        }
+
+        drop(skills);
+        for he in hyperedges_to_create {
+            self.hyperedges.write().insert(he.hyperedge_id.clone(), he);
+        }
+        Ok(processed)
+    }
+
+    // ── P1-4: Temporal Versioning ───────────────────────────────────────
+
+    pub fn snapshot(&self, label: &str) -> Result<String, CoreError> {
+        let snapshot_id = format!(
+            "snapshot:{}_{}",
+            label,
+            Utc::now().format("%Y%m%d_%H%M%S")
+        );
+
+        let skill_count = self.skills.read().len();
+        let record = SnapshotRecord {
+            snapshot_id: snapshot_id.clone(),
+            label: label.to_string(),
+            timestamp: Utc::now(),
+            skill_count,
+        };
+        self.snapshot_history.write().push(record);
+
+        // Persist snapshot JSON to Oxigraph if available
+        if let Some(ref store) = self.oxi_store {
+            let snapshot_graph = format!("system:skill_graph_snapshot/{}", snapshot_id);
+            let copy = format!(
+                "DROP SILENT GRAPH <{}> ; \
+                 INSERT {{ GRAPH <{}> {{ ?s ?p ?o }} }} \
+                 WHERE {{ GRAPH <{}> {{ ?s ?p ?o }} }}",
+                snapshot_graph, snapshot_graph, SKILL_GRAPH_NAMED_GRAPH
+            );
+            if let Err(e) = store.update(copy.as_str()) {
+                warn!("Oxigraph snapshot failed: {}", e);
+            }
+        }
+
+        info!("Snapshot created: {} ({} skills)", snapshot_id, skill_count);
+        Ok(snapshot_id)
+    }
+
+    pub fn list_snapshots(&self) -> Vec<SnapshotRecord> {
+        self.snapshot_history.read().clone()
+    }
+
+    // ── P2-1: Hybrid Search ─────────────────────────────────────────────
+
+    /// Fuse two ranked result sets using Reciprocal Rank Fusion.
+    /// alpha=1.0 → pure text, alpha=0.0 → pure structural.
+    pub fn fuse_results(
+        text_hits: &[(String, f32)],
+        struct_hits: &[(String, f32)],
+        alpha: f32,
+    ) -> Vec<FusedHit> {
+        let k = 60.0f32;
+        let mut score_map: HashMap<String, f32> = HashMap::new();
+
+        for (rank, (iri, _)) in text_hits.iter().enumerate() {
+            let rrf = 1.0 / (k + rank as f32 + 1.0);
+            *score_map.entry(iri.clone()).or_insert(0.0) += alpha * rrf;
+        }
+        for (rank, (iri, _)) in struct_hits.iter().enumerate() {
+            let rrf = 1.0 / (k + rank as f32 + 1.0);
+            *score_map.entry(iri.clone()).or_insert(0.0) += (1.0 - alpha) * rrf;
+        }
+
+        let mut fused: Vec<FusedHit> = score_map
+            .into_iter()
+            .map(|(iri, score)| FusedHit { iri, score })
+            .collect();
+        fused.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        fused
+    }
+
+    pub async fn hybrid_skill_search(
+        &self,
+        skill_iri: &str,
+        text_ranked: Vec<(String, f32)>,
+        struct_ranked: Vec<(String, f32)>,
+        alpha: f32,
+    ) -> Vec<(String, SkillLinkType, f32)> {
+        let fused = Self::fuse_results(&text_ranked, &struct_ranked, alpha);
+        let mut results: Vec<(String, SkillLinkType, f32)> = fused
+            .into_iter()
+            .filter(|h| h.iri != skill_iri)
+            .take(10)
+            .map(|h| (h.iri, SkillLinkType::Related, h.score))
+            .collect();
+        results.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        results
+    }
+
+    /// Suggest related skills for a given skill.
+    ///
+    /// Uses semantic search via `SkillDiscoveryEngine` when available,
+    /// falling back to Jaccard tag overlap when no engine is provided
+    /// or the engine has no vector store configured.
+    pub async fn suggest_links(
+        &self,
+        skill_iri: &str,
+        engine: Option<&SkillDiscoveryEngine>,
+    ) -> Vec<(String, SkillLinkType, f32)> {
+        // Build query from skill metadata (drop lock before potential await)
+        let query = {
+            let skills = self.skills.read();
+            skills.get(skill_iri).map(|s| {
+                let tags = s.tags.join(" ");
+                format!("{} {} {}", s.name, s.description, tags)
+            })
+        };
+
+        if let Some(ref q) = query {
+            if let Some(engine) = engine {
+                if let Ok(matches) = engine.semantic_search(q, 10).await {
+                    if !matches.is_empty() {
+                        return matches
+                            .into_iter()
+                            .map(|m| {
+                                (m.skill.skill_iri.clone(), SkillLinkType::Related, m.relevance_score)
+                            })
+                            .collect();
+                    }
+                }
+            }
+        }
+
         let mut suggestions = Vec::new();
         let skills = self.skills.read();
-        
+
         if let Some(source) = skills.get(skill_iri) {
             let source_tags: HashSet<&String> = source.tags.iter().collect();
-            
+
             for (other_iri, other) in skills.iter() {
                 if other_iri == skill_iri {
                     continue;
@@ -514,10 +784,11 @@ impl SkillGraphStore {
 
                 let other_tags: HashSet<&String> = other.tags.iter().collect();
                 let common_tags = source_tags.intersection(&other_tags).count();
-                
+
                 if common_tags > 0 {
-                    let similarity = common_tags as f32 / ((source_tags.len() + other_tags.len()) as f32 / 2.0);
-                    
+                    let similarity = common_tags as f32
+                        / ((source_tags.len() + other_tags.len()) as f32 / 2.0);
+
                     if similarity > 0.3 {
                         suggestions.push((other_iri.clone(), SkillLinkType::Related, similarity));
                     }
