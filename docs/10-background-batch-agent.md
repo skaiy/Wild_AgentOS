@@ -60,7 +60,7 @@ flowchart LR
 graph TB
     subgraph "数据源 (Data Sources)"
         SG[SkillGraphStore<br/>技能图谱]
-        L0[L0 持久记忆<br/>sled]
+        L0[L0 持久记忆<br/>redb]
         L2[L2 知识图谱<br/>Oxigraph]
         EVENT[EventBus<br/>执行事件]
     end

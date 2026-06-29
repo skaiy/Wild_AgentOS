@@ -17,7 +17,7 @@
 
 | 系统 | 文件 | 可复用能力 |
 |------|------|-----------|
-| **sled** | 已依赖 `sled = "0.34"` | 高性能 KV 存储，微秒级读写，用于文件元数据持久化和版本索引 |
+| **redb** | 已依赖 `redb = "4.1"` | 嵌入式 KV 数据库，ACID 事务，用于文件元数据持久化和版本索引 |
 | **walkdir** | 已依赖 `walkdir = "2.4"` | 高效递归目录遍历 |
 | **sha2** | 已依赖 `sha2 = "0.10"` | SHA-256 内容哈希 |
 | **Oxigraph / L2** | `src/memory/l2_blackboard.rs` | RDF Triple Store + SPARQL 1.1 + Named Graph 隔离 |
@@ -32,7 +32,7 @@
 | **L0Store** | `src/memory/l0_store.rs` | 持久化存储 + MESI 状态 + prefix scan |
 | **MCP Client** | `src/tools/mcp_client.rs` | 外部工具发现（可透传文件状态到 MCP 工具） |
 
-**现有依赖中已包含**: `sled`, `walkdir`, `sha2`。  
+**现有依赖中已包含**: `redb`, `walkdir`, `sha2`。  
 **需要新增**: `notify`, `notify-debouncer-mini`, `similar`, `lru`。  
 **不需要 gix**：见下文 12.3.4 分析。
 
@@ -89,7 +89,7 @@ flowchart TB
 
     subgraph CORE["Workspace Monitor Core"]
         WE["WatchEngine<br/>━━━━━━━━━━━<br/>notify 封装<br/>事件去抖 500ms"]
-        FI["FileInventory<br/>━━━━━━━━━━━<br/>L2/L3 facade<br/>sled 元数据缓存"]
+        FI["FileInventory<br/>━━━━━━━━━━━<br/>L2/L3 facade<br/>redb 元数据缓存"]
         CS["ContentStore<br/>━━━━━━━━━━━<br/>LRU 内容缓存<br/>SHA-256 索引"]
         DE["DiffEngine<br/>━━━━━━━━━━━<br/>similar crate<br/>Myers diff"]
     end
@@ -98,7 +98,7 @@ flowchart TB
         EB["EventBus<br/>WORKSPACE_FILE_*"]
         L2["L2 Blackboard<br/>Named Graph: iri://workspace<br/>RDF Triple Store"]
         L3["L3 ProjectionEngine<br/>SPARQL 投影<br/>Materialized View"]
-        L0["L0Store (sled)<br/>版本索引持久化<br/>crash 恢复"]
+        L0["L0Store (redb)<br/>版本索引持久化<br/>crash 恢复"]
         HM["HookManager<br/>SkillBefore/After"]
         TG["ToolGuard<br/>FileCoverage 增强"]
         IS["ImportScanner<br/>依赖重扫描"]
@@ -143,38 +143,38 @@ flowchart TB
 
 ### 12.4.1 存储架构 — 双层模型
 
-**设计原则**：文件**元数据**走 L2 + sled，文件**内容**走 ContentStore。不混用。
+**设计原则**：文件**元数据**走 L2 + redb，文件**内容**走 ContentStore。不混用。
 
 ```
 查询路径:
-  Agent file_list → FileInventory → sled (热缓存) → L2 SPARQL
+  Agent file_list → FileInventory → redb (热缓存) → L2 SPARQL
   Agent file_read  → ContentStore → LRU 内存缓存 → 磁盘
   L3 投影查询     → L2 SPARQL → MaterializedView
 
 写入路径:
-  notify 事件     → EventBus → FileInventory → sled + L2 SPARQL UPDATE
+  notify 事件     → EventBus → FileInventory → redb + L2 SPARQL UPDATE
   Agent file_write → HookManager → ContentStore.invalidate() + FileInventory.mark_written()
 ```
 
 #### 为什么不用 gix？—— 含回滚能力分析
 
-| 对比维度 | gix | sled + SnapshotManager | 评估 |
+| 对比维度 | gix | redb + SnapshotManager | 评估 |
 |----------|-----|----------------------|------|
-| 编译时间 | ~60s | 0s（已编译） | sled 胜 |
-| 二进制大小 | +~2MB | 0（已包含） | sled 胜 |
-| 单文件版本存储 | blob + tree | sled key: `version:{hash}` → content | 相当 |
-| **Workspace 快照** | commit（所有文件一致性快照） | `SnapshotRecord { path→hash map }` 存入 sled | 相当 |
+| 编译时间 | ~60s | 0s（已编译） | redb 胜 |
+| 二进制大小 | +~2MB | 0（已包含） | redb 胜 |
+| 单文件版本存储 | blob + tree | redb key: `version:{hash}` → content | 相当 |
+| **Workspace 快照** | commit（所有文件一致性快照） | `SnapshotRecord { path→hash map }` 存入 redb | 相当 |
 | **Workspace 回滚** | checkout commit | 遍历 snapshot → 写回每个文件 | 相当 |
-| Diff | git diff | similar crate（更轻量） | sled 更轻 |
+| Diff | git diff | similar crate（更轻量） | redb 更轻 |
 | 分支/合并 | ✅ | ❌ 不需要 | Agent 不需要 |
 | 增量提交 | ✅（自动） | ✅（仅变更文件更新 snapshot） | 相当 |
 
-**回滚实现**（sled 方案）：
+**回滚实现**（redb 方案）：
 
 ```rust
 /// 工作区快照管理器
 pub struct SnapshotManager {
-    db: Arc<sled::Db>,
+    db: Arc<redb::Database>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,7 +199,7 @@ impl SnapshotManager {
 
     /// 回滚整个工作区到指定快照
     /// 1. 遍历 snapshot.files
-    /// 2. 对每个文件，从 sled 中通过 hash 查找内容
+    /// 2. 对每个文件，从 redb 中通过 hash 查找内容
     /// 3. 写回磁盘
     pub fn rollback_to(&self, snapshot_id: &str) -> Result<RollbackResult>;
 
@@ -225,20 +225,20 @@ pub struct RollbackResult {
 sequenceDiagram
     participant Agent
     participant SM as SnapshotManager
-    participant sled
+    participant redb
     participant Disk
 
     Agent->>SM: create_snapshot("pre_edit", task_iri)
-    SM->>sled: 遍历 FileInventory<br/>收集所有文件 path+hash
-    SM->>sled: store SnapshotRecord
+    SM->>redb: 遍历 FileInventory<br/>收集所有文件 path+hash
+    SM->>redb: store SnapshotRecord
     SM-->>Agent: snapshot_id
 
     Note over Agent: Agent 执行一系列 file_write<br/>工作区发生变化
 
     Agent->>SM: rollback_to(snapshot_id)
-    SM->>sled: 读取 SnapshotRecord
+    SM->>redb: 读取 SnapshotRecord
     loop 每个文件
-        SM->>sled: 通过 hash 查找内容
+        SM->>redb: 通过 hash 查找内容
         SM->>Disk: 写回文件
     end
     SM-->>Agent: RollbackResult { restored: 45, ... }
@@ -247,11 +247,11 @@ sequenceDiagram
     SM->>SM: 更新 FileInventory 状态
 ```
 
-**结论**：sled + SnapshotManager 可以支持 workspace 级别的快照和回滚，不需要 git 的 DAG 模型。Agent 场景不需要分支/合并/标签/远程同步，简单的时间线快照已足够。关键实现 ~150 行代码。
+**结论**：redb + SnapshotManager 可以支持 workspace 级别的快照和回滚，不需要 git 的 DAG 模型。Agent 场景不需要分支/合并/标签/远程同步，简单的时间线快照已足够。关键实现 ~150 行代码。
 
 ### 12.4.2 FileInventory — L2/L3 门面
 
-**设计原则**：FileInventory 是薄门面，数据主存储在 L2（RDF Triple Store），热缓存用 sled。
+**设计原则**：FileInventory 是薄门面，数据主存储在 L2（RDF Triple Store），热缓存用 redb。
 
 #### RDF 数据模型（L2 Named Graph: `iri://workspace`）
 
@@ -381,7 +381,7 @@ fn load_workspace_frames() -> Vec<ProjectionFrame> {
 
 ### 12.4.3 ContentStore — 内容缓存与差分
 
-**设计原则**：独立于 L2（内容太大不适合 RDF），使用 LRU 内存缓存 + 磁盘 sled 持久化。
+**设计原则**：独立于 L2（内容太大不适合 RDF），使用 LRU 内存缓存 + 磁盘 redb 持久化。
 
 ```rust
 pub struct ContentStore {
@@ -389,8 +389,8 @@ pub struct ContentStore {
     lines_cache: LruCache<String, CachedContent>,
     /// 文件路径 → 当前版本号
     version_index: HashMap<String, u64>,
-    /// sled 持久化存储（用于历史版本内容）
-    version_store: Option<sled::Db>,
+    /// redb 持久化存储（用于历史版本内容）
+    version_store: Option<redb::Database>,
     /// 缓存大小限制
     max_cache_bytes: usize,
     current_cache_bytes: usize,
@@ -633,7 +633,7 @@ PerceptionTrigger::ResourceConflict → "检测到外部进程大量修改工作
 
 | 项 | 预估 |
 |----|------|
-| sled 热缓存（元数据） | ~5MB（10,000 文件 × 500 bytes/entry） |
+| redb 热缓存（元数据） | ~5MB（10,000 文件 × 500 bytes/entry） |
 | ContentStore LRU 缓存 | 可配置，默认 64MB |
 | L2 Oxigraph 内存 | 约 50MB（已有，新增 workspace graph 很小） |
 | DiffEngine 临时缓冲 | 单次 < 4MB |
@@ -646,10 +646,10 @@ PerceptionTrigger::ResourceConflict → "检测到外部进程大量修改工作
 |------|------|---------|
 | file_read 缓存命中 | LRU 内存 → 直接返回 | < 0.1ms |
 | file_read 缓存失效 | 读盘 + 计算 hash + diff | 1-50ms（取决于文件大小） |
-| file_list | sled 热缓存 | < 1ms |
+| file_list | redb 热缓存 | < 1ms |
 | file_list 降级 | L2 SPARQL 查询 | 2-5ms |
-| notify 事件 → 状态更新 | EventBus → sled write + L2 SPARQL UPDATE | < 5ms |
-| 全量扫描（10,000 文件） | walkdir + sled 批量写入 | < 3s（后台异步） |
+| notify 事件 → 状态更新 | EventBus → redb write + L2 SPARQL UPDATE | < 5ms |
+| 全量扫描（10,000 文件） | walkdir + redb 批量写入 | < 3s（后台异步） |
 | ImportScanner 重扫描 | 读缓存 + regex 解析 | < 10ms/文件 |
 
 ### 12.6.3 防事件风暴
@@ -688,10 +688,10 @@ similar = "2"
 ```
 
 **不需要新增：**
-- `sled = "0.34"` — 已依赖
+- `redb = "4.1"` — 已依赖
 - `walkdir = "2.4"` — 已依赖  
 - `sha2 = "0.10"` — 已依赖
-- `gix` — 不需要（sled + L2 + similar 覆盖所有需求）
+- `gix` — 不需要（redb + L2 + similar 覆盖所有需求）
 
 ---
 
@@ -704,8 +704,8 @@ src/
 ├── tools/
 │   ├── workspace_monitor/
 │   │   ├── mod.rs                # WorkspaceMonitor 初始化 + 全局单例 + Hooks 注册
-│   │   ├── inventory.rs          # FileInventory (L2/L3 facade + sled 热缓存)
-│   │   ├── content_store.rs      # ContentStore (LRU 缓存 + SHA-256 + sled 版本)
+│   │   ├── inventory.rs          # FileInventory (L2/L3 facade + redb 热缓存)
+│   │   ├── content_store.rs      # ContentStore (LRU 缓存 + SHA-256 + redb 版本)
 │   │   ├── diff_engine.rs        # DiffEngine (similar crate 封装)
     │   │   ├── snapshot.rs           # SnapshotManager (workspace 快照 + 回滚)
     │   │   └── watch_engine.rs       # WatchEngine (notify → EventBus 封装)
@@ -731,15 +731,15 @@ src/
 
 | 决策 | 理由 |
 |------|------|
-| **不用 gix** | sled + sha2 + similar 覆盖版本存储和 diff，编译/二进制开销远小于 gix |
-| **元数据用 L2 + sled** | L2 提供 SPARQL 查询能力，sled 提供微秒级热缓存 |
+| **不用 gix** | redb + sha2 + similar 覆盖版本存储和 diff，编译/二进制开销远小于 gix |
+| **元数据用 L2 + redb** | L2 提供 SPARQL 查询能力，redb 提供微秒级热缓存 |
 | **内容用独立 ContentStore** | 文件内容太大不适合 RDF 存储，LRU 内存缓存更高效 |
-| **不用 gix** | sled + sha2 + similar 覆盖所有版本化需求，避免引入重型依赖 |
+| **不用 gix** | redb + sha2 + similar 覆盖所有版本化需求，避免引入重型依赖 |
 | **WatchEngine 不复用 mpsc** | 直接用 EventBus broadcast，PerceptionEngine/Batch Agent 可自由订阅 |
 | **Hooks 复用 HookManager** | 与 ToolGuard 统一生命周期，AgentRunner 统一管理 |
-| **FileInventory 是 facade** | 不维护独立数据结构，数据主存储 L2 + sled |
-| **s + sha2 + similar 覆盖所有版本化需求，避免引入重型依赖** | — |  
+| **FileInventory 是 facade** | 不维护独立数据结构，数据主存储 L2 + redb |
+| **redb + sha2 + similar 覆盖所有版本化需求，避免引入重型依赖** | — |  
 | **WatchEngine 不复用 mpsc** | 直接用 EventBus broadcast，PerceptionEngine/Batch Agent 可自由订阅 |
 | **Hooks 复用 HookManager** | 与 ToolGuard 统一生命周期，AgentRunner 统一管理 |
-| **FileInventory 是 facade** | 不维护独立数据结构，数据主存储 L2 + sled |
-| **sled 仅做热缓存** | L2 是权威数据源，sled 是加速层（crash 可从 L2 重建） |
+| **FileInventory 是 facade** | 不维护独立数据结构，数据主存储 L2 + redb |
+| **redb 仅做热缓存** | L2 是权威数据源，redb 是加速层（crash 可从 L2 重建） |

@@ -184,7 +184,7 @@ flowchart TB
     end
     
     subgraph "Storage Layers"
-        L0_STORE["L0 Persistent Store<br/>━━━━━━━━<br/>Sled KV + Qdrant Vectors<br/>Full fidelity archive"]
+        L0_STORE["L0 Persistent Store<br/>━━━━━━━━<br/>redb KV + HyperspaceEngine<br/>Full fidelity archive"]
         L2_MEM["L2 Oxigraph Memory<br/>━━━━━━━━<br/>In-memory RDF<br/>Fast queries ~2ms"]
     end
     
@@ -237,7 +237,7 @@ Result: L1/L2 stay lean, full fidelity preserved in L0, on-demand loading via IR
 | Working Set | RAM (fast, limited) | L2 Oxigraph (fast, ~2ms) |
 | Page Table | Virtual→Physical mapping | IRI references |
 | Page Fault | Disk → RAM load | L0 → L2 load |
-| Swap Space | Disk storage | L0 Sled + Qdrant |
+| Swap Space | Disk storage | L0 redb + HyperspaceEngine |
 
 This design achieves:
 - ✅ **Performance**: L2 in-memory queries at ~2ms latency
@@ -267,7 +267,7 @@ let jsonld_node = json!({
     "mem:think": llm_output.think,
     "mem:contents": llm_output.contents,
     "mem:summary": llm_output.summary,
-    "mem:embeddingPointId": qdrant_client.index(&llm_output.contents).await?
+    "mem:embedding": embedding_service.index(&llm_output.contents).await?
 });
 
 // Step 3: Write to L0 persistent store (full fidelity archive)
@@ -293,7 +293,7 @@ Gliding Horse Agent OS implements a **unified knowledge graph** that seamlessly 
 ```mermaid
 graph TB
     subgraph "Core Subsystems"
-        SG["Skill Graph<br/>━━━━━━━━<br/>7.5k LOC subsystem<br/>Dynamic evolution"]
+        SG["Skill Graph<br/>━━━━━━━━<br/>15 modules<br/>Dynamic evolution"]
         MEM["L0-L3 Memory System<br/>━━━━━━━━<br/>CPU cache-inspired hierarchy<br/>MESI coherence"]
         KG["Knowledge Graph<br/>━━━━━━━━<br/>Code AST + RDF triples<br/>SPARQL queries"]
         TSK["5W2H Task Ontology<br/>━━━━━━━━<br/>Structured intent modeling<br/>Dimension-level audit"]
@@ -318,7 +318,7 @@ graph TB
 **Key Innovation**: Rather than maintaining separate databases for skills, memories, tasks, and code knowledge, all data resides in a **single Oxigraph store** using named graphs for isolation. This enables:
 
 1. **Cross-Subsystem Queries**: SPARQL can join skill definitions with task history and code artifacts
-2. **Unified Indexing**: Vector embeddings (Qdrant) link to RDF nodes via `mem:embeddingPointId`
+2. **Unified Indexing**: Vector embeddings (HyperspaceEngine) link to RDF nodes via `mem:embedding`
 3. **Consistent Identity**: `@id` ensures the same entity is recognized across all contexts
 
 ### 3.2 Practical Example: End-to-End Workflow
@@ -439,7 +439,7 @@ WHERE {
 |-----------|---------|-----------|
 | L2 Node Insert | ~2ms | Oxigraph in-memory INSERT |
 | L3 SPARQL Query | ~15ms | CONSTRUCT with Frame projection |
-| L0 Vector Search | ~50ms | Qdrant HNSW index |
+| L0 Vector Search | ~1ms | HyperspaceEngine HNSW index |
 | Skill Discovery | ~20ms | SPARQL + vector similarity |
 | Code AST Parse | ~100ms | Tree-sitter incremental parsing |
 | Harness Validation | ~5ms | JSON Schema + SHACL check |
@@ -492,7 +492,7 @@ graph TB
         IRI_BUS["JSON-LD IRI Address Bus<br/>Every entity and document has a unique IRI"]
     end
     subgraph "Dual-Channel Retrieval Engine"
-        VECTOR["Qdrant Vector Engine<br/>Semantic approximate matching<br/>Returns IRI list of similar docs/entities"]
+        VECTOR["HyperspaceEngine<br/>Semantic approximate matching<br/>Returns IRI list of similar docs/entities"]
         GRAPH["Oxigraph Graph Database<br/>Precise relationship traversal<br/>SPARQL queries over entities"]
     end
     subgraph "Fusion Scheduler"
@@ -512,11 +512,11 @@ graph TB
 
 **Three Key Innovations:**
 
-1. **IRI as Universal Identifier:** Every vector point in Qdrant corresponds to an IRI (`qdrant:pointId → urn:memory:session-042/block-017`). Vector retrieval returns a set of IRIs, not isolated text chunks.
+1. **IRI as Universal Identifier:** Every embedding vector in HyperspaceEngine corresponds to an IRI (`hyperspace:embedding → urn:memory:session-042/block-017`). Vector retrieval returns a set of IRIs, not isolated text chunks.
 
 2. **IRI as Bridge:** Once IRIs are obtained, the L3 Projection Engine immediately executes SPARQL queries in Oxigraph to retrieve all associated properties, upstream/downstream relationships, and historical versions of the entities — enabling seamless bridging between vector semantics and graph structure.
 
-3. **Bidirectional Cross-Retrieval:** Users can also first pinpoint an entity in the graph, then use its embedding vector to find semantically similar entities in Qdrant — forming a complete retrieval loop from precise to fuzzy.
+3. **Bidirectional Cross-Retrieval:** Users can also first pinpoint an entity in the graph, then use its embedding vector to find semantically similar entities via HyperspaceEngine — forming a complete retrieval loop from precise to fuzzy.
 
 ---
 

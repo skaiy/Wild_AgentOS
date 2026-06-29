@@ -101,7 +101,7 @@ graph TB
         L3C["物化视图缓存"]
     end
     
-    subgraph L0["L0: 持久存储<br/>(Sled KV + Qdrant 向量)<br/>━━━━━━━━━━━━━━━<br/>速度: ~1ms 读取<br/>容量: 无限（磁盘支持）"]
+    subgraph L0["L0: 持久存储<br/>(redb KV + HyperspaceEngine)<br/>━━━━━━━━━━━━━━━<br/>速度: ~1ms 读取<br/>容量: 无限（磁盘支持）"]
         L0A["完整对话历史"]
         L0B["向量嵌入"]
         L0C["经验档案"]
@@ -376,13 +376,13 @@ flowchart TB
         LLM_OUT["{<br/>  'think': 'Planning...',<br/>  'content': 'CREATE TABLE...',<br/>  'summary': 'Schema designed'<br/>}"]
     end
     
-    subgraph "Harness 引擎处理"
-        HARNESS["Harness 引擎<br/>━━━━━━━━<br/>1. 按 JSON Schema 验证<br/>2. 转换为 JSON-LD 节点<br/>3. 分配 @id<br/>4. 写入 L2 黑板"]
+    subgraph "L2 黑板处理"
+        L2BP["AgentRunner / L2 黑板<br/>━━━━━━━━<br/>1. 按 JSON Schema 验证<br/>2. 转换为 JSON-LD 节点<br/>3. 分配 @id<br/>4. 写入 L2 黑板"]
     end
     
     subgraph "存储层"
         L2_MEM["L2 Oxigraph 内存<br/>━━━━━━━━<br/>内存 RDF<br/>快速查询 ~2ms"]
-        L0_STORE["L0 持久存储<br/>━━━━━━━━<br/>Sled KV + Qdrant<br/>无限容量"]
+        L0_STORE["L0 持久存储<br/>━━━━━━━━<br/>redb KV + HyperspaceEngine<br/>无限容量"]
     end
     
     LLM_OUT --> HARNESS
@@ -418,13 +418,13 @@ flowchart TB
 
 第 2 轮：用户问"我们创建了哪些表？"
   → L1 上下文包含摘要："Database schema for user table..."
-  → 如需详情，Harness 从 L0 解析 IRI "memory:session-001/block-042"
+  → 如需详情，AgentRunner 从 L0 解析 IRI "memory:session-001/block-042"
   → 结果：L1 保持小巧，信息无丢失
 ```
 
-**Harness 引擎的角色**：
+**AgentRunner 与 L2 黑板的角色**：
 
-Harness 引擎充当了以下两者之间的**翻译层**：
+AgentRunner（通过 L2 黑板）充当了以下两者之间的**翻译层**：
 - **LLM 的舒适区**：包含 think/content/summary 的简单 JSON
 - **系统的需求**：包含 @id、@type、@context 的 JSON-LD，用于互操作
 
@@ -442,13 +442,13 @@ let jsonld_node = json!({
     "@type": ["mem:MemoryBlock", "exec:TaskResult"],
     "mem:content": llm_output.content,
     "mem:summary": llm_output.summary,
-    "mem:embeddingPointId": qdrant_client.index(&llm_output.content).await?
+    "mem:embedding": embedding_service.index(&llm_output.content).await?
 });
 
-// 步骤 3：写入 L2 黑板（Oxigraph 内存）
+// Step 3: Write to L2 blackboard (Oxigraph in-memory)
 l2_manager.insert_node(&jsonld_node)?;
 
-// 步骤 4：安排批量写回 L0
+// Step 4: Schedule batch write-back to L0
 scheduler.schedule_writeback(session_id, block_counter);
 ```
 
@@ -795,10 +795,10 @@ sequenceDiagram
     participant DA
     participant SA
     participant L0
-    participant Harness
+    participant AR as AgentRunner
 
-    DA->>Harness: 报告：当前问题无可用技能
-    Harness->>SA: 通知：需要新技能
+    DA->>AR: 报告：当前问题无可用技能
+    AR->>SA: 通知：需要新技能
 
     rect rgb(230,240,255)
         Note over SA: /learn 阶段
@@ -809,8 +809,8 @@ sequenceDiagram
     end
 
     DA->>DA: 继续解决问题（无技能指导）
-    DA->>Harness: 返回解决方案
-    Harness->>L0: 记录到临时经验节点
+    DA->>AR: 返回解决方案
+    AR->>L0: 记录到临时经验节点
 
     rect rgb(255,240,230)
         Note over SA: /reduce 阶段
@@ -892,7 +892,7 @@ ProactiveEngine 根据 5W2H 约束验证执行：
 | **文件操作** | `file_read`, `file_write`, `file_edit`, `file_list`, `glob_search`, `grep_search` | 符号链接检测，路径遍历防护 |
 | **网络** | `WebFetch`, `WebSearch`（DuckDuckGo 回退链） | TLS 强制，代理支持 |
 | **执行** | `Bash`, `PowerShell`（沙箱化 + 超时）| 可配置超时，受限路径 |
-| **RAG** | `rag_search`, `rag_index`, `rag_chunk` | Qdrant 向量集成 |
+
 | **知识导入** | `knowledge_import_json`, `knowledge_import_url`, `knowledge_import_directory` | 自动图谱化至 RDF |
 | **知识图谱** | `knowledge_extract`, `knowledge_query`, `kg_search`, `kg_neighbors`, `knowledge_extract_code` | SPARQL 查询，AST 解析 |
 | **技能管理** | `create_skill`, `convert_skill`, `list_skills` | LLM 驱动的技能生成 |
@@ -1042,7 +1042,7 @@ graph TB
     end
     
     subgraph Memory["记忆系统"]
-        L0["L0: sled + Qdrant<br/>持久 KV + 向量"]
+        L0["L0: redb + HyperspaceEngine<br/>持久 KV + 向量"]
         L1["L1: Session<br/>每智能体对话"]
         L2["L2: Oxigraph<br/>共享黑板 + RDF"]
         L3["L3: SPARQL CONSTRUCT<br/>投影引擎"]
@@ -1061,7 +1061,7 @@ graph TB
         LLM["LLMClient<br/>OpenAI 兼容"]
         PE["ProactiveEngine<br/>异常检测"]
         JL["JSON-LD Framing<br/>上下文投影"]
-        SKG["Skill Graph<br/>7.5k LOC 子系统"]
+        SKG["Skill Graph<br/>15 个模块"]
         WQ["Worker TaskQueue<br/>yaque + bincode"]
     end
     

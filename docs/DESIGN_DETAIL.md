@@ -74,11 +74,11 @@ stateDiagram-v2
 
 ---
 
-## 2. Five-Layer Memory Architecture: CPU Cache Philosophy Applied to AI
+## 2. Four-Layer Memory Architecture: CPU Cache Philosophy Applied to AI
 
 ### 2.1 Revolutionary Design Inspired by Computer Architecture
 
-Unlike conventional agent frameworks with flat context windows, Gliding Horse implements a **five-layer hierarchical memory system** directly inspired by CPU cache hierarchies (L1/L2/L3 caches + RAM + disk storage).
+Unlike conventional agent frameworks with flat context windows, Gliding Horse implements a **four-layer hierarchical memory system** directly inspired by CPU cache hierarchies (L1/L2/L3 caches + disk storage).
 
 ```mermaid
 graph TB
@@ -101,7 +101,7 @@ graph TB
         L3C["Materialized view cache"]
     end
     
-    subgraph L0["L0: Persistent Store<br/>(Sled KV + Qdrant Vectors)<br/>━━━━━━━━━━━━━━━<br/>Speed: ~1ms read<br/>Capacity: Unlimited (disk-backed)"]
+    subgraph L0["L0: Persistent Store<br/>(redb KV + HyperspaceEngine)<br/>━━━━━━━━━━━━━━━<br/>Speed: ~1ms read<br/>Capacity: Unlimited (disk-backed)"]
         L0A["Full conversation history"]
         L0B["Vector embeddings"]
         L0C["Experience archives"]
@@ -376,13 +376,13 @@ flowchart TB
         LLM_OUT["{<br/>  'think': 'Planning...',<br/>  'content': 'CREATE TABLE...',<br/>  'summary': 'Schema designed'<br/>}"]
     end
     
-    subgraph "Harness Engine Processing"
-        HARNESS["Harness Engine<br/>━━━━━━━━<br/>1. Validate against JSON Schema<br/>2. Convert to JSON-LD node<br/>3. Assign @id<br/>4. Write to L2 blackboard"]
+    subgraph "L2 Blackboard Processing"
+        L2B["AgentRunner / L2 Blackboard<br/>━━━━━━━━<br/>1. Validate against JSON Schema<br/>2. Convert to JSON-LD node<br/>3. Assign @id<br/>4. Write to L2 blackboard"]
     end
     
     subgraph "Storage Layers"
         L2_MEM["L2 Oxigraph Memory<br/>━━━━━━━━<br/>In-memory RDF<br/>Fast queries ~2ms"]
-        L0_STORE["L0 Persistent Store<br/>━━━━━━━━<br/>Sled KV + Qdrant<br/>Unlimited capacity"]
+        L0_STORE["L0 Persistent Store<br/>━━━━━━━━<br/>redb KV + HyperspaceEngine<br/>Unlimited capacity"]
     end
     
     LLM_OUT --> HARNESS
@@ -422,9 +422,9 @@ Turn 2: User asks "What tables did we create?"
   → Result: L1 stays small, no information loss
 ```
 
-**Harness Engine's Role**:
+**AgentRunner & L2 Blackboard Role**:
 
-The Harness engine acts as the **translation layer** between:
+The AgentRunner (via L2 Blackboard) acts as the **translation layer** between:
 - **LLM's comfort zone**: Simple JSON with think/content/summary
 - **System's requirements**: JSON-LD with @id, @type, @context for interoperability
 
@@ -442,7 +442,7 @@ let jsonld_node = json!({
     "@type": ["mem:MemoryBlock", "exec:TaskResult"],
     "mem:content": llm_output.content,
     "mem:summary": llm_output.summary,
-    "mem:embeddingPointId": qdrant_client.index(&llm_output.content).await?
+    "mem:embedding": embedding_service.index(&llm_output.content).await?
 });
 
 // Step 3: Write to L2 blackboard (Oxigraph in-memory)
@@ -825,6 +825,22 @@ sequenceDiagram
 
 This enables **autonomous skill acquisition** without human intervention.
 
+### 5.5 Advanced Skill Graph Features
+
+The Skill Graph has evolved beyond the six link types and automatic evolution described above, adding four advanced subsystems:
+
+**Hypergraph Composition** (`src/skill_graph/types.rs`): First-class `Hyperedge` type with `CompositionType` enum supporting Sequential, Parallel, Conditional, Optional, and Fallback compositions — enabling complex multi-skill workflows as first-class graph nodes.
+
+**Poincaré Structural Embeddings** (`src/skill_graph/embedding.rs`): Computes geometric embeddings from graph topology (prerequisite depth + tag fingerprinting), enabling Poincaré ball-based similarity search and structural clustering of skills.
+
+**Graph Algorithms** (`src/skill_graph/graph_algorithms.rs`): PageRank for skill importance ranking, betweenness centrality for bottleneck detection, label-propagation community detection for automatic skill clustering, DFS prerequisite chain discovery, and Tarjan SCC for cycle detection in the skill dependency graph.
+
+**Formal Invariant Verification** (`src/skill_graph/verification.rs`): Six invariant checks enforcing graph integrity — acyclicity (no circular dependencies), link existence (no dangling references), composite reachability (all sub-skills accessible), no deprecated prerequisites, valid 5W2H metadata, and valid security levels. Violations are flagged before graph mutations are committed.
+
+**Temporal Versioning**: Snapshot and rollback support, allowing the Skill Graph to be checkpointed before mutations and reverted if verification fails.
+
+**Oxigraph SPARQL Bridge**: Real-time bidirectional sync between `SkillGraphStore` and the unified Oxigraph RDF store via SPARQL INSERT/DELETE operations and named graph isolation (`system:skills`).
+
 ---
 
 ## 6. Proactive Perception Engine: Anomaly Detection & Intelligent Intervention
@@ -885,14 +901,13 @@ ProactiveEngine validates execution against 5W2H constraints:
 
 ## 7. Advanced Tool Execution Framework
 
-### 7.1 Built-in Tools (25+) with Micro-Tool System
+### 7.1 Built-in Tools (20+) with Micro-Tool System
 
 | Category | Tools | Innovation |
 |----------|-------|-----------|
 | **File Operations** | `file_read`, `file_write`, `file_edit`, `file_list`, `glob_search`, `grep_search` | Symlink detection, path traversal prevention |
 | **Network** | `WebFetch`, `WebSearch` (DuckDuckGo fallback chain) | TLS enforcement, proxy support |
 | **Execution** | `Bash`, `PowerShell` (sandboxed with timeout) | Configurable timeouts, restricted paths |
-| **RAG** | `rag_search`, `rag_index`, `rag_chunk` | Qdrant vector integration |
 | **Knowledge Import** | `knowledge_import_json`, `knowledge_import_url`, `knowledge_import_directory` | Auto-graphification to RDF |
 | **Knowledge Graph** | `knowledge_extract`, `knowledge_query`, `kg_search`, `kg_neighbors`, `knowledge_extract_code` | SPARQL queries, AST parsing |
 | **Skill Management** | `create_skill`, `convert_skill`, `list_skills` | LLM-powered skill generation |
@@ -1042,7 +1057,7 @@ graph TB
     end
     
     subgraph Memory["Memory System"]
-        L0["L0: sled + Qdrant<br/>Persistent KV + Vectors"]
+        L0["L0: redb + HyperspaceEngine<br/>Persistent KV + Vectors"]
         L1["L1: Session<br/>Per-agent conversation"]
         L2["L2: Oxigraph<br/>Shared blackboard + RDF"]
         L3["L3: SPARQL CONSTRUCT<br/>Projection engine"]
@@ -1061,7 +1076,7 @@ graph TB
         LLM["LLMClient<br/>OpenAI-compatible"]
         PE["ProactiveEngine<br/>Anomaly detection"]
         JL["JSON-LD Framing<br/>Context projection"]
-        SKG["Skill Graph<br/>7.5k LOC subsystem"]
+        SKG["Skill Graph<br/>15 modules"]
         WQ["Worker TaskQueue<br/>yaque + bincode"]
     end
     
