@@ -122,6 +122,10 @@ pub struct App {
     last_completion_tokens: Arc<std::sync::atomic::AtomicU64>,
     status_rx: Option<mpsc::UnboundedReceiver<StatusEvent>>,
     result_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<(String, TaskResult)>>>,
+    /// Last user input string (for topic shift detection)
+    last_user_input: String,
+    /// WorkspaceMonitor handle (for resetting perception on topic shift)
+    workspace_monitor: Option<Arc<glidinghorse::tools::workspace_monitor::WorkspaceMonitor>>,
 }
 
 fn extract_mermaid_blocks(content: &str) -> Vec<MermaidBlock> {
@@ -143,6 +147,47 @@ fn extract_mermaid_blocks(content: &str) -> Vec<MermaidBlock> {
         i += 1;
     }
     blocks
+}
+
+/// Extract keywords from text for topic shift detection (stop-word filtered)
+fn extract_keywords(text: &str) -> Vec<String> {
+    let stop_words = [
+        "a", "an", "the", "is", "are", "was", "were", "be", "been",
+        "being", "have", "has", "had", "do", "does", "did", "will",
+        "would", "could", "should", "may", "might", "shall", "can",
+        "to", "of", "in", "for", "on", "with", "at", "by", "from",
+        "as", "into", "through", "during", "before", "after", "above",
+        "below", "between", "out", "off", "over", "under", "again",
+        "further", "then", "once", "here", "there", "when", "where",
+        "why", "how", "all", "each", "every", "both", "few", "more",
+        "most", "other", "some", "such", "no", "nor", "not", "only",
+        "own", "same", "so", "than", "too", "very", "just", "because",
+        "and", "but", "or", "if", "while", "that", "this", "it", "its",
+        "i", "me", "my", "we", "our", "you", "your", "he", "she", "they",
+        "what", "which", "who", "about", "use", "used",
+    ];
+
+    text.split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+        .filter(|w| w.len() > 2 && !stop_words.contains(&w.as_str()))
+        .collect()
+}
+
+/// Compute keyword overlap ratio between two texts (0.0 = completely different, 1.0 = identical)
+fn keyword_overlap(a: &str, b: &str) -> f64 {
+    let ka = extract_keywords(a);
+    let kb = extract_keywords(b);
+
+    if ka.is_empty() && kb.is_empty() {
+        return 1.0;
+    }
+    if ka.is_empty() || kb.is_empty() {
+        return 0.0;
+    }
+
+    let intersection = ka.iter().filter(|k| kb.contains(k)).count() as f64;
+    let union = (ka.len() + kb.len()) as f64 - intersection;
+    if union == 0.0 { 1.0 } else { intersection / union }
 }
 
 fn strip_mermaid_fences(content: &str) -> String {
@@ -577,6 +622,7 @@ impl App {
             .unwrap_or_else(|_| engine.workspace().to_string());
         let max_iter = engine.max_iterations();
         let context_limit = engine.context_limit();
+        let workspace_monitor = engine.workspace_monitor();
 
         let rt = tokio::runtime::Runtime::new()?;
         let mut app = Self {
@@ -633,6 +679,8 @@ impl App {
             last_completion_tokens,
             status_rx: None,
             result_rx: None,
+            last_user_input: String::new(),
+            workspace_monitor,
         };
 
         let welcome = format!(
@@ -1151,12 +1199,33 @@ impl App {
         let preview: String = input.chars().take(60).collect();
         self.add_event("TASK_START", &preview);
 
-        // Reuse existing task_iri (resume mode) or generate a new one
-        let task_iri = self.current_task_iri.take().unwrap_or_else(|| {
+        // Topic shift detection: compare new input with previous input
+        const TOPIC_SHIFT_THRESHOLD: f64 = 0.3;
+        let is_topic_shift = if self.current_task_iri.is_some() && !self.last_user_input.is_empty() {
+            let overlap = keyword_overlap(&self.last_user_input, &input);
+            overlap < TOPIC_SHIFT_THRESHOLD
+        } else {
+            // First task or no previous context → new topic
+            true
+        };
+
+        let task_iri = if is_topic_shift {
+            // Topic shift: reset workspace perception, generate new task_iri
+            if let Some(ref wm) = self.workspace_monitor {
+                wm.reset_inventory();
+                tracing::info!("topic shift detected, resetting workspace perception");
+            }
             let task_id = uuid::Uuid::new_v4().to_string();
             format!("iri://task/{}", task_id)
-        });
+        } else {
+            // Same topic: reuse existing task_iri for continuity
+            self.current_task_iri.take().unwrap_or_else(|| {
+                let task_id = uuid::Uuid::new_v4().to_string();
+                format!("iri://task/{}", task_id)
+            })
+        };
         self.current_task_iri = Some(task_iri.clone());
+        self.last_user_input = input.clone();
 
         let (status_tx, status_rx) = mpsc::unbounded_channel::<StatusEvent>();
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
@@ -1203,7 +1272,7 @@ impl App {
     }
 
     fn complete_task(&mut self, result: anyhow::Result<(String, TaskResult)>) {
-        self.current_task_iri = None;
+        // Keep current_task_iri alive for task continuity & topic shift detection on next input
         match result {
             Ok((_task_iri, tr)) => {
                 // Resume 模式下不覆盖计数（事件已增量累加）

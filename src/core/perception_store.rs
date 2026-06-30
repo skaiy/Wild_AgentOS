@@ -142,6 +142,14 @@ impl PerceptionStore {
         global.push(entry);
     }
 
+    /// Clear all global perception entries (called on topic shift to prevent cross-task context pollution)
+    pub fn clear_global(&self) {
+        let mut global = self.global.lock().expect("PerceptionStore global lock poisoned");
+        global.clear();
+        let mut dedup = self.dedup_cache.lock().expect("dedup_cache lock poisoned");
+        dedup.retain(|(source, _), _| *source != PerceptionSource::WorkspaceMonitor);
+    }
+
     /// Consumer pull: get all unconsumed perception entries (global + task level), merged into text
     ///
     /// Returns formatted perception text, or empty string if nothing new.

@@ -454,6 +454,16 @@ impl WorkspaceMonitor {
     }
 
     /// Generate workspace file status summary text for injection into perception region
+    /// Reset the file inventory, clearing all tracked files.
+    /// Called on topic shift to prevent files from previous tasks leaking into new task perception.
+    pub fn reset_inventory(&self) {
+        self.inventory.write().clear_all();
+        let ps = self.perception_store.read();
+        if let Some(ref store) = *ps {
+            store.clear_global();
+        }
+    }
+
     pub fn generate_perception_text(&self) -> Option<String> {
         let inv = self.inventory.read();
         let all = inv.list_all();
