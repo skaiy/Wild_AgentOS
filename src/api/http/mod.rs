@@ -326,6 +326,10 @@ pub fn build_router(
         .route("/api/v1/guard/stats", get(guard_stats_handler))
         .route("/api/v1/kg/import", post(kg_import_handler))
         .route("/api/v1/kg/query", post(kg_query_handler))
+        // ── 本体层（Ontology Layer）只读元数据 ──
+        .route("/api/v1/knowledge-packs", get(list_knowledge_packs_handler))
+        .route("/api/v1/ontology/types", get(ontology_types_handler))
+        .route("/api/v1/ontology/actions/:id/invoke", post(invoke_action_handler))
         // ── 知识库分类管理 CRUD ──
         .route("/api/v1/kb/categories", get(list_kb_categories_handler).post(create_kb_category_handler))
         .route("/api/v1/kb/categories/:id", put(update_kb_category_handler).delete(delete_kb_category_handler))
@@ -1295,6 +1299,272 @@ pub struct KbCategoryCreateRequest {
     pub description: Option<String>,
 }
 
+/// GET /api/v1/knowledge-packs — 返回系统内置的知识包清单（含本体统计摘要）
+///
+/// 本体层只读元数据：每个知识包封装独立的 RDF 命名图与向量命名空间，支持 Agent 挂载与包间隔离。
+async fn list_knowledge_packs_handler() -> impl IntoResponse {
+    let packs = crate::knowledge_graph::ontology_layer::knowledge_packs();
+    Json(json!({ "count": packs.len(), "knowledge_packs": packs }))
+}
+
+/// GET /api/v1/ontology/types — 返回新能源车维修域本体定义（对象/链接/动作/函数）
+///
+/// 语义层（ObjectType/LinkType）+ 动力层（ActionType/FunctionDef）的完整元模型。
+async fn ontology_types_handler() -> impl IntoResponse {
+    let ont = crate::knowledge_graph::ontology_layer::ev_repair_ontology();
+    Json(json!({
+        "domain": ont.domain,
+        "counts": {
+            "object_types": ont.object_types.len(),
+            "link_types": ont.link_types.len(),
+            "action_types": ont.action_types.len(),
+            "functions": ont.functions.len(),
+        },
+        "object_types": ont.object_types,
+        "link_types": ont.link_types,
+        "action_types": ont.action_types,
+        "functions": ont.functions,
+    }))
+}
+
+// ─── 动力层执行器（ActionType invoke）──────────────────────────────────
+//
+// 让知识图谱从"只读"变为"可写可执行"：依据 ActionType 做参数校验 + 前置条件检查，
+// 再把 side-effect 以 SPARQL 写回新能源车维修知识包的命名图（graph:pack/ev-repair）。
+
+/// 新能源车维修知识包的命名图（写回隔离单元）。
+const EV_PACK_GRAPH: &str = "graph:pack/ev-repair";
+const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+
+/// 本体实例 IRI：https://agentos.ontology/ev/{ObjectType}/{key}
+fn ev_instance_iri(obj_type: &str, key: &str) -> String {
+    format!("https://agentos.ontology/ev/{}/{}", obj_type, iri_safe(key))
+}
+/// 对象类型 / 链接类型 IRI（与 ontology_layer 的 ev() 一致）。
+fn ev_term_iri(name: &str) -> String {
+    format!("https://agentos.ontology/ev/{}", name)
+}
+/// 属性谓词 IRI。
+fn ev_prop_iri(name: &str) -> String {
+    format!("https://agentos.ontology/ev/prop/{}", name)
+}
+/// 主键值转 IRI 安全片段。
+fn iri_safe(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_whitespace() || matches!(c, '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\') { '_' } else { c })
+        .collect()
+}
+
+/// 文本字面量项（含转义引号）。
+fn lit(s: &str) -> String { format!("\"{}\"", sparql_literal(s)) }
+/// 十进制数值字面量项。
+fn lit_decimal(n: f64) -> String { format!("\"{}\"^^<{}>", n, XSD_DECIMAL) }
+
+/// 属性 upsert：先删旧值再写新值（idempotent）。obj 为完整对象项。
+fn upsert_prop_stmts(subject: &str, prop: &str, obj: &str) -> Vec<String> {
+    vec![
+        format!("DELETE WHERE {{ GRAPH <{g}> {{ <{s}> <{p}> ?old }} }}", g = EV_PACK_GRAPH, s = subject, p = prop),
+        format!("INSERT DATA {{ GRAPH <{g}> {{ <{s}> <{p}> {o} }} }}", g = EV_PACK_GRAPH, s = subject, p = prop, o = obj),
+    ]
+}
+
+/// 命名图内对象是否存在（前置条件检查）。
+fn ev_object_exists(kg: &KnowledgeGraphStore, iri: &str) -> bool {
+    let q = format!(
+        "SELECT ?o WHERE {{ GRAPH <{g}> {{ <{iri}> ?p ?o }} }} LIMIT 1",
+        g = EV_PACK_GRAPH, iri = iri,
+    );
+    kg.query_sparql(&q, None).map(|r| !r.is_empty()).unwrap_or(false)
+}
+
+fn p_str(params: &serde_json::Map<String, Value>, name: &str) -> Option<String> {
+    match params.get(name) {
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    }
+}
+fn p_num(params: &serde_json::Map<String, Value>, name: &str) -> Option<f64> {
+    match params.get(name) {
+        Some(Value::Number(n)) => n.as_f64(),
+        Some(Value::String(s)) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ActionInvokeRequest {
+    /// applies_to 对象实例的主键值（动作作用的目标对象）。
+    #[serde(default)]
+    pub target: Option<String>,
+    /// 动作参数（name → value）。
+    #[serde(default)]
+    pub params: serde_json::Map<String, Value>,
+    /// 仅校验并返回将执行的 SPARQL，不真正写回。
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// POST /api/v1/ontology/actions/:id/invoke — 动力层执行器
+async fn invoke_action_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(action_id): axum::extract::Path<String>,
+    Json(req): Json<ActionInvokeRequest>,
+) -> impl IntoResponse {
+    let ont = crate::knowledge_graph::ontology_layer::ev_repair_ontology();
+    let action = match ont.action_types.iter().find(|a| a.id == action_id) {
+        Some(a) => a.clone(),
+        None => return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("未知动作类型: {}", action_id) }))),
+    };
+
+    // 1. 参数校验：必填项存在且非空。
+    let missing: Vec<String> = action
+        .parameters
+        .iter()
+        .filter(|p| p.required && p_str(&req.params, &p.name).is_none())
+        .map(|p| p.name.clone())
+        .collect();
+    if !missing.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "缺少必填参数", "missing": missing })));
+    }
+
+    let kg = match KnowledgeGraphStore::with_shared_store(state.kg_store.clone()) {
+        Ok(kg) => kg,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))),
+    };
+
+    // 2. 前置条件 + 3. 组装 side-effect 写回 SPARQL（按动作分派）。
+    let now = chrono::Utc::now().to_rfc3339();
+    let (statements, result_meta) = match build_action_effects(&action_id, &req, &kg, &now) {
+        Ok(v) => v,
+        Err((code, msg)) => return (code, Json(json!({ "error": msg }))),
+    };
+
+    if req.dry_run {
+        return (StatusCode::OK, Json(json!({
+            "status": "dry_run",
+            "action": action_id,
+            "graph": EV_PACK_GRAPH,
+            "sparql": statements,
+            "result": result_meta,
+        })));
+    }
+
+    // 4. 执行写回命名图。
+    for stmt in &statements {
+        if let Err(e) = state.kg_store.update(stmt) {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("写回失败: {e}"), "sparql": stmt })));
+        }
+    }
+    let _ = state.kg_store.flush();
+
+    (StatusCode::OK, Json(json!({
+        "status": "ok",
+        "action": action_id,
+        "graph": EV_PACK_GRAPH,
+        "applied": statements.len(),
+        "result": result_meta,
+    })))
+}
+
+/// 按动作类型组装前置条件校验 + side-effect 写回 SPARQL 语句序列。
+fn build_action_effects(
+    action_id: &str,
+    req: &ActionInvokeRequest,
+    kg: &KnowledgeGraphStore,
+    now: &str,
+) -> Result<(Vec<String>, Value), (StatusCode, String)> {
+    let g = EV_PACK_GRAPH;
+    let bad = |m: String| (StatusCode::BAD_REQUEST, m);
+    match action_id {
+        // 依据已确诊故障码为车辆创建维修工单，并建立 forVehicle / diagnoses 链接。
+        "GenerateRepairOrder" => {
+            let fault_code = req.target.clone().ok_or_else(|| bad("缺少 target（故障码主键）".into()))?;
+            let vin = p_str(&req.params, "vehicle_vin").unwrap();
+            let vehicle_iri = ev_instance_iri("Vehicle", &vin);
+            if !ev_object_exists(kg, &vehicle_iri) {
+                return Err(bad(format!("前置条件不满足：车辆VIN不存在于图谱 ({vin})")));
+            }
+            let fault_iri = ev_instance_iri("FaultCode", &fault_code);
+            if !ev_object_exists(kg, &fault_iri) {
+                return Err(bad(format!("前置条件不满足：故障码未确诊/不存在 ({fault_code})")));
+            }
+            let order_id = format!("RO-{}", uuid::Uuid::new_v4().hyphenated());
+            let order_iri = ev_instance_iri("RepairOrder", &order_id);
+            let mut triples = vec![
+                format!("<{o}> a <{c}>", o = order_iri, c = ev_term_iri("RepairOrder")),
+                format!("<{o}> <{p}> {v}", o = order_iri, p = ev_prop_iri("order_id"), v = lit(&order_id)),
+                format!("<{o}> <{p}> {v}", o = order_iri, p = ev_prop_iri("vehicle_vin"), v = lit(&vin)),
+                format!("<{o}> <{p}> {v}", o = order_iri, p = ev_prop_iri("fault_code"), v = lit(&fault_code)),
+                format!("<{o}> <{p}> {v}", o = order_iri, p = ev_prop_iri("status"), v = lit("待处理")),
+                format!("<{o}> <{p}> {v}", o = order_iri, p = ev_prop_iri("created_at"), v = lit(now)),
+                format!("<{o}> <{l}> <{veh}>", o = order_iri, l = ev_term_iri("forVehicle"), veh = vehicle_iri),
+                format!("<{o}> <{l}> <{f}>", o = order_iri, l = ev_term_iri("diagnoses"), f = fault_iri),
+                format!("<{o}> <{lbl}> {v}", o = order_iri, lbl = RDFS_LABEL, v = lit(&order_id)),
+            ];
+            if let Some(a) = p_str(&req.params, "assigned_to") {
+                triples.push(format!("<{o}> <{p}> {v}", o = order_iri, p = ev_prop_iri("assigned_to"), v = lit(&a)));
+            }
+            if let Some(c) = p_num(&req.params, "estimated_cost") {
+                triples.push(format!("<{o}> <{p}> {v}", o = order_iri, p = ev_prop_iri("estimated_cost"), v = lit_decimal(c)));
+            }
+            let stmt = format!("INSERT DATA {{ GRAPH <{g}> {{ {t} . }} }}", g = g, t = triples.join(" .\n"));
+            Ok((vec![stmt], json!({ "order_id": order_id, "order_iri": order_iri, "vehicle": vehicle_iri, "fault_code": fault_iri })))
+        }
+        // 检测后写回电池 SOH（0-100），并记录更新时间。
+        "UpdateBatterySoh" => {
+            let battery_id = p_str(&req.params, "battery_id").unwrap();
+            let soh = p_num(&req.params, "soh").ok_or_else(|| bad("soh 必须为数值".into()))?;
+            if !(0.0..=100.0).contains(&soh) {
+                return Err(bad("前置条件不满足：SOH 取值需在 0-100".into()));
+            }
+            let bat_iri = ev_instance_iri("Battery", &battery_id);
+            if !ev_object_exists(kg, &bat_iri) {
+                return Err(bad(format!("前置条件不满足：电池对象不存在 ({battery_id})")));
+            }
+            let mut stmts = upsert_prop_stmts(&bat_iri, &ev_prop_iri("soh"), &lit_decimal(soh));
+            stmts.extend(upsert_prop_stmts(&bat_iri, &ev_prop_iri("soh_updated_at"), &lit(now)));
+            Ok((stmts, json!({ "battery": bat_iri, "soh": soh })))
+        }
+        // 对存在批次性缺陷的车型打召回标记。
+        "MarkRecall" => {
+            let model_id = p_str(&req.params, "model_id").unwrap();
+            let reason = p_str(&req.params, "recall_reason").unwrap();
+            let model_iri = ev_instance_iri("VehicleModel", &model_id);
+            if !ev_object_exists(kg, &model_iri) {
+                return Err(bad(format!("前置条件不满足：车型对象不存在 ({model_id})")));
+            }
+            let mut stmts = upsert_prop_stmts(&model_iri, &ev_prop_iri("recalled"), &lit("true"));
+            stmts.extend(upsert_prop_stmts(&model_iri, &ev_prop_iri("recall_reason"), &lit(&reason)));
+            stmts.extend(upsert_prop_stmts(&model_iri, &ev_prop_iri("recall_marked_at"), &lit(now)));
+            Ok((stmts, json!({ "model": model_iri, "recalled": true, "recall_reason": reason })))
+        }
+        // 将一次诊断沉淀为 FAQ，挂接到对应故障码。
+        "AppendFaq" => {
+            let code = req.target.clone().or_else(|| p_str(&req.params, "code")).ok_or_else(|| bad("缺少 target/code（故障码主键）".into()))?;
+            let question = p_str(&req.params, "question").unwrap();
+            let answer = p_str(&req.params, "answer").unwrap();
+            let fault_iri = ev_instance_iri("FaultCode", &code);
+            if !ev_object_exists(kg, &fault_iri) {
+                return Err(bad(format!("前置条件不满足：故障码对象不存在 ({code})")));
+            }
+            let faq_id = format!("FAQ-{}", uuid::Uuid::new_v4().hyphenated());
+            let faq_iri = ev_instance_iri("FAQ", &faq_id);
+            let triples = vec![
+                format!("<{f}> a <{c}>", f = faq_iri, c = ev_term_iri("FAQ")),
+                format!("<{f}> <{p}> {o}", f = faq_iri, p = ev_prop_iri("faq_id"), o = lit(&faq_id)),
+                format!("<{f}> <{p}> {o}", f = faq_iri, p = ev_prop_iri("question"), o = lit(&question)),
+                format!("<{f}> <{p}> {o}", f = faq_iri, p = ev_prop_iri("answer"), o = lit(&answer)),
+                format!("<{f}> <{lbl}> {o}", f = faq_iri, lbl = RDFS_LABEL, o = lit(&question)),
+                format!("<{fc}> <{l}> <{f}>", fc = fault_iri, l = ev_term_iri("relatedFaq"), f = faq_iri),
+            ];
+            let stmt = format!("INSERT DATA {{ GRAPH <{g}> {{ {t} . }} }}", g = g, t = triples.join(" .\n"));
+            Ok((vec![stmt], json!({ "faq_id": faq_id, "faq_iri": faq_iri, "fault_code": fault_iri })))
+        }
+        _ => Err((StatusCode::NOT_FOUND, format!("动作 {action_id} 暂未实现执行器"))),
+    }
+}
+
 /// GET /api/v1/kb/categories — 返回全部知识库分类
 async fn list_kb_categories_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let categories = state.kb_categories.read().await.clone();
@@ -1762,6 +2032,19 @@ mod tests {
     use axum::http::StatusCode;
     use tower::ServiceExt; // oneshot
 
+    /// 构造一个最小可用的 UnifiedGateway（不触网，仅满足 AppState 依赖）。
+    fn test_gateway() -> UnifiedGateway {
+        UnifiedGateway::new(&crate::config::GatewaySettings {
+            base_url: "http://localhost".into(),
+            api_key: String::new(),
+            default_model: "test-model".into(),
+            timeout_seconds: 30,
+            max_retries: 1,
+            model_mapping: std::collections::HashMap::new(),
+        })
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn test_config_handler_returns_sanitized_config() {
         // 构造一个包含 api_key 的测试配置
@@ -1799,9 +2082,11 @@ mod tests {
         };
         let core = Arc::new(SemanticCore::new(test_core_config).unwrap());
         let kg_store = Arc::new(oxigraph::store::Store::new().unwrap());
+        let gateway = Arc::new(test_gateway());
 
         let state = Arc::new(AppState {
             core,
+            gateway,
             kg_store,
             config_info: Arc::new(tokio::sync::RwLock::new(test_config.clone())),
             agents_info: serde_json::json!({ "count": 0, "agents": [] }),
@@ -1867,8 +2152,10 @@ mod tests {
             .unwrap(),
         );
         let kg_store = Arc::new(oxigraph::store::Store::new().unwrap());
+        let gateway = Arc::new(test_gateway());
         let state = Arc::new(AppState {
             core,
+            gateway,
             kg_store,
             config_info: Arc::new(tokio::sync::RwLock::new(json!({}))),
             agents_info: json!({ "count": 0, "agents": [] }),
@@ -2045,5 +2332,145 @@ mod tests {
         std::env::remove_var("AGENTOS_DATA_DIR");
         std::env::remove_var("AGENTOS_AUTH_STRICT");
         let _ = std::fs::remove_dir_all(tmp);
+    }
+}
+
+/// 动力层执行器（ActionType invoke）单测：参数/前置条件校验 + SPARQL 组装。
+#[cfg(test)]
+mod ontology_action_tests {
+    use super::*;
+    use oxigraph::store::Store;
+
+    /// 预置车辆/故障码/电池/车型实例于 graph:pack/ev-repair。
+    fn seeded_kg() -> KnowledgeGraphStore {
+        let store = Arc::new(Store::new().unwrap());
+        let seed = format!(
+            "INSERT DATA {{ GRAPH <{g}> {{ \
+             <{veh}> a <{vehc}> . \
+             <{fault}> a <{faultc}> . \
+             <{bat}> a <{batc}> . \
+             <{model}> a <{modelc}> . \
+             }} }}",
+            g = EV_PACK_GRAPH,
+            veh = ev_instance_iri("Vehicle", "LVIN123"),
+            vehc = ev_term_iri("Vehicle"),
+            fault = ev_instance_iri("FaultCode", "P0A80"),
+            faultc = ev_term_iri("FaultCode"),
+            bat = ev_instance_iri("Battery", "BAT-001"),
+            batc = ev_term_iri("Battery"),
+            model = ev_instance_iri("VehicleModel", "M-001"),
+            modelc = ev_term_iri("VehicleModel"),
+        );
+        store.update(&seed).unwrap();
+        KnowledgeGraphStore::with_shared_store(store).unwrap()
+    }
+
+    fn mk_req(target: Option<&str>, params: Value, dry_run: bool) -> ActionInvokeRequest {
+        ActionInvokeRequest {
+            target: target.map(|s| s.to_string()),
+            params: params.as_object().cloned().unwrap_or_default(),
+            dry_run,
+        }
+    }
+
+    #[test]
+    fn test_iri_safe_and_instance_iri() {
+        assert_eq!(iri_safe("P0A80"), "P0A80");
+        assert_eq!(iri_safe("a b"), "a_b");
+        assert_eq!(ev_instance_iri("Vehicle", "X 1"), "https://agentos.ontology/ev/Vehicle/X_1");
+        assert_eq!(ev_prop_iri("soh"), "https://agentos.ontology/ev/prop/soh");
+    }
+
+    #[test]
+    fn test_generate_repair_order_ok() {
+        let kg = seeded_kg();
+        let r = mk_req(Some("P0A80"), json!({"vehicle_vin": "LVIN123", "assigned_to": "张工", "estimated_cost": 1200}), false);
+        let (stmts, meta) = build_action_effects("GenerateRepairOrder", &r, &kg, "2026-01-01T00:00:00Z").unwrap();
+        assert_eq!(stmts.len(), 1);
+        let s = &stmts[0];
+        assert!(s.contains("RepairOrder"));
+        assert!(s.contains("forVehicle"));
+        assert!(s.contains("diagnoses"));
+        assert!(s.contains("张工"));
+        assert!(s.contains("1200"));
+        assert!(meta["order_id"].as_str().unwrap().starts_with("RO-"));
+    }
+
+    #[test]
+    fn test_generate_repair_order_missing_vehicle_precondition() {
+        let kg = seeded_kg();
+        let r = mk_req(Some("P0A80"), json!({"vehicle_vin": "UNKNOWN"}), false);
+        let err = build_action_effects("GenerateRepairOrder", &r, &kg, "t").unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(err.1.contains("车辆VIN不存在"));
+    }
+
+    #[test]
+    fn test_generate_repair_order_missing_target() {
+        let kg = seeded_kg();
+        let r = mk_req(None, json!({"vehicle_vin": "LVIN123"}), false);
+        let err = build_action_effects("GenerateRepairOrder", &r, &kg, "t").unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_update_battery_soh_ok_and_range() {
+        let kg = seeded_kg();
+        let ok = mk_req(None, json!({"battery_id": "BAT-001", "soh": 87.5}), false);
+        let (stmts, meta) = build_action_effects("UpdateBatterySoh", &ok, &kg, "t").unwrap();
+        assert_eq!(stmts.len(), 4); // soh upsert(2) + soh_updated_at upsert(2)
+        assert!(stmts.iter().any(|s| s.contains("DELETE WHERE")));
+        assert!(stmts.iter().any(|s| s.contains("87.5")));
+        assert_eq!(meta["soh"], 87.5);
+
+        let bad = mk_req(None, json!({"battery_id": "BAT-001", "soh": 150}), false);
+        let err = build_action_effects("UpdateBatterySoh", &bad, &kg, "t").unwrap_err();
+        assert!(err.1.contains("0-100"));
+    }
+
+    #[test]
+    fn test_update_battery_soh_missing_battery() {
+        let kg = seeded_kg();
+        let r = mk_req(None, json!({"battery_id": "NOPE", "soh": 50}), false);
+        let err = build_action_effects("UpdateBatterySoh", &r, &kg, "t").unwrap_err();
+        assert!(err.1.contains("电池对象不存在"));
+    }
+
+    #[test]
+    fn test_mark_recall_ok() {
+        let kg = seeded_kg();
+        let r = mk_req(None, json!({"model_id": "M-001", "recall_reason": "电池批次缺陷"}), false);
+        let (stmts, meta) = build_action_effects("MarkRecall", &r, &kg, "t").unwrap();
+        assert_eq!(stmts.len(), 6); // 三个属性各 upsert(2)
+        assert!(stmts.iter().any(|s| s.contains("recalled")));
+        assert!(stmts.iter().any(|s| s.contains("电池批次缺陷")));
+        assert_eq!(meta["recalled"], true);
+    }
+
+    #[test]
+    fn test_append_faq_ok_and_links_fault() {
+        let kg = seeded_kg();
+        let r = mk_req(Some("P0A80"), json!({"question": "报警怎么办？", "answer": "请尽快检修"}), false);
+        let (stmts, meta) = build_action_effects("AppendFaq", &r, &kg, "t").unwrap();
+        assert_eq!(stmts.len(), 1);
+        assert!(stmts[0].contains("relatedFaq"));
+        assert!(stmts[0].contains("报警怎么办"));
+        assert!(meta["faq_id"].as_str().unwrap().starts_with("FAQ-"));
+    }
+
+    #[test]
+    fn test_append_faq_missing_fault_precondition() {
+        let kg = seeded_kg();
+        let r = mk_req(Some("NON_EXIST"), json!({"question": "q", "answer": "a"}), false);
+        let err = build_action_effects("AppendFaq", &r, &kg, "t").unwrap_err();
+        assert!(err.1.contains("故障码对象不存在"));
+    }
+
+    #[test]
+    fn test_unknown_action() {
+        let kg = seeded_kg();
+        let r = mk_req(None, json!({}), false);
+        let err = build_action_effects("NoSuchAction", &r, &kg, "t").unwrap_err();
+        assert_eq!(err.0, StatusCode::NOT_FOUND);
     }
 }
