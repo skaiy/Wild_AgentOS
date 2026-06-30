@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -24,6 +24,9 @@ pub struct MemoryManager {
     projection: Arc<ProjectionEngine>,
     config: CoreConfig,
     sessions: HashMap<String, L1Session>,
+    /// 用户态会话隔离：租户 → 活跃 session_id 集合的二级索引（多租户血缘）。
+    /// 在 track_session/close_session 维护，scheduler 与非 scheduler 路径均覆盖。
+    tenant_sessions: HashMap<String, HashSet<String>>,
     scheduler: Option<Arc<MemoryScheduler>>,
     l1_active_count: AtomicU64,
     /// HyperspaceEngine-backed vector store for semantic search.
@@ -56,6 +59,7 @@ impl MemoryManager {
             projection,
             config,
             sessions: HashMap::new(),
+            tenant_sessions: HashMap::new(),
             scheduler: None,
             l1_active_count: AtomicU64::new(0),
             vector_store,
@@ -91,6 +95,7 @@ impl MemoryManager {
             projection,
             config,
             sessions: HashMap::new(),
+            tenant_sessions: HashMap::new(),
             scheduler: Some(scheduler),
             l1_active_count: AtomicU64::new(0),
             vector_store,
@@ -119,16 +124,33 @@ impl MemoryManager {
 
     // ========== L1 Session 管理 ==========
 
-    /// 创建新的 L1 session
+    /// 创建新的 L1 session（无用户态身份，向后兼容）
     pub fn create_session(&mut self, agent_id: &str, agent_role: &str, task_iri: &str) -> L1Session {
-        let session = match self.config.eviction_config {
+        self.create_session_with_identity(agent_id, agent_role, task_iri, None, None)
+    }
+
+    /// 创建带用户态身份（多租户血缘）的 L1 session。
+    ///
+    /// `user_id` / `tenant_id` 由调用方从 `TaskContext` 透传，写入 session 后
+    /// 经 summarize → archive_to_l0/l2 形成跨层租户血缘。
+    pub fn create_session_with_identity(
+        &mut self,
+        agent_id: &str,
+        agent_role: &str,
+        task_iri: &str,
+        user_id: Option<&str>,
+        tenant_id: Option<&str>,
+    ) -> L1Session {
+        let mut session = match self.config.eviction_config {
             Some(cfg) => L1Session::with_config(agent_id, agent_role, task_iri, 2000, cfg),
             None => L1Session::new(agent_id, agent_role, task_iri),
         };
+        session.set_identity(user_id.map(String::from), tenant_id.map(String::from));
         self.l1_active_count.fetch_add(1, Ordering::Relaxed);
         debug!(
             session_id = %session.session_id(),
             agent_id = %agent_id,
+            tenant_id = ?tenant_id,
             "L1 session created"
         );
         session
@@ -139,6 +161,12 @@ impl MemoryManager {
     /// 当 scheduler 存在时, 同时同步到 scheduler 以支持其高层操作。
     pub fn track_session(&mut self, session: L1Session) -> String {
         let id = session.session_id().to_string();
+        if let Some(tenant) = session.tenant_id() {
+            self.tenant_sessions
+                .entry(tenant.to_string())
+                .or_default()
+                .insert(id.clone());
+        }
         if let Some(ref scheduler) = self.scheduler {
             scheduler.insert_session(session);
         } else {
@@ -146,6 +174,27 @@ impl MemoryManager {
         }
         self.l1_active_count.fetch_add(1, Ordering::Relaxed);
         id
+    }
+
+    /// 指定租户当前活跃的 session_id 列表（基于二级索引，两条路径均维护）。
+    pub fn tenant_session_ids(&self, tenant_id: &str) -> Vec<String> {
+        self.tenant_sessions
+            .get(tenant_id)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// 指定租户的活跃 session 数量。
+    pub fn tenant_session_count(&self, tenant_id: &str) -> usize {
+        self.tenant_sessions.get(tenant_id).map(|s| s.len()).unwrap_or(0)
+    }
+
+    /// 返回指定租户在本管理器（非 scheduler 路径）中持有的 session 引用。
+    pub fn sessions_for_tenant(&self, tenant_id: &str) -> Vec<&L1Session> {
+        self.sessions
+            .values()
+            .filter(|s| s.tenant_id() == Some(tenant_id))
+            .collect()
     }
 
     /// 按 ID 获取 session 的不可变引用
@@ -183,8 +232,16 @@ impl MemoryManager {
             );
             Ok(summary)
         };
-        if result.is_ok() {
+        if let Ok(ref summary) = result {
             self.l1_active_count.fetch_sub(1, Ordering::Relaxed);
+            if let Some(ref tenant) = summary.tenant_id {
+                if let Some(set) = self.tenant_sessions.get_mut(tenant) {
+                    set.remove(session_id);
+                    if set.is_empty() {
+                        self.tenant_sessions.remove(tenant);
+                    }
+                }
+            }
         }
         result
     }
@@ -217,6 +274,8 @@ impl MemoryManager {
             "task_iri": summary.task_iri,
             "turn_count": summary.turn_count,
             "summary_text": summary.summary_text,
+            "user_id": summary.user_id,
+            "tenant_id": summary.tenant_id,
         })
         .to_string();
 
@@ -273,6 +332,8 @@ impl MemoryManager {
             "task_iri": summary.task_iri,
             "turn_count": summary.turn_count,
             "summary_text": summary.summary_text,
+            "user_id": summary.user_id,
+            "tenant_id": summary.tenant_id,
         })
         .to_string();
 
@@ -466,5 +527,57 @@ impl MemoryManager {
     /// 获取 Blackboard 引用
     pub fn blackboard(&self) -> &Arc<Blackboard> {
         &self.l2
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::l0_store::L0Store;
+    use crate::memory::l2_blackboard::Blackboard;
+    use crate::memory::l3_projection::ProjectionEngine;
+    use tempfile::tempdir;
+
+    fn build_manager() -> MemoryManager {
+        let dir = tempdir().unwrap();
+        let l0 = Arc::new(L0Store::new(dir.path().to_string_lossy().as_ref()).unwrap());
+        let l2 = Arc::new(Blackboard::new().unwrap());
+        let proj = Arc::new(ProjectionEngine::new(l2.clone(), 500));
+        MemoryManager::new(l0, l2, proj, CoreConfig::default())
+    }
+
+    #[test]
+    fn test_tenant_index_tracks_and_counts() {
+        let mut mm = build_manager();
+
+        let s_a1 = mm.create_session_with_identity("agent_1", "DA", "iri://task/a1", Some("user_1"), Some("tenant_a"));
+        let id_a1 = s_a1.session_id().to_string();
+        mm.track_session(s_a1);
+        let s_a2 = mm.create_session_with_identity("agent_2", "DA", "iri://task/a2", Some("user_2"), Some("tenant_a"));
+        mm.track_session(s_a2);
+        let s_b1 = mm.create_session_with_identity("agent_3", "DA", "iri://task/b1", Some("user_3"), Some("tenant_b"));
+        mm.track_session(s_b1);
+
+        assert_eq!(mm.tenant_session_count("tenant_a"), 2);
+        assert_eq!(mm.tenant_session_count("tenant_b"), 1);
+        assert_eq!(mm.tenant_session_count("tenant_unknown"), 0);
+        assert_eq!(mm.sessions_for_tenant("tenant_a").len(), 2);
+        assert_eq!(mm.sessions_for_tenant("tenant_b").len(), 1);
+
+        // 关闭租户 A 的一个 session，二级索引同步收敛
+        let summary = mm.close_session(&id_a1).unwrap();
+        assert_eq!(summary.tenant_id.as_deref(), Some("tenant_a"));
+        assert_eq!(mm.tenant_session_count("tenant_a"), 1);
+        assert_eq!(mm.sessions_for_tenant("tenant_a").len(), 1);
+    }
+
+    #[test]
+    fn test_create_session_without_identity_is_untenanted() {
+        let mut mm = build_manager();
+        let s = mm.create_session("agent_1", "DA", "iri://task/x");
+        assert_eq!(s.tenant_id(), None);
+        assert_eq!(s.user_id(), None);
+        mm.track_session(s);
+        assert_eq!(mm.tenant_session_count("tenant_a"), 0);
     }
 }

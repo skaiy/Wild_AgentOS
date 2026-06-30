@@ -71,10 +71,12 @@ impl super::AgentRunner {
     }
 
     pub(super) async fn create_session(&self, agent: &AgentInstance, ctx: &TaskContext) -> L1Session {
-        self.memory_manager.lock().await.create_session(
+        self.memory_manager.lock().await.create_session_with_identity(
             &agent.agent_id,
             &agent.role.to_string(),
             &ctx.task_iri,
+            ctx.user_id.as_deref(),
+            ctx.tenant_id.as_deref(),
         )
     }
 

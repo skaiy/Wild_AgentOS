@@ -82,6 +82,31 @@ pub struct SkillMeta {
     pub skill_types: Vec<String>,
 }
 
+/// 技能签名校验结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignatureStatus {
+    /// 未携带签名（系统内建技能默认无签名）。
+    Unsigned,
+    /// 已用受信公钥验证通过。
+    Verified,
+    /// 携带签名但验证失败（公钥不匹配/被篡改）。
+    Invalid,
+    /// 携带签名但未配置任何受信公钥，无法判定。
+    NoTrustAnchor,
+}
+
+impl SignatureStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SignatureStatus::Unsigned => "unsigned",
+            SignatureStatus::Verified => "verified",
+            SignatureStatus::Invalid => "invalid",
+            SignatureStatus::NoTrustAnchor => "no_trust_anchor",
+        }
+    }
+}
+
 /// Cached skill with disclosure level
 #[allow(dead_code)]
 struct CachedSkill {
@@ -93,6 +118,8 @@ struct CachedSkill {
     input_mapping: HashMap<String, String>,
     output_mapping: HashMap<String, String>,
     skill_types: Vec<String>,
+    signature: Option<String>,
+    signature_algorithm: Option<String>,
 }
 
 /// Skill registry with progressive disclosure
@@ -102,6 +129,8 @@ pub struct SkillRegistry {
     skills_by_role: RwLock<HashMap<String, Vec<String>>>,
     skills_by_category: RwLock<HashMap<String, Vec<String>>>,
     jsonld_path: Option<PathBuf>,
+    /// 受信发布者的 Ed25519 公钥（标准 base64），技能签名须由其中之一验证通过。
+    trusted_keys: RwLock<Vec<String>>,
 }
 
 impl SkillRegistry {
@@ -111,6 +140,7 @@ impl SkillRegistry {
             skills_by_role: RwLock::new(HashMap::new()),
             skills_by_category: RwLock::new(HashMap::new()),
             jsonld_path: None,
+            trusted_keys: RwLock::new(Vec::new()),
         };
 
         registry.load_default_skills();
@@ -123,10 +153,73 @@ impl SkillRegistry {
             skills_by_role: RwLock::new(HashMap::new()),
             skills_by_category: RwLock::new(HashMap::new()),
             jsonld_path: Some(path.as_ref().to_path_buf()),
+            trusted_keys: RwLock::new(Vec::new()),
         };
 
         registry.load_default_skills();
         registry
+    }
+
+    /// 追加一个受信发布者公钥（标准 base64 编码的 Ed25519 公钥，32 字节）。
+    pub fn add_trusted_key(&self, public_key_b64: impl Into<String>) {
+        let key = public_key_b64.into();
+        let mut keys = self.trusted_keys.write();
+        if !key.is_empty() && !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+
+    /// 整体替换受信发布者公钥集合。
+    pub fn set_trusted_keys(&self, keys: Vec<String>) {
+        let mut guard = self.trusted_keys.write();
+        *guard = keys.into_iter().filter(|k| !k.is_empty()).collect();
+    }
+
+    /// 受信公钥数量。
+    pub fn trusted_key_count(&self) -> usize {
+        self.trusted_keys.read().len()
+    }
+
+    /// 生成技能签名所覆盖的规范化载荷（发布方须对同一字符串签名）。
+    pub fn signing_payload(skill: &SkillMeta) -> String {
+        format!(
+            "{}|{}|{}|{}|{}|{}",
+            skill.skill_iri,
+            skill.name,
+            skill.version,
+            skill.category,
+            skill.security_level,
+            skill.compiled_template,
+        )
+    }
+
+    /// 校验技能签名状态：无签名 / 已验证 / 无效 / 无信任锚。
+    pub fn verify_skill_signature(&self, skill: &SkillMeta) -> SignatureStatus {
+        let sig = match skill.signature.as_deref() {
+            Some(s) if !s.is_empty() => s,
+            _ => return SignatureStatus::Unsigned,
+        };
+
+        let algo = skill.signature_algorithm.as_deref().unwrap_or("ed25519");
+        if !algo.eq_ignore_ascii_case("ed25519") {
+            return SignatureStatus::Invalid;
+        }
+
+        let keys = self.trusted_keys.read();
+        if keys.is_empty() {
+            return SignatureStatus::NoTrustAnchor;
+        }
+
+        let payload = Self::signing_payload(skill);
+        for key in keys.iter() {
+            if let Ok(true) =
+                crate::skill_graph::security::verify_ed25519(key, payload.as_bytes(), sig)
+            {
+                return SignatureStatus::Verified;
+            }
+        }
+
+        SignatureStatus::Invalid
     }
 
     fn load_default_skills(&self) {
@@ -642,6 +735,8 @@ impl SkillRegistry {
             input_mapping: skill.input_mapping.clone(),
             output_mapping: skill.output_mapping.clone(),
             skill_types: skill.skill_types.clone(),
+            signature: skill.signature.clone(),
+            signature_algorithm: skill.signature_algorithm.clone(),
         };
 
         {
@@ -685,8 +780,8 @@ impl SkillRegistry {
             compiled_template: cached.full.as_ref()
                 .map(|f| f.compiled_template.clone())
                 .unwrap_or_default(),
-            signature: None,
-            signature_algorithm: None,
+            signature: cached.signature.clone(),
+            signature_algorithm: cached.signature_algorithm.clone(),
             input_mapping: cached.input_mapping.clone(),
             output_mapping: cached.output_mapping.clone(),
             skill_types: cached.skill_types.clone(),
@@ -824,12 +919,15 @@ impl SkillRegistry {
         })
     }
 
+    /// 准入校验：技能不存在返回 false；携带签名但验证失败返回 false；
+    /// 未签名或已验证通过的技能返回 true（是否强制签名由上层安全策略决定）。
     pub fn check_signature(&self, skill_iri: &str) -> bool {
-        let skills = self.skills.read();
-        skills.get(skill_iri)
-            .and_then(|c| c.full.as_ref())
-            .map(|_| true)
-            .unwrap_or(false)
+        match self.get_skill(skill_iri) {
+            Some(skill) => {
+                !matches!(self.verify_skill_signature(&skill), SignatureStatus::Invalid)
+            }
+            None => false,
+        }
     }
 
     /// Sync all registered skills to the `system:skills` named graph in oxigraph.
@@ -1259,5 +1357,101 @@ mod tests {
         assert_eq!(skill.skill_types, vec!["iri://skill-types/TestOperation"]);
         assert_eq!(skill.input_mapping.get("param1"), Some(&"iri://schema/test/param1".to_string()));
         assert_eq!(skill.output_mapping.get("result"), Some(&"iri://schema/test/result".to_string()));
+    }
+
+    /// 用固定种子生成 Ed25519 密钥，对 payload 签名，返回 (公钥 base64, 签名 base64)。
+    fn ed25519_sign(seed: u8, payload: &str) -> (String, String) {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine};
+        use ed25519_dalek::{Signer, SigningKey};
+        let sk = SigningKey::from_bytes(&[seed; 32]);
+        let vk = sk.verifying_key();
+        let sig = sk.sign(payload.as_bytes());
+        (B64.encode(vk.to_bytes()), B64.encode(sig.to_bytes()))
+    }
+
+    fn sample_skill(sig: Option<String>) -> SkillMeta {
+        SkillMeta {
+            skill_iri: "iri://skills/signed_demo".to_string(),
+            name: "signed_demo".to_string(),
+            description: "demo".to_string(),
+            version: "1.0.0".to_string(),
+            category: "test".to_string(),
+            security_level: "normal".to_string(),
+            allowed_roles: vec!["DA".to_string()],
+            input_schema: serde_json::json!({"type":"object"}),
+            output_schema: serde_json::json!({"type":"object"}),
+            compiled_template: r#"{"x":"___"}"#.to_string(),
+            signature: sig,
+            signature_algorithm: Some("ed25519".to_string()),
+            input_mapping: Default::default(),
+            output_mapping: Default::default(),
+            skill_types: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_signature_unsigned() {
+        let registry = SkillRegistry::new();
+        let mut skill = sample_skill(None);
+        skill.signature_algorithm = None;
+        assert_eq!(
+            registry.verify_skill_signature(&skill),
+            SignatureStatus::Unsigned
+        );
+    }
+
+    #[test]
+    fn test_signature_no_trust_anchor() {
+        let registry = SkillRegistry::new();
+        let skill = sample_skill(Some("AA==".to_string()));
+        assert_eq!(
+            registry.verify_skill_signature(&skill),
+            SignatureStatus::NoTrustAnchor
+        );
+    }
+
+    #[test]
+    fn test_signature_verified_and_check() {
+        let registry = SkillRegistry::new();
+        let payload = SkillRegistry::signing_payload(&sample_skill(None));
+        let (pk, sig) = ed25519_sign(7, &payload);
+        registry.add_trusted_key(pk);
+        let signed = sample_skill(Some(sig));
+        assert_eq!(
+            registry.verify_skill_signature(&signed),
+            SignatureStatus::Verified
+        );
+        registry.register_skill(signed);
+        assert!(registry.check_signature("iri://skills/signed_demo"));
+    }
+
+    #[test]
+    fn test_signature_invalid_wrong_key() {
+        let registry = SkillRegistry::new();
+        let payload = SkillRegistry::signing_payload(&sample_skill(None));
+        let (_pk, sig) = ed25519_sign(7, &payload);
+        let (other_pk, _) = ed25519_sign(9, &payload);
+        registry.add_trusted_key(other_pk);
+        let signed = sample_skill(Some(sig));
+        assert_eq!(
+            registry.verify_skill_signature(&signed),
+            SignatureStatus::Invalid
+        );
+        registry.register_skill(signed);
+        assert!(!registry.check_signature("iri://skills/signed_demo"));
+    }
+
+    #[test]
+    fn test_signature_invalid_tampered_payload() {
+        let registry = SkillRegistry::new();
+        let payload = SkillRegistry::signing_payload(&sample_skill(None));
+        let (pk, sig) = ed25519_sign(7, &payload);
+        registry.add_trusted_key(pk);
+        let mut tampered = sample_skill(Some(sig));
+        tampered.compiled_template = r#"{"x":"HACKED"}"#.to_string();
+        assert_eq!(
+            registry.verify_skill_signature(&tampered),
+            SignatureStatus::Invalid
+        );
     }
 }

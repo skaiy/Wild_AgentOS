@@ -25,6 +25,8 @@ pub struct HybridSearchFilter {
     pub min_importance: Option<f32>,
     pub jsonld_types: Vec<String>,
     pub named_graph: Option<String>,
+    /// 多租户向量隔离：仅返回归属于此租户的向量条目（以 `tenant:<id>` 标签写入索引）。
+    pub tenant_id: Option<String>,
 }
 
 impl HybridSearchFilter {
@@ -62,6 +64,13 @@ impl HybridSearchFilter {
         self
     }
 
+    /// 限定只返回属于指定租户的向量条目（多租户向量隔离）。
+    /// 写入时需同时调用 `upsert_with_tenant`，或在 tags 中添加 `"tenant:<tenant_id>"`。
+    pub fn with_tenant(mut self, tenant_id: &str) -> Self {
+        self.tenant_id = Some(tenant_id.to_string());
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
         self.must_tags.is_empty()
             && self.should_tags.is_empty()
@@ -69,6 +78,7 @@ impl HybridSearchFilter {
             && self.min_importance.is_none()
             && self.jsonld_types.is_empty()
             && self.named_graph.is_none()
+            && self.tenant_id.is_none()
     }
 }
 
@@ -137,9 +147,11 @@ impl HyperspaceStore {
     /// Convert a `HybridSearchFilter` to a `Vec<JsonLdFilter>` for the engine.
     ///
     /// Semantics matches the original Qdrant filter:
-    /// - `must_tags` / `jsonld_types` / `named_graph` / `min_importance` → ANDed together
+    /// - `must_tags` / `jsonld_types` / `named_graph` / `min_importance` / `tenant_id` → ANDed together
     /// - `should_tags` → OR (at least one must match)
     /// - `must_not_tags` → NOT (none must match)
+    ///
+    /// `tenant_id` 转化为 must_tag `tenant:<id>`，与写入时的 tag 约定一致。
     fn to_jsonld_filters(&self, filter: &HybridSearchFilter) -> Vec<JsonLdFilter> {
         if filter.is_empty() {
             return vec![];
@@ -164,6 +176,10 @@ impl HyperspaceStore {
                 gte: Some(min as f64),
                 lte: None,
             });
+        }
+        // 多租户向量隔离：tenant_id → must_tag "tenant:<id>"
+        if let Some(ref tid) = filter.tenant_id {
+            must_children.push(JsonLdFilter::tag("tags", &format!("tenant:{}", tid)));
         }
         if !must_children.is_empty() {
             engine_filters.push(JsonLdFilter::Must(must_children));
@@ -247,6 +263,21 @@ impl HyperspaceStore {
     /// Store a vector entry by IRI, embedding its text content.
     pub async fn upsert(&self, iri: &str, text: &str, tags: &[String]) -> Result<u32, CoreError> {
         self.upsert_with_metadata(iri, text, tags, None, None, None)
+            .await
+    }
+
+    /// 写入向量条目并自动附加 `tenant:<id>` 标签（多租户向量隔离）。
+    /// 搜索时配合 `HybridSearchFilter::with_tenant(tenant_id)` 使用即可实现完整隔离。
+    pub async fn upsert_with_tenant(
+        &self,
+        iri: &str,
+        text: &str,
+        tags: &[String],
+        tenant_id: &str,
+    ) -> Result<u32, CoreError> {
+        let mut all_tags = tags.to_vec();
+        all_tags.push(format!("tenant:{}", tenant_id));
+        self.upsert_with_metadata(iri, text, &all_tags, None, None, None)
             .await
     }
 
@@ -645,5 +676,74 @@ mod tests {
         let filters = store.to_jsonld_filters(&filter);
         // Expect 3 top-level filters: Must, Should, MustNot
         assert_eq!(filters.len(), 3);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // F2b: 向量搜索租户过滤
+    // ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_with_tenant_sets_field() {
+        let filter = HybridSearchFilter::new().with_tenant("acme");
+        assert_eq!(filter.tenant_id.as_deref(), Some("acme"));
+        // tenant_id 让 filter 非空
+        assert!(!filter.is_empty());
+    }
+
+    #[test]
+    fn test_to_jsonld_filters_tenant_adds_must_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let embed = Arc::new(FallbackEmbeddingService::new());
+        let store = HyperspaceStore::open(dir.path(), embed).unwrap();
+
+        let filter = HybridSearchFilter::new().with_tenant("acme");
+        let filters = store.to_jsonld_filters(&filter);
+        // 应当产生至少一个 Must 条件（tenant tag）
+        assert!(!filters.is_empty());
+        let has_tenant_must = filters.iter().any(|f| matches!(f, JsonLdFilter::Must(_)));
+        assert!(has_tenant_must, "Expected a Must filter for tenant tag");
+    }
+
+    #[tokio::test]
+    async fn test_upsert_with_tenant_tags_vector() {
+        let store = setup_store();
+        store
+            .upsert_with_tenant("tv:1", "battery repair doc", &[], "acme")
+            .await
+            .unwrap();
+        // 通过 tenant 过滤器能找回
+        let filter = HybridSearchFilter::new().with_tenant("acme");
+        let results = store.search_with_filter("battery", &filter, 10).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].iri, "tv:1");
+        assert!(
+            results[0].tags.contains(&"tenant:acme".to_string()),
+            "Expected tenant tag in stored entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tenant_filter_isolates_entries() {
+        let store = setup_store();
+        store
+            .upsert_with_tenant("ti:1", "acme battery data", &[], "acme")
+            .await
+            .unwrap();
+        store
+            .upsert_with_tenant("ti:2", "other battery data", &[], "other_corp")
+            .await
+            .unwrap();
+
+        // acme 只能看到自己的条目
+        let filter_acme = HybridSearchFilter::new().with_tenant("acme");
+        let res_acme = store.search_with_filter("battery", &filter_acme, 10).await.unwrap();
+        assert_eq!(res_acme.len(), 1);
+        assert_eq!(res_acme[0].iri, "ti:1");
+
+        // other_corp 只能看到自己的条目
+        let filter_other = HybridSearchFilter::new().with_tenant("other_corp");
+        let res_other = store.search_with_filter("battery", &filter_other, 10).await.unwrap();
+        assert_eq!(res_other.len(), 1);
+        assert_eq!(res_other[0].iri, "ti:2");
     }
 }

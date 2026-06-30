@@ -716,17 +716,12 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             gateway: GatewaySettings {
-                base_url: "http://localhost:3000".to_string(),
+                base_url: String::new(),
                 api_key: String::new(),
-                default_model: "deepseek-v4-flash".to_string(),
-                timeout_seconds: 30,
+                default_model: String::new(),
+                timeout_seconds: 60,
                 max_retries: 3,
-                model_mapping: std::collections::HashMap::from([
-                    ("planning".to_string(), "deepseek-v4-pro".to_string()),
-                    ("execution".to_string(), "deepseek-v4-pro".to_string()),
-                    ("analysis".to_string(), "deepseek-v4-flash".to_string()),
-                    ("default".to_string(), "deepseek-v4-flash".to_string()),
-                ]),
+                model_mapping: std::collections::HashMap::new(),
             },
             memory: MemorySettings {
                 l0: L0Settings {
@@ -808,6 +803,9 @@ impl Settings {
     pub fn load() -> Result<Self, ConfigError> {
         let config = Config::builder()
             .add_source(config::File::with_name("config").required(false))
+            // 运行期覆盖文件（由 PUT /api/v1/config 写入）：优先级高于 config.yaml，低于环境变量。
+            // 格式为 JSON，路径：data/config_override.json
+            .add_source(config::File::with_name("data/config_override").required(false))
             .add_source(
                 Environment::with_prefix("AGENT_OS")
                     .separator("_")
@@ -820,14 +818,12 @@ impl Settings {
 
     pub fn validate(&self) -> Result<(), String> {
         if self.gateway.base_url.is_empty() {
-            return Err("gateway.base_url must be set".to_string());
+            tracing::warn!("gateway.base_url is not set. LLM features will be unavailable until configured via UI.");
         }
         if self.gateway.api_key.is_empty() {
-            return Err("gateway.api_key must be set (via config.yaml or AGENT_OS_GATEWAY_API_KEY)".to_string());
+            tracing::warn!("gateway.api_key is not set. LLM features will be unavailable until configured via UI or env var.");
         }
-        if self.gateway.default_model.is_empty() {
-            return Err("gateway.default_model must be set".to_string());
-        }
+
         if self.agents.max_iterations == 0 {
             return Err("agents.max_iterations must be > 0".to_string());
         }

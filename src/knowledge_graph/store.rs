@@ -121,19 +121,7 @@ impl KnowledgeGraphStore {
         let final_sparql = match named_graph {
             Some(graph) if !sparql.to_uppercase().contains("GRAPH") => {
                 let g = format!("<{}>", graph);
-                let upper = sparql.to_uppercase();
-                if let Some(where_pos) = upper.find("WHERE") {
-                    let after_where = &sparql[where_pos + 5..];
-                    if let Some(brace_pos) = after_where.find('{') {
-                        let prefix = &sparql[..where_pos + 5 + brace_pos + 1];
-                        let inner = after_where[brace_pos + 1..].trim_end_matches('}').trim();
-                        format!("{} GRAPH {} {{ {} }} }}", prefix, g, inner)
-                    } else {
-                        sparql.to_string()
-                    }
-                } else {
-                    format!("SELECT * WHERE {{ GRAPH {} {{ {} }} }}", g, sparql)
-                }
+                Self::wrap_in_named_graph(sparql, &g)
             }
             _ => sparql.to_string(),
         };
@@ -184,6 +172,57 @@ impl KnowledgeGraphStore {
             }
         }
         Ok(values)
+    }
+
+    /// 将不含 GRAPH 子句的 SPARQL 查询包装到指定命名图中。
+    /// 通过大括号配对定位 WHERE 块的真实结束位置，使 LIMIT / ORDER BY / GROUP BY
+    /// 等尾部求解修饰符保留在 GRAPH 包装之外，避免拼出非法语法。
+    fn wrap_in_named_graph(sparql: &str, g: &str) -> String {
+        let upper = sparql.to_uppercase();
+        let where_pos = match upper.find("WHERE") {
+            Some(p) => p,
+            None => return format!("SELECT * WHERE {{ GRAPH {} {{ {} }} }}", g, sparql),
+        };
+
+        // 定位 WHERE 后的第一个 '{'
+        let after_where = &sparql[where_pos + 5..];
+        let open_rel = match after_where.find('{') {
+            Some(p) => p,
+            None => return sparql.to_string(),
+        };
+        let open_abs = where_pos + 5 + open_rel;
+
+        // 大括号配对，找到与之匹配的 '}'
+        let bytes = sparql.as_bytes();
+        let mut depth = 0usize;
+        let mut close_abs = None;
+        for (i, &b) in bytes.iter().enumerate().skip(open_abs) {
+            match b {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close_abs = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let close_abs = match close_abs {
+            Some(p) => p,
+            None => return sparql.to_string(),
+        };
+
+        let prefix = &sparql[..=open_abs];        // 含 WHERE 的左大括号
+        let inner = sparql[open_abs + 1..close_abs].trim();
+        let suffix = sparql[close_abs + 1..].trim(); // LIMIT / ORDER BY 等
+
+        if suffix.is_empty() {
+            format!("{} GRAPH {} {{ {} }} }}", prefix, g, inner)
+        } else {
+            format!("{} GRAPH {} {{ {} }} }} {}", prefix, g, inner, suffix)
+        }
     }
 
     pub fn search_entities(
@@ -694,6 +733,30 @@ mod tests {
         );
         let results = store.query_sparql(&sparql, Some(TEST_GRAPH)).unwrap();
         assert_eq!(results.len(), 1, "已有 GRAPH 子句时不应重复包装");
+    }
+
+    #[test]
+    fn test_query_sparql_named_graph_with_limit() {
+        let store = KnowledgeGraphStore::new().unwrap();
+
+        for i in 0..3 {
+            store
+                .write_quads(
+                    &[make_quad(
+                        &format!("http://example.org/n{}", i),
+                        RDFS_LABEL,
+                        RdfValue::Literal(format!("N{}", i)),
+                    )],
+                    TEST_GRAPH,
+                )
+                .unwrap();
+        }
+
+        // 带 LIMIT 的查询不得把 LIMIT 包进 GRAPH 大括号内（回归：expected OPTIONAL）
+        let results = store
+            .query_sparql("SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 2", Some(TEST_GRAPH))
+            .unwrap();
+        assert_eq!(results.len(), 2, "LIMIT 应保留在 GRAPH 包装之外并生效");
     }
 
     #[test]

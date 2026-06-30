@@ -89,6 +89,10 @@ pub struct TaskContext {
     pub expected_output: String,
     /// 成功标准（从 PlanStep 传递，供 DA/CA 参考）
     pub success_criteria: String,
+    /// 用户态会话隔离：发起任务的用户标识（多租户血缘），透传至 L1Session
+    pub user_id: Option<String>,
+    /// 用户态会话隔离：租户标识（多租户血缘），透传至 L1Session
+    pub tenant_id: Option<String>,
 }
 
 impl TaskContext {
@@ -112,7 +116,16 @@ impl TaskContext {
             workflow_jsonld: None,
             expected_output: String::new(),
             success_criteria: String::new(),
+            user_id: None,
+            tenant_id: None,
         }
+    }
+
+    /// 设置用户态会话隔离身份（多租户血缘），透传至 L1Session。
+    pub fn with_identity(mut self, user_id: Option<String>, tenant_id: Option<String>) -> Self {
+        self.user_id = user_id;
+        self.tenant_id = tenant_id;
+        self
     }
 
     pub fn with_step_info(mut self, expected_output: &str, success_criteria: &str) -> Self {
@@ -189,6 +202,8 @@ impl Default for TaskContext {
             workflow_jsonld: None,
             expected_output: String::new(),
             success_criteria: String::new(),
+            user_id: None,
+            tenant_id: None,
         }
     }
 }

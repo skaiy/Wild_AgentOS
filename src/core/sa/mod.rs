@@ -2865,7 +2865,27 @@ impl SupervisorAgent {
         user_input: &str,
         task_iri: &str,
     ) -> Result<TaskResult, CoreError> {
-        self.process_task_with_context(user_input, task_iri, TaskContext::new(task_iri, user_input, self.max_iterations)).await
+        // F1 多租户接线：从 blackboard 读取 HTTP 层写入的 user_id/tenant_id，
+        // 注入 TaskContext，使身份血缘从 HTTP 入口贯穿 PA→DA→CA 全链路 session。
+        let (identity_user, identity_tenant) = self.read_task_identity(task_iri);
+        let ctx = TaskContext::new(task_iri, user_input, self.max_iterations)
+            .with_identity(identity_user, identity_tenant);
+        self.process_task_with_context(user_input, task_iri, ctx).await
+    }
+
+    /// 从 blackboard 中的任务节点提取 HTTP 层写入的 user_id 与 tenant_id。
+    /// 返回 `(user_id, tenant_id)`，字段缺失时为 `None`。
+    fn read_task_identity(&self, task_iri: &str) -> (Option<String>, Option<String>) {
+        let Some(ref bb) = self.blackboard else {
+            return (None, None);
+        };
+        let Ok(Some(node)) = bb.read_node(task_iri) else {
+            return (None, None);
+        };
+        let v: serde_json::Value = serde_json::from_str(&node.json_ld).unwrap_or_default();
+        let user_id = v.get("user_id").and_then(|s| s.as_str()).map(String::from);
+        let tenant_id = v.get("tenant_id").and_then(|s| s.as_str()).map(String::from);
+        (user_id, tenant_id)
     }
 
     /// 带自定义 TaskContext 的任务处理，支持 resume 模式

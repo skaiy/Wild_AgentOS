@@ -164,6 +164,22 @@ impl SemanticCore {
         user_input: &str,
         _agent_md_path: Option<&str>,
         parent_task_iri: Option<&str>,
+        user_id: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<String, CoreError> {
+        self.init_task_with_tenant(user_input, _agent_md_path, parent_task_iri, user_id, session_id, None).await
+    }
+
+    /// 带租户身份的任务初始化（多租户血缘接线核心入口）。
+    /// `tenant_id` 写入任务节点，由 `SA::read_task_identity` 读取后注入全链路 TaskContext。
+    pub async fn init_task_with_tenant(
+        &self,
+        user_input: &str,
+        _agent_md_path: Option<&str>,
+        parent_task_iri: Option<&str>,
+        user_id: Option<&str>,
+        session_id: Option<&str>,
+        tenant_id: Option<&str>,
     ) -> Result<String, CoreError> {
         let task_iri = format!("iri://task_{}", uuid::Uuid::new_v4().hyphenated());
         let task_node = serde_json::json!({
@@ -173,6 +189,9 @@ impl SemanticCore {
             "status": "pending",
             "created_at": chrono::Utc::now().to_rfc3339(),
             "parent_task": parent_task_iri,
+            "user_id": user_id,
+            "session_id": session_id,
+            "tenant_id": tenant_id,
         });
         let json_ld = serde_json::to_string(&task_node)
             .map_err(|e| CoreError::Internal { message: e.to_string() })?;

@@ -148,6 +148,10 @@ pub struct L1Session {
     /// 任务级语义向量（从 5W2H.what+why 或 objective 生成）
     /// 用于 evict_with_query 的 fallback query_embedding
     task_embedding: Option<Vec<f32>>,
+    /// 用户态会话隔离：发起任务的用户标识（多租户血缘）
+    user_id: Option<String>,
+    /// 用户态会话隔离：租户标识（多租户血缘）
+    tenant_id: Option<String>,
 }
 
 impl L1Session {
@@ -170,6 +174,8 @@ impl L1Session {
             mesi_state: MesiState::Shared,
             eviction_config,
             task_embedding: None,
+            user_id: None,
+            tenant_id: None,
         }
     }
 
@@ -187,6 +193,8 @@ impl L1Session {
             mesi_state: MesiState::Shared,
             eviction_config,
             task_embedding: None,
+            user_id: None,
+            tenant_id: None,
         }
     }
 
@@ -198,6 +206,21 @@ impl L1Session {
     pub fn created_at(&self) -> &DateTime<Utc> { &self.created_at }
     pub fn duration(&self) -> chrono::Duration { Utc::now() - self.created_at }
     pub fn token_budget(&self) -> usize { self.token_budget }
+    pub fn user_id(&self) -> Option<&str> { self.user_id.as_deref() }
+    pub fn tenant_id(&self) -> Option<&str> { self.tenant_id.as_deref() }
+
+    /// 设置用户态会话隔离身份（多租户血缘）。
+    /// 在 create_session 之后由调用方从 TaskContext 透传。
+    pub fn set_identity(&mut self, user_id: Option<String>, tenant_id: Option<String>) {
+        self.user_id = user_id;
+        self.tenant_id = tenant_id;
+    }
+
+    /// 链式设置身份，返回自身。
+    pub fn with_identity(mut self, user_id: Option<String>, tenant_id: Option<String>) -> Self {
+        self.set_identity(user_id, tenant_id);
+        self
+    }
 
     pub fn set_token_budget(&mut self, budget: usize) {
         self.token_budget = budget;
@@ -404,6 +427,8 @@ impl L1Session {
             "role": role,
             "agent_id": self.agent_id,
             "session_id": self.session_id,
+            "user_id": self.user_id,
+            "tenant_id": self.tenant_id,
             "thought": thought,
             "content": serde_json::from_str::<serde_json::Value>(content_json).ok(),
             "timestamp": Utc::now().to_rfc3339(),
@@ -517,6 +542,8 @@ impl L1Session {
             turn_count: self.turns.len(),
             created_at: self.created_at,
             summary_text: self.handoff_summary(),
+            user_id: self.user_id.clone(),
+            tenant_id: self.tenant_id.clone(),
         }
     }
 
@@ -585,6 +612,12 @@ pub struct SessionSummary {
     pub turn_count: usize,
     pub created_at: DateTime<Utc>,
     pub summary_text: String,
+    /// 用户态会话隔离：用户标识（多租户血缘）
+    #[serde(default)]
+    pub user_id: Option<String>,
+    /// 用户态会话隔离：租户标识（多租户血缘）
+    #[serde(default)]
+    pub tenant_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -838,5 +871,40 @@ mod tests {
         assert!(has_low, "low relevance turn (higher score) should survive eviction");
         let has_high = session.turns.iter().any(|t| t.summary == "high_rel_turn");
         assert!(!has_high, "high relevance turn (lower score) should be evicted first");
+    }
+
+    // ========== 用户态会话隔离（多租户血缘）测试 ==========
+
+    #[test]
+    fn test_identity_defaults_to_none() {
+        let session = L1Session::new("agent_1", "DA", "iri://task/abc");
+        assert_eq!(session.user_id(), None);
+        assert_eq!(session.tenant_id(), None);
+    }
+
+    #[test]
+    fn test_set_identity() {
+        let mut session = L1Session::new("agent_1", "DA", "iri://task/abc");
+        session.set_identity(Some("user_42".to_string()), Some("tenant_dianlv".to_string()));
+        assert_eq!(session.user_id(), Some("user_42"));
+        assert_eq!(session.tenant_id(), Some("tenant_dianlv"));
+    }
+
+    #[test]
+    fn test_with_identity_chaining() {
+        let session = L1Session::new("agent_1", "DA", "iri://task/abc")
+            .with_identity(Some("user_42".to_string()), None);
+        assert_eq!(session.user_id(), Some("user_42"));
+        assert_eq!(session.tenant_id(), None);
+    }
+
+    #[test]
+    fn test_summarize_propagates_identity() {
+        let mut session = L1Session::new("agent_1", "DA", "iri://task/abc");
+        session.set_identity(Some("user_42".to_string()), Some("tenant_dianlv".to_string()));
+        session.add_summary("assistant", "done", None);
+        let summary = session.summarize();
+        assert_eq!(summary.user_id.as_deref(), Some("user_42"));
+        assert_eq!(summary.tenant_id.as_deref(), Some("tenant_dianlv"));
     }
 }

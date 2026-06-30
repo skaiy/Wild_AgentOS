@@ -507,10 +507,12 @@ impl super::AgentRunner {
         agent.status = AgentStatus::Running;
 
         let task_iri_for_guard = ctx.task_iri.clone();
-        let mut session = self.memory_manager.lock().await.create_session(
+        let mut session = self.memory_manager.lock().await.create_session_with_identity(
             &agent.agent_id,
             &agent.role.to_string(),
             &ctx.task_iri,
+            ctx.user_id.as_deref(),
+            ctx.tenant_id.as_deref(),
         );
 
         // 计算任务 embedding，用于语义相关度淘汰

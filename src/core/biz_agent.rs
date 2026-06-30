@@ -84,7 +84,13 @@ impl BizAgent {
         let task_iri = context.task_iri.clone();
         let mut session = {
             let mut mm = self.runner.memory_manager.lock().await;
-            mm.create_session(self.agent_id(), &self.role().to_string(), &context.task_iri)
+            mm.create_session_with_identity(
+                self.agent_id(),
+                &self.role().to_string(),
+                &context.task_iri,
+                context.user_id.as_deref(),
+                context.tenant_id.as_deref(),
+            )
         };
 
         let result = if self.config.orchestrator_mode && self.should_decompose(&context) {

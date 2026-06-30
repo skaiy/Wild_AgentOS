@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chrono::{DateTime, Utc};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -9,6 +11,44 @@ use tracing::{debug, info, warn};
 use crate::skill_graph::graph_store::SkillGraphStore;
 use crate::skill_graph::types::*;
 use crate::CoreError;
+
+/// 使用 Ed25519 公钥验证一段消息的 base64 签名。
+/// 公钥与签名均为标准 base64 编码；公钥 32 字节、签名 64 字节。
+pub(crate) fn verify_ed25519(
+    public_key_b64: &str,
+    message: &[u8],
+    signature_b64: &str,
+) -> Result<bool, CoreError> {
+    let pk_bytes = B64
+        .decode(public_key_b64.trim())
+        .map_err(|e| CoreError::ValidationFailed {
+            message: format!("公钥 base64 解码失败: {}", e),
+        })?;
+    let pk_arr: [u8; 32] = pk_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| CoreError::ValidationFailed {
+            message: format!("Ed25519 公钥长度非法: {} (expected 32)", pk_bytes.len()),
+        })?;
+    let verifying_key = VerifyingKey::from_bytes(&pk_arr).map_err(|e| CoreError::ValidationFailed {
+        message: format!("Ed25519 公钥非法: {}", e),
+    })?;
+
+    let sig_bytes = B64
+        .decode(signature_b64.trim())
+        .map_err(|e| CoreError::ValidationFailed {
+            message: format!("签名 base64 解码失败: {}", e),
+        })?;
+    let sig_arr: [u8; 64] = sig_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| CoreError::ValidationFailed {
+            message: format!("Ed25519 签名长度非法: {} (expected 64)", sig_bytes.len()),
+        })?;
+    let signature = Signature::from_bytes(&sig_arr);
+
+    Ok(verifying_key.verify(message, &signature).is_ok())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignatureInfo {
@@ -42,17 +82,22 @@ impl SignatureInfo {
         self
     }
 
-    pub fn verify(&self, _content: &str) -> Result<bool, CoreError> {
+    pub fn verify(&self, content: &str) -> Result<bool, CoreError> {
         debug!(
             "验证签名: algorithm={}, signer={:?}",
             self.algorithm, self.signer_id
         );
 
-        if self.signature.is_empty() {
+        if self.signature.is_empty() || self.public_key.is_empty() {
             return Ok(false);
         }
 
-        Ok(true)
+        match self.algorithm.to_lowercase().as_str() {
+            "ed25519" => verify_ed25519(&self.public_key, content.as_bytes(), &self.signature),
+            other => Err(CoreError::ValidationFailed {
+                message: format!("不支持的签名算法: {}", other),
+            }),
+        }
     }
 }
 

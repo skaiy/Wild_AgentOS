@@ -1,4 +1,5 @@
 pub mod skill_registry;
+pub mod prompt_registry;
 pub mod mcp_client;
 pub mod mcp;
 pub mod tool_executor;
@@ -14,6 +15,7 @@ pub mod tool_guard;
 pub mod import_scanner;
 
 pub use skill_registry::SkillRegistry;
+pub use prompt_registry::PromptRegistry;
 pub use tool_executor::ToolExecutor;
 pub use tool_groups::{ToolGroup, ToolGroupManager, ToolGroupSettings, RoleToolConfig};
 pub use hooks::{HookManager, HookPoint, HookResult, HookContext, Hook};

@@ -71,8 +71,12 @@ impl AgentOSService {
                 .map_err(|e| format!("L0 init failed: {}", e))?
         );
 
+        // KG 持久化目录：遵循 AGENTOS_DATA_DIR 约定（缺省 "data"），底层为 RocksDB。
+        let kg_dir = std::env::var("AGENTOS_DATA_DIR").unwrap_or_else(|_| "data".to_string());
+        let kg_path = std::path::Path::new(&kg_dir).join("kg");
         let unified_graph = Arc::new(
-            UnifiedGraphStore::new().map_err(|e| format!("UnifiedGraph init failed: {}", e))?
+            UnifiedGraphStore::new_persistent(&kg_path)
+                .map_err(|e| format!("UnifiedGraph init failed: {}", e))?
         );
 
         let blackboard = Arc::new(
@@ -278,7 +282,49 @@ impl AgentOSService {
             checkpoints: self.checkpoints.clone(),
             config,
         });
-        crate::api::http::build_router(core, self.unified_graph.store())
+        let config_info = self.build_config_info();
+        let agents_info = {
+            let agents: Vec<serde_json::Value> = self.settings.batch_agents.agents.iter().map(|a| {
+                serde_json::json!({
+                    "name": a.name,
+                    "description": a.description,
+                    "enabled": a.enabled,
+                    "business_domain": a.business_domain,
+                })
+            }).collect();
+            serde_json::json!({ "count": agents.len(), "agents": agents })
+        };
+        crate::api::http::build_router(core, self.gateway.clone(), self.unified_graph.store(), config_info, agents_info)
+    }
+
+    /// 构造已脱敏的运行期配置快照（不暴露 api_key 明文，仅暴露是否已配置）。
+    /// 外部 LLM 网关字段与 GatewaySettings 对齐，供前端 Settings 页展示与对照。
+    fn build_config_info(&self) -> serde_json::Value {
+        let g = &self.settings.gateway;
+        serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "gateway": {
+                "base_url": g.base_url,
+                "default_model": g.default_model,
+                "max_retries": g.max_retries,
+                "timeout_seconds": g.timeout_seconds,
+                "model_mapping": g.model_mapping,
+                "api_key_configured": !g.api_key.is_empty(),
+            },
+            "api": {
+                "grpc_addr": self.settings.api.grpc_addr,
+                "http_addr": self.settings.api.http_addr,
+                "metrics_port": self.settings.api.metrics_port,
+            },
+            "memory": {
+                "l1_max_messages": self.settings.memory.l1.max_messages,
+                "l2_max_node_size": self.settings.memory.l2.max_node_size,
+            },
+            "agents": {
+                "max_iterations": self.settings.agents.max_iterations,
+                "max_parallel_agents": self.settings.agents.max_parallel_agents,
+            },
+        })
     }
 
     /// 异步启动 BatchAgent 系统。在 gRPC serve 之前调用。
