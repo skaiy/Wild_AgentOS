@@ -1,17 +1,27 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
+use glidinghorse::causal::engine::CausalEngine;
+use glidinghorse::causal::fused::FusedRootCauseEngine;
+use glidinghorse::causal::store::CausalModelStore;
 use glidinghorse::config::{AgentSettings, McpServerConfig, McpStdioServerConfig};
 use glidinghorse::core::agent_runner::TaskResult;
 use glidinghorse::core::event_bus::{EventBus, Event};
 use glidinghorse::core::sa::SupervisorAgent;
 use glidinghorse::gateway::UnifiedGateway;
+use glidinghorse::gnn::features::FeatureExtractor;
+use glidinghorse::graph_backend::{GraphBackend, PetgraphBackend};
+use glidinghorse::knowledge_graph::store::KnowledgeGraphStore;
 use glidinghorse::memory::embedding_service::{create_embedding_service_from_config, FallbackEmbeddingService};
 use glidinghorse::memory::hyperspace_store::HyperspaceStore;
 use glidinghorse::memory::l0_store::L0Store;
 use glidinghorse::memory::l2_blackboard::Blackboard;
 use glidinghorse::memory::l3_projection::ProjectionEngine;
 use glidinghorse::memory::memory_manager::MemoryManager;
+use glidinghorse::skill_graph::discovery::SkillDiscoveryEngine;
+use glidinghorse::skill_graph::graph_algorithms::SkillGraphAlgorithms;
+use glidinghorse::skill_graph::graph_store::SkillGraphStore;
+use glidinghorse::temporal::timeline::TimelineStore;
 use glidinghorse::templates::template_engine::TemplateEngine;
 use glidinghorse::tools::mcp_client::McpClient;
 use glidinghorse::tools::skill_registry::SkillRegistry;
@@ -47,6 +57,16 @@ pub struct CodeCliEngine {
     skills: Arc<SkillRegistry>,
     mcp_client: Option<McpClient>,
     workspace_monitor: Option<Arc<WorkspaceMonitor>>,
+    /// Skill Graph Store — cognitive network
+    skill_graph: Arc<SkillGraphStore>,
+    /// Skill discovery engine (semantic search)
+    discovery_engine: Arc<SkillDiscoveryEngine>,
+    /// Feature extractor (GNN topological features)
+    feature_extractor: Arc<FeatureExtractor>,
+    /// Causal engine (Bayesian inference on skill graph)
+    causal_engine: Arc<CausalEngine>,
+    /// Timeline store (temporal event recording)
+    timeline: Arc<TimelineStore>,
 }
 
 impl CodeCliEngine {
@@ -126,7 +146,20 @@ impl CodeCliEngine {
         let agent_settings = AgentSettings::default();
 
         let workspace_root = std::path::PathBuf::from(&config.workspace);
-        let runner = Arc::new(glidinghorse::core::agent_runner::AgentRunner::new(
+
+        // ── Skill Graph Store — cognitive network ──
+        let skill_graph = Arc::new(
+            SkillGraphStore::new()
+                .with_blackboard(l2.clone())
+                .with_l0_store(l0.clone()),
+        );
+        let skill_graph_algorithms = Arc::new(SkillGraphAlgorithms::from_store(&skill_graph));
+
+        // ── PetgraphBackend (structural dimension for FusedRootCauseEngine) ──
+        let graph_backend: Arc<dyn GraphBackend> = Arc::new(PetgraphBackend::new(skill_graph.clone()));
+
+        // ── AgentRunner (without fused engine — upgraded below after kg_store is available) ──
+        let mut runner = glidinghorse::core::agent_runner::AgentRunner::new(
             gateway,
             skills.clone(),
             l2.clone(),
@@ -137,9 +170,55 @@ impl CodeCliEngine {
         ).with_prompt_loader(glidinghorse::core::prompt_loader::PromptLoader::new(
             Default::default(),
             tmpl.clone(),
-        )).with_workspace_root(workspace_root.clone()));
+        )).with_workspace_root(workspace_root.clone());
+
+        // Extract the ToolExecutor's KGS, create FusedRootCauseEngine, and upgrade the runner
+        let inner_store = {
+            let executor = runner.tool_executor.read()
+                .expect("tool_executor RwLock poisoned");
+            executor.knowledge_graph_store()
+                .read().expect("kg_store RwLock poisoned")
+                .store_arc().clone()
+        };
+        {
+            let fused_kg = Arc::new(
+                KnowledgeGraphStore::with_shared_store(inner_store)
+                    .expect("Failed to create shared KG Store for FusedRootCauseEngine"),
+            );
+            let fused_rce = FusedRootCauseEngine::new(
+                Some(graph_backend.clone()),
+                Some(fused_kg),
+            );
+            runner = runner.with_fused_root_cause_engine(fused_rce);
+        }
+
+        // ── Skill Discovery Engine (semantic skill search via Hyperspace) ──
+        let discovery_engine = Arc::new(
+            SkillDiscoveryEngine::new(skill_graph.clone()),
+        );
+
+        // ── FeatureExtractor (GNN topological features for causal analysis) ──
+        use glidinghorse::graph_backend::SkillGraphFeatureGraph;
+        let feature_graph = SkillGraphFeatureGraph::new(
+            skill_graph.clone(),
+            skill_graph_algorithms.clone(),
+        );
+        let feature_extractor = Arc::new(FeatureExtractor::new(Arc::new(feature_graph)));
+
+        // ── CausalEngine (Bayesian causal inference on skill graph) ──
+        let causal_model_store = Arc::new(CausalModelStore::new());
+        let causal_engine = Arc::new(CausalEngine::new(
+            causal_model_store,
+            graph_backend.clone(),
+        ));
+
+        // ── TimelineStore (temporal event recording for graph mutations) ──
+        let timeline = Arc::new(TimelineStore::new(1000, 10));
 
         let event_bus = Arc::new(EventBus::new(100));
+
+        // TimelineStore EventBus subscription deferred — requires a Tokio runtime.
+        // Subscribe via start_async_components() in process_task().
 
         // 初始化 WorkspaceMonitor
         let workspace_monitor: Option<Arc<WorkspaceMonitor>> = {
@@ -147,8 +226,6 @@ impl CodeCliEngine {
                 workspace_root,
                 ..Default::default()
             };
-            // 同步上下文中初始化：WatchEngine 原生监听（inotify 线程）无需 tokio，
-            // 异步消费者推迟到 start_async_components 在 runtime 中调用。
             match WorkspaceMonitor::initialize(ws_config, None, Some(event_bus.clone())) {
                 Ok(ws) => {
                     ws.register_hooks(&runner.hook_manager);
@@ -171,6 +248,7 @@ impl CodeCliEngine {
         // 完成 AgentRunner 初始化接线：perception_store → WorkspaceMonitor
         runner.finalize_setup();
 
+        let runner = Arc::new(runner);
         let l2_bb = l2.clone();
         let sa = SupervisorAgent::with_pdca_cycles(
             runner,
@@ -235,6 +313,11 @@ impl CodeCliEngine {
             skills: skills_for_engine,
             mcp_client,
             workspace_monitor,
+            skill_graph,
+            discovery_engine,
+            feature_extractor,
+            causal_engine,
+            timeline,
         })
     }
 

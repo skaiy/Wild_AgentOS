@@ -200,6 +200,12 @@ impl ToolExecutor {
         self.workspace_monitor.read().ok().and_then(|g| g.clone())
     }
 
+    /// Get a reference to the internal KnowledgeGraphStore for shared use
+    /// (e.g. by FusedRootCauseEngine for SPARQL semantic neighbor traversal).
+    pub fn knowledge_graph_store(&self) -> Arc<RwLock<KnowledgeGraphStore>> {
+        self.kg_store.clone()
+    }
+
     /// Notify workspace_monitor that a file was read externally (e.g., via read_full_result).
     /// This helps the cache/diff system recognize the file as already-read on subsequent file_read.
     pub fn mark_file_external_read(&self, path: &str) {

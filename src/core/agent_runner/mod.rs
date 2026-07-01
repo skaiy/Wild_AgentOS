@@ -23,6 +23,7 @@ use crate::methodology::{
     gate::{MethodologyGate, MethodologyGateHandle},
     MethodologyRegistry,
 };
+use crate::causal::fused::FusedRootCauseEngine;
 use crate::root_cause::RootCauseEngine;
 use crate::templates::template_engine::TemplateEngine;
 use crate::tools::hooks::HookManager;
@@ -456,6 +457,18 @@ impl AgentRunner {
     pub fn with_embedder(mut self, embedder: Arc<dyn EmbeddingService>) -> Self {
         self.embedder = Some(embedder);
         self.relevance_tracker = Some(Arc::new(std::sync::Mutex::new(RelevanceTracker::new(0.6))));
+        self
+    }
+
+    /// Upgrade RootCauseEngine with a three-dimensional fusion engine
+    /// (structural dependency-graph BFS + semantic SPARQL neighbor traversal).
+    /// Call this before finalize_setup() to ensure hooks are properly registered.
+    pub fn with_fused_root_cause_engine(mut self, fused: FusedRootCauseEngine) -> Self {
+        let mut engine = RootCauseEngine::default();
+        engine = engine.with_fused_engine(fused);
+        let engine = Arc::new(engine);
+        engine.register_hooks(&self.hook_manager, "agent");
+        self.root_cause_engine = Some(engine);
         self
     }
 

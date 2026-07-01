@@ -1136,8 +1136,9 @@ impl App {
                         self.input.drain(..self.cursor_position);
                         self.cursor_position = 0;
                     }
-                } else if c == 'e' {
-                    // Toggle expand on the most recent expandable message
+                } else if c == 'e' && self.input.is_empty() {
+                    // Toggle expand on the most recent expandable message.
+                    // Only fire when input is empty so 'e' can be typed in slash commands.
                     if let Some(idx) = self.messages.iter().rposition(|m| m.can_expand) {
                         if !self.expanded.remove(&idx) {
                             self.expanded.insert(idx);
