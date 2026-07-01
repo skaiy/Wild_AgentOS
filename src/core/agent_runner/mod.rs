@@ -90,6 +90,8 @@ pub struct TaskContext {
     pub expected_output: String,
     /// Success criteria (passed from PlanStep, for DA/CA reference)
     pub success_criteria: String,
+    /// PDCA cycle identifier for L2 blackboard filtered queries
+    pub cycle_id: String,
 }
 
 impl TaskContext {
@@ -113,7 +115,13 @@ impl TaskContext {
             workflow_jsonld: None,
             expected_output: String::new(),
             success_criteria: String::new(),
+            cycle_id: String::new(),
         }
+    }
+
+    pub fn with_cycle_id(mut self, cycle_id: &str) -> Self {
+        self.cycle_id = cycle_id.to_string();
+        self
     }
 
     pub fn with_step_info(mut self, expected_output: &str, success_criteria: &str) -> Self {
@@ -190,6 +198,7 @@ impl Default for TaskContext {
             workflow_jsonld: None,
             expected_output: String::new(),
             success_criteria: String::new(),
+            cycle_id: String::new(),
         }
     }
 }

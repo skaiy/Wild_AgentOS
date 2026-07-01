@@ -8,8 +8,20 @@ use oxigraph::sparql::QueryResults;
 use parking_lot::RwLock;
 use tracing::{debug, info, instrument, warn};
 
+use crate::core::agent_instance::AgentRole;
 use crate::memory::l0_store::MesiState;
 use crate::{CoreConfig, CoreError};
+
+/// Filter criteria for query_nodes_filtered()
+///
+/// When multiple fields are set, results are the INTERSECTION of all filters.
+/// When no fields are set, returns ALL nodes (same as query_nodes()).
+#[derive(Debug, Clone, Default)]
+pub struct QueryFilter {
+    pub role: Option<AgentRole>,
+    pub cycle_id: Option<String>,
+    pub node_type: Option<String>,
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Node {
@@ -43,6 +55,15 @@ pub struct Blackboard {
     node_cache: DashMap<String, Arc<Node>>,
     task_nodes: RwLock<HashMap<String, Vec<String>>>,
     task_tree: RwLock<HashMap<String, TaskTreeNode>>,
+
+    // ── Secondary indices for multi-dimensional query ──
+    // Index: (task_iri, role) → Vec<node_iri>
+    role_index: RwLock<HashMap<(String, AgentRole), Vec<String>>>,
+    // Index: (task_iri, cycle_id) → Vec<node_iri>
+    cycle_index: RwLock<HashMap<(String, String), Vec<String>>>,
+    // Index: (task_iri, node_type) → Vec<node_iri>
+    type_index: RwLock<HashMap<(String, String), Vec<String>>>,
+
     node_count: AtomicU64,
     total_bytes: AtomicU64,
     permission_matrix: PermissionMatrix,
@@ -61,6 +82,9 @@ impl Blackboard {
             node_cache: DashMap::new(),
             task_nodes: RwLock::new(HashMap::new()),
             task_tree: RwLock::new(HashMap::new()),
+            role_index: RwLock::new(HashMap::new()),
+            cycle_index: RwLock::new(HashMap::new()),
+            type_index: RwLock::new(HashMap::new()),
             node_count: AtomicU64::new(0),
             total_bytes: AtomicU64::new(0),
             permission_matrix: PermissionMatrix::new(),
@@ -76,6 +100,9 @@ impl Blackboard {
             node_cache: DashMap::new(),
             task_nodes: RwLock::new(HashMap::new()),
             task_tree: RwLock::new(HashMap::new()),
+            role_index: RwLock::new(HashMap::new()),
+            cycle_index: RwLock::new(HashMap::new()),
+            type_index: RwLock::new(HashMap::new()),
             node_count: AtomicU64::new(0),
             total_bytes: AtomicU64::new(0),
             permission_matrix: PermissionMatrix::new(),
@@ -165,6 +192,36 @@ impl Blackboard {
             });
             if !tree_node.node_iris.contains(&node_iri.to_string()) {
                 tree_node.node_iris.push(node_iri.to_string());
+            }
+        }
+
+        // ── Update secondary indices ──
+        if let Some(task_iri) = &task_iri {
+            // Role index
+            if let Some(role_str) = parsed.get("role").and_then(|v| v.as_str()) {
+                if let Ok(role) = role_str.parse::<AgentRole>() {
+                    self.role_index.write()
+                        .entry((task_iri.clone(), role))
+                        .or_default()
+                        .push(node_iri.to_string());
+                }
+            }
+
+            // Cycle index
+            if let Some(cycle_id) = parsed.get("cycle_id").and_then(|v| v.as_str()) {
+                let cycle_str = cycle_id.to_string();
+                self.cycle_index.write()
+                    .entry((task_iri.clone(), cycle_str))
+                    .or_default()
+                    .push(node_iri.to_string());
+            }
+
+            // Type index
+            if let Some(node_type) = jsonld_types.first() {
+                self.type_index.write()
+                    .entry((task_iri.clone(), node_type.clone()))
+                    .or_default()
+                    .push(node_iri.to_string());
             }
         }
 
@@ -287,6 +344,34 @@ impl Blackboard {
                 let mut task_nodes = self.task_nodes.write();
                 if let Some(nodes) = task_nodes.get_mut(&task_iri) {
                     nodes.retain(|iri| iri != node_iri);
+                }
+
+                // Clean up secondary indices
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&node.json_ld) {
+                    // Role index
+                    if let Some(role_str) = parsed.get("role").and_then(|v| v.as_str()) {
+                        if let Ok(role) = role_str.parse::<AgentRole>() {
+                            if let Some(role_nodes) = self.role_index.write().get_mut(&(task_iri.clone(), role)) {
+                                role_nodes.retain(|iri| iri != node_iri);
+                            }
+                        }
+                    }
+
+                    // Cycle index
+                    if let Some(cycle_id) = parsed.get("cycle_id").and_then(|v| v.as_str()) {
+                        let key = (task_iri.clone(), cycle_id.to_string());
+                        if let Some(cycle_nodes) = self.cycle_index.write().get_mut(&key) {
+                            cycle_nodes.retain(|iri| iri != node_iri);
+                        }
+                    }
+
+                    // Type index (for all jsonld_types)
+                    for node_type in &node.jsonld_types {
+                        let key = (task_iri.clone(), node_type.clone());
+                        if let Some(type_nodes) = self.type_index.write().get_mut(&key) {
+                            type_nodes.retain(|iri| iri != node_iri);
+                        }
+                    }
                 }
             }
 
@@ -461,6 +546,68 @@ impl Blackboard {
         Ok(nodes)
     }
 
+    /// Query nodes with optional multi-dimensional filtering.
+    ///
+    /// When filter fields are set, returns only nodes matching ALL criteria (intersection).
+    /// When no filter fields are set, returns ALL nodes (same as query_nodes()).
+    /// Unrecognized role strings are silently ignored (no match returned).
+    pub fn query_nodes_filtered(
+        &self,
+        task_iri: &str,
+        filter: &QueryFilter,
+    ) -> Result<Vec<Arc<Node>>, CoreError> {
+        let all_iris: Vec<String> = self.task_nodes.read()
+            .get(task_iri)
+            .cloned()
+            .unwrap_or_default();
+
+        if all_iris.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut filtered: Option<Vec<String>> = None;
+
+        if let Some(role) = &filter.role {
+            let role_iris = self.role_index.read()
+                .get(&(task_iri.to_string(), role.clone()))
+                .cloned()
+                .unwrap_or_default();
+            filtered = Some(filtered.map_or(role_iris.clone(), |f| {
+                f.into_iter().filter(|iri| role_iris.contains(iri)).collect()
+            }));
+        }
+
+        if let Some(cycle_id) = &filter.cycle_id {
+            let cycle_iris = self.cycle_index.read()
+                .get(&(task_iri.to_string(), cycle_id.clone()))
+                .cloned()
+                .unwrap_or_default();
+            filtered = Some(filtered.map_or(cycle_iris.clone(), |f| {
+                f.into_iter().filter(|iri| cycle_iris.contains(iri)).collect()
+            }));
+        }
+
+        if let Some(node_type) = &filter.node_type {
+            let type_iris = self.type_index.read()
+                .get(&(task_iri.to_string(), node_type.clone()))
+                .cloned()
+                .unwrap_or_default();
+            filtered = Some(filtered.map_or(type_iris.clone(), |f| {
+                f.into_iter().filter(|iri| type_iris.contains(iri)).collect()
+            }));
+        }
+
+        let target_iris = filtered.unwrap_or(all_iris);
+
+        let mut nodes = Vec::with_capacity(target_iris.len());
+        for iri in target_iris {
+            if let Some(node) = self.node_cache.get(&iri) {
+                nodes.push(node.clone());
+            }
+        }
+        Ok(nodes)
+    }
+
     pub fn get_task_nodes(&self, task_iri: &str) -> Vec<String> {
         self.task_nodes.read()
             .get(task_iri)
@@ -523,6 +670,9 @@ impl Blackboard {
         self.node_cache.clear();
         self.task_nodes.write().clear();
         self.task_tree.write().clear();
+        self.role_index.write().clear();
+        self.cycle_index.write().clear();
+        self.type_index.write().clear();
         self.node_count.store(0, Ordering::Relaxed);
         self.total_bytes.store(0, Ordering::Relaxed);
 
@@ -598,12 +748,36 @@ impl Blackboard {
                 status: "running".to_string(),
                 node_iris: Vec::new(),
             });
-            if !tree_node.node_iris.contains(&node_iri.to_string()) {
-                tree_node.node_iris.push(node_iri.to_string());
+                if !tree_node.node_iris.contains(&node_iri.to_string()) {
+                    tree_node.node_iris.push(node_iri.to_string());
+                }
             }
-        }
 
-        if !is_update {
+            // Secondary indices for batch (same logic as write_node)
+            if let Some(task_iri) = &task_iri {
+                if let Some(role_str) = parsed.get("role").and_then(|v| v.as_str()) {
+                    if let Ok(role) = role_str.parse::<AgentRole>() {
+                        self.role_index.write()
+                            .entry((task_iri.clone(), role))
+                            .or_default()
+                            .push(node_iri.to_string());
+                    }
+                }
+                if let Some(cycle_id) = parsed.get("cycle_id").and_then(|v| v.as_str()) {
+                    self.cycle_index.write()
+                        .entry((task_iri.clone(), cycle_id.to_string()))
+                        .or_default()
+                        .push(node_iri.to_string());
+                }
+                if let Some(node_type) = jsonld_types.first() {
+                    self.type_index.write()
+                        .entry((task_iri.clone(), node_type.clone()))
+                        .or_default()
+                        .push(node_iri.to_string());
+                }
+            }
+
+            if !is_update {
             self.node_count.fetch_add(1, Ordering::Relaxed);
         }
         self.total_bytes.fetch_add(size as u64, Ordering::Relaxed);
@@ -847,6 +1021,30 @@ impl Blackboard {
                 });
                 if !tree_node.node_iris.contains(&node_iri.to_string()) {
                     tree_node.node_iris.push(node_iri.to_string());
+                }
+            }
+
+            // Secondary indices for write_batch_to_graphs (same logic as write_node)
+            if let Some(task_iri) = &task_iri {
+                if let Some(role_str) = parsed.get("role").and_then(|v| v.as_str()) {
+                    if let Ok(role) = role_str.parse::<AgentRole>() {
+                        self.role_index.write()
+                            .entry((task_iri.clone(), role))
+                            .or_default()
+                            .push(node_iri.to_string());
+                    }
+                }
+                if let Some(cycle_id) = parsed.get("cycle_id").and_then(|v| v.as_str()) {
+                    self.cycle_index.write()
+                        .entry((task_iri.clone(), cycle_id.to_string()))
+                        .or_default()
+                        .push(node_iri.to_string());
+                }
+                if let Some(node_type) = jsonld_types.first() {
+                    self.type_index.write()
+                        .entry((task_iri.clone(), node_type.clone()))
+                        .or_default()
+                        .push(node_iri.to_string());
                 }
             }
 

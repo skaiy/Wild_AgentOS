@@ -126,6 +126,21 @@ pub struct App {
     last_user_input: String,
     /// WorkspaceMonitor handle (for resetting perception on topic shift)
     workspace_monitor: Option<Arc<glidinghorse::tools::workspace_monitor::WorkspaceMonitor>>,
+    // ── Skill Graph subsystem handles (lock-free read via Arc<>) ──
+    skill_graph: Arc<glidinghorse::skill_graph::graph_store::SkillGraphStore>,
+    // Kept alive to prevent drop — AgentRunner registered these internally.
+    #[allow(dead_code)]
+    discovery_engine: Arc<glidinghorse::skill_graph::discovery::SkillDiscoveryEngine>,
+    #[allow(dead_code)]
+    feature_extractor: Arc<glidinghorse::gnn::features::FeatureExtractor>,
+    causal_engine: Arc<glidinghorse::causal::engine::CausalEngine>,
+    timeline: Arc<glidinghorse::temporal::timeline::TimelineStore>,
+    /// Cached skill graph stats (refreshed each frame)
+    sg_nodes: usize,
+    sg_edges: usize,
+    sg_snapshots: usize,
+    causal_observations: u64,
+    timeline_pending: usize,
 }
 
 fn extract_mermaid_blocks(content: &str) -> Vec<MermaidBlock> {
@@ -623,6 +638,13 @@ impl App {
         let max_iter = engine.max_iterations();
         let context_limit = engine.context_limit();
         let workspace_monitor = engine.workspace_monitor();
+        // Probe memory subsystem stats (exercises the CodeCliEngine::memory_stats() path)
+        let _mem_stats = engine.memory_stats();
+        let skill_graph = engine.skill_graph();
+        let discovery_engine = engine.discovery_engine();
+        let feature_extractor = engine.feature_extractor();
+        let causal_engine = engine.causal_engine();
+        let timeline = engine.timeline();
 
         let rt = tokio::runtime::Runtime::new()?;
         let mut app = Self {
@@ -681,6 +703,16 @@ impl App {
             result_rx: None,
             last_user_input: String::new(),
             workspace_monitor,
+            skill_graph,
+            discovery_engine,
+            feature_extractor,
+            causal_engine,
+            timeline,
+            sg_nodes: 0,
+            sg_edges: 0,
+            sg_snapshots: 0,
+            causal_observations: 0,
+            timeline_pending: 0,
         };
 
         let welcome = format!(
@@ -954,6 +986,12 @@ impl App {
             self.last_completion_tok = self
                 .last_completion_tokens
                 .load(std::sync::atomic::Ordering::Relaxed);
+            // Lock-free reads from skill graph subsystems
+            self.sg_nodes = self.skill_graph.skill_count();
+            self.sg_edges = self.skill_graph.list_all_skills().iter().map(|s| s.links.len()).sum();
+            self.sg_snapshots = self.timeline.snapshot_count();
+            self.causal_observations = self.causal_engine.store().total_observations() as u64;
+            self.timeline_pending = self.timeline.pending_mutations();
             let _ = terminal.draw(|f| self.ui(f));
             if self.should_quit {
                 break;
@@ -1803,27 +1841,36 @@ impl App {
     fn ui(&self, f: &mut Frame) {
         let area = f.area();
 
-        let chunks = Layout::default()
+        // Top-level: status bar (full width) | everything else
+        let vert = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Fill(1)])
+            .split(area);
+
+        self.render_status_bar(f, vert[0]);
+
+        // Below status: left column (messages + input + log) | right column (sidebar stats)
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(vert[1]);
+
+        // Left column: messages | input | log
+        let left = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
                 Constraint::Fill(1),
                 Constraint::Length(5),
                 Constraint::Length(4),
             ])
-            .split(area);
+            .split(columns[0]);
 
-        self.render_status_bar(f, chunks[0]);
+        self.render_messages(f, left[0]);
+        self.render_input(f, left[1]);
+        self.render_log_panel(f, left[2]);
 
-        let body = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-            .split(chunks[1]);
-
-        self.render_messages(f, body[0]);
-        self.render_sidebar(f, body[1]);
-        self.render_input(f, chunks[2]);
-        self.render_log_panel(f, chunks[3]);
+        // Right column: sidebar takes full remaining height
+        self.render_sidebar(f, columns[1]);
     }
 
     fn render_status_bar(&self, f: &mut Frame, area: Rect) {
@@ -2122,7 +2169,7 @@ impl App {
         //
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(10), Constraint::Fill(1)])
+            .constraints([Constraint::Length(13), Constraint::Fill(1)])
             .split(area);
         self.render_session_panel(f, chunks[0]);
         self.render_events_panel(f, chunks[1]);
@@ -2193,6 +2240,22 @@ impl App {
                 self.mem_ratio(self.l3_count, self.max_l3_mb)
             )),
             Style::default().fg(Color::Yellow),
+        )]));
+        // Skill Graph stats
+        lines.push(Line::from(vec![Span::styled(
+            fw(&format!("SG: {}N {}E", self.sg_nodes, self.sg_edges)),
+            Style::default().fg(Color::Green),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            fw(&format!(
+                "TL: {}snap {:>4}pend",
+                self.sg_snapshots, self.timeline_pending
+            )),
+            Style::default().fg(Color::Green),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            fw(&format!("CA: {}obs", self.causal_observations)),
+            Style::default().fg(Color::Green),
         )]));
         lines.push(Line::from(vec![Span::styled(
             fw(&format!(
@@ -2362,7 +2425,7 @@ impl App {
 
         let block = Block::default()
             .title(" Log ")
-            .borders(Borders::TOP)
+            .borders(Borders::TOP | Borders::RIGHT)
             .border_style(Style::default().fg(Color::DarkGray))
             .title_style(
                 Style::default()

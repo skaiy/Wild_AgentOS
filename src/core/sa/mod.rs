@@ -13,7 +13,7 @@ use crate::core::execution_event::{ExecutionEvent, ExecutionEventKind, Thought};
 use crate::core::relevance_tracker::RelevanceTracker;
 use crate::core::supplementary_store::SupplementaryInputStore;
 use crate::jsonld::type_router::TypeRouter;
-use crate::memory::l2_blackboard::Blackboard;
+use crate::memory::l2_blackboard::{Blackboard, QueryFilter};
 use crate::memory::prefetch_engine::PrefetchEngine;
 use crate::memory::scheduler::MemoryScheduler;
 use crate::memory::EmbeddingService;
@@ -1164,10 +1164,22 @@ Complexity definitions:
         let agent = self.create_agent(role, cycle_id);
 
         // Query context from L2 blackboard (replaces prev_summary)
-        // Improvement: prefer node content (full output), fallback to summary (short excerpt)
+        // Use query_nodes_filtered for role/cycle-aware context (AA uses prev_summary)
         let prev_agent_summary = context.prev_agent_summary.clone();
-        let prev_summary = if let Some(blackboard) = &self.blackboard {
-            let nodes = blackboard.query_nodes(&context.task_iri).unwrap_or_default();
+        let prev_summary = if role == AgentRole::Act {
+            prev_agent_summary.clone()
+        } else if let Some(blackboard) = &self.blackboard {
+            let prev_role = match role {
+                AgentRole::Do => Some(AgentRole::Plan),
+                AgentRole::Check => Some(AgentRole::Do),
+                _ => None,
+            };
+            let filter = QueryFilter {
+                role: prev_role,
+                cycle_id: Some(cycle_id.to_string()),
+                node_type: None,
+            };
+            let nodes = blackboard.query_nodes_filtered(&context.task_iri, &filter).unwrap_or_default();
             if !nodes.is_empty() {
                 let mut contents: Vec<String> = Vec::new();
                 let mut summaries: Vec<String> = Vec::new();
@@ -1311,6 +1323,7 @@ Complexity definitions:
         mut five_w2h: crate::core::five_w2h::Task5W2H,
         five_w2h_iri: &str,
         resumed_messages: Option<Vec<crate::gateway::unified_gateway::ChatMessage>>,
+        initial_prev_summary: Option<String>,
     ) -> Result<TaskResult, CoreError> {
         use crate::core::five_w2h::FillStage;
         
@@ -1345,7 +1358,7 @@ Complexity definitions:
         }
 
         let mut last_result: Option<TaskResult> = None;
-        let mut prev_summary: Option<String> = None;
+        let mut prev_summary: Option<String> = initial_prev_summary;
 
         // Resume mode: determine which phase to start from
         // Load latest checkpoint from L0 to resolve phase tags
@@ -1544,8 +1557,8 @@ Complexity definitions:
                 format!("\n\n## Historical Experience\n{}", cycle_hints.iter().map(|h| format!("- {}", h)).collect::<Vec<_>>().join("\n"))
             };
             let objective = match (&prev_summary, step.role) {
-                (Some(_summary), AgentRole::Plan) => {
-                    format!("{}\n\n## User Task\n{}{}\n\nPlease create a detailed execution plan for the above user task.", step.objective, user_input, hints_block)
+                (Some(summary), AgentRole::Plan) => {
+                    format!("{}\n\n## User Task\n{}{}\n\n## Feedback from Previous PDCA Cycle\n{}\n\nPlease create a detailed execution plan for the above user task, addressing all feedback from the previous cycle.", step.objective, user_input, hints_block, summary)
                 }
                 (Some(summary), AgentRole::Do) => {
                     format!("{}\n\nUpper PA's Plan:\n{}{}\n\nPlease execute the task according to the plan.", step.objective, summary, hints_block)
@@ -2912,7 +2925,6 @@ Notes:
         // Unified execution path: build ExecutionPlan from JSON-LD workflow or LLM
         let plan = if let Some(ref wf_jsonld) = ctx.workflow_jsonld {
             info!(task_iri = %task_iri, "Using JSON-LD workflow mode — converting through adapter to ExecutionPlan");
-            // External workflow: unified path through DAG → ExecutionPlan
             let def = crate::core::workflow::loader::load_workflow_jsonld(wf_jsonld)
                 .map_err(|e| CoreError::Internal { message: format!("Workflow parsing failed: {}", e) })?;
             let dag = crate::core::workflow::loader::build_dag(&def)
@@ -2921,13 +2933,11 @@ Notes:
             plan.dag_jsonld = Some(wf_jsonld.clone());
             plan
         } else if ctx.resumed_messages.is_some() {
-            // Resume mode: skip full analysis, create plan continuing from interrupted phase
             self.build_resume_plan()
         } else {
             self.analyze_task_with_llm(user_input, &five_w2h, &perception_hints).await
         };
 
-        // Let the UI know what the SA decided
         let step_roles: Vec<String> = plan.steps.iter().map(|s| format!("{:?}", s.role)).collect();
         self.emit_sa_thought(task_iri,
             &format!("Task classified. Plan: {} ({} steps: {})",
@@ -2997,13 +3007,88 @@ Notes:
             ).await;
         }
 
-        let result = self.execute_plan(plan, task_iri, user_input, five_w2h, &five_w2h_iri, ctx.resumed_messages).await?;
+        // ── Outer SA-level PDCA retry loop ──
+        let max_cycles = self.max_pdca_cycles.max(1);
+        let mut cycle_feedback: Option<String> = None;
+        let mut final_result: Option<TaskResult> = None;
+
+        for cycle_num in 0..max_cycles {
+            let resumed = if cycle_num == 0 { ctx.resumed_messages.clone() } else { None };
+
+            info!(
+                task_iri = %task_iri,
+                cycle_num = cycle_num + 1,
+                max_cycles = max_cycles,
+                has_feedback = cycle_feedback.is_some(),
+                "Starting SA-level PDCA cycle"
+            );
+
+            if let Some(ref _feedback) = cycle_feedback {
+                self.emit_sa_thought(task_iri,
+                    &format!("⚠️ AA did not pass cycle #{} — restarting PDCA with feedback", cycle_num + 1),
+                    "pdca_retry_start").await;
+            } else {
+                self.emit_sa_thought(task_iri,
+                    &format!("Starting PDCA cycle {}/{}", cycle_num + 1, max_cycles),
+                    "pdca_cycle_start").await;
+            }
+
+            let result = self.execute_plan(
+                plan.clone(),
+                task_iri,
+                user_input,
+                five_w2h.clone(),
+                &five_w2h_iri,
+                resumed,
+                cycle_feedback.clone(),
+            ).await?;
+
+            if result.status == "success" {
+                info!(task_iri = %task_iri, cycle_num = cycle_num + 1, "PDCA cycle passed");
+                self.emit_sa_thought(task_iri,
+                    &format!("✅ PDCA cycle #{} passed — task complete", cycle_num + 1),
+                    "pdca_cycle_passed").await;
+
+                if let Some(scheduler) = &self.scheduler {
+                    let _ = scheduler.on_task_complete(task_iri).await;
+                }
+                return Ok(result);
+            }
+
+            let last_cycle = cycle_num + 1 >= max_cycles;
+            if last_cycle {
+                info!(task_iri = %task_iri, cycle_num = cycle_num + 1, "All PDCA cycles exhausted");
+                self.emit_sa_thought(task_iri,
+                    &format!("⚠️ All {} PDCA cycles completed without full pass — returning last result", max_cycles),
+                    "pdca_cycles_exhausted").await;
+                final_result = Some(result);
+                break;
+            }
+
+            cycle_feedback = Some(format!(
+                "PDCA Cycle #{} result:\nStatus: {}\n\nAA Evaluation:\n{}\n\n---\nPlease analyze the issues above and create an improved approach.",
+                cycle_num + 1, result.status, result.summary
+            ));
+            final_result = Some(result);
+        }
 
         if let Some(scheduler) = &self.scheduler {
             let _ = scheduler.on_task_complete(task_iri).await;
         }
-
-        Ok(result)
+        Ok(final_result.unwrap_or_else(|| TaskResult {
+            task_iri: task_iri.to_string(),
+            status: "failed".to_string(),
+            summary: "All PDCA cycles exhausted without success".to_string(),
+            output: None,
+            jsonld_output: None,
+            artifacts: Vec::new(),
+            errors: Vec::new(),
+            turn_count: 0,
+            tool_call_count: 0,
+            five_w2h_updates: None,
+            tracked_actions: Vec::new(),
+            archive_iri: None,
+        }))
     }
 
     pub fn get_cycle_status(&self, cycle_id: &str) -> Option<&CycleState> {

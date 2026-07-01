@@ -10,7 +10,7 @@ use glidinghorse::core::event_bus::{EventBus, Event};
 use glidinghorse::core::sa::SupervisorAgent;
 use glidinghorse::gateway::UnifiedGateway;
 use glidinghorse::gnn::features::FeatureExtractor;
-use glidinghorse::graph_backend::{GraphBackend, PetgraphBackend};
+use glidinghorse::graph_backend::{GraphBackend, PetgraphBackend, SkillGraphSnapshotBackend};
 use glidinghorse::knowledge_graph::store::KnowledgeGraphStore;
 use glidinghorse::memory::embedding_service::{create_embedding_service_from_config, FallbackEmbeddingService};
 use glidinghorse::memory::hyperspace_store::HyperspaceStore;
@@ -441,6 +441,31 @@ impl CodeCliEngine {
         self.workspace_monitor.clone()
     }
 
+    /// SkillGraphStore — cognitive network (node/link count, snapshots).
+    pub fn skill_graph(&self) -> Arc<SkillGraphStore> {
+        self.skill_graph.clone()
+    }
+
+    /// SkillDiscoveryEngine — semantic skill search via Hyperspace vectors.
+    pub fn discovery_engine(&self) -> Arc<SkillDiscoveryEngine> {
+        self.discovery_engine.clone()
+    }
+
+    /// FeatureExtractor — GNN topological features for causal analysis.
+    pub fn feature_extractor(&self) -> Arc<FeatureExtractor> {
+        self.feature_extractor.clone()
+    }
+
+    /// CausalEngine — Bayesian causal inference on the skill graph.
+    pub fn causal_engine(&self) -> Arc<CausalEngine> {
+        self.causal_engine.clone()
+    }
+
+    /// TimelineStore — versioned snapshots of skill graph mutations.
+    pub fn timeline(&self) -> Arc<TimelineStore> {
+        self.timeline.clone()
+    }
+
     /// Token counter Arcs (lock-free reads from TUI).
     /// Returns (total_prompt, total_completion, last_prompt, last_completion).
     pub fn token_arcs(&self) -> (Arc<AtomicU64>, Arc<AtomicU64>, Arc<AtomicU64>, Arc<AtomicU64>) {
@@ -591,6 +616,12 @@ impl CodeCliEngine {
             "任务处理完成"
         );
 
+        // Snapshot the skill graph to the TimelineStore after each task,
+        // enabling temporal rollback and traceability of graph evolution.
+        let backend = SkillGraphSnapshotBackend::new(self.skill_graph.clone());
+        self.timeline.create_snapshot(&backend, &format!("task:{}", result.status.as_str()));
+
         Ok(result)
     }
 }
+

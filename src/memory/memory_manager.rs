@@ -206,10 +206,12 @@ impl MemoryManager {
     // ========== L2/L0 Archival ==========
 
     /// Archive session summary to L2 blackboard
-    pub fn archive_to_l2(&self, _task_iri: &str, summary: &SessionSummary) -> Result<(), CoreError> {
+    pub fn archive_to_l2(&self, task_iri: &str, summary: &SessionSummary) -> Result<(), CoreError> {
+        // Use task-prefixed IRI so extract_task_iri maps this node to the correct task
+        let node_iri = format!("{}/session/{}", task_iri, summary.session_id);
         let json_ld = serde_json::json!({
             "@context": "https://pdca-agent.org/context/memory",
-            "@id": format!("iri://memory/{}", uuid::Uuid::new_v4().hyphenated()),
+            "@id": &node_iri,
             "@type": "SessionSummary",
             "session_id": summary.session_id,
             "agent_id": summary.agent_id,
@@ -220,8 +222,7 @@ impl MemoryManager {
         })
         .to_string();
 
-        self.l2
-            .write_node(&format!("iri://session/{}", summary.session_id), &json_ld, &self.config)
+        self.l2.write_node(&node_iri, &json_ld, &self.config)
     }
 
     pub fn archive_session_actions(&self, task_iri: &str, actions: &[TrackedAction], summary: &str) -> Result<(), CoreError> {
