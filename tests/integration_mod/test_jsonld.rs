@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use glidinghorse::core::validation::{JsonLdValidator, MetaValidator, ValidationEngine};
-use glidinghorse::memory::l2_blackboard::{Blackboard, GraphPermission};
-use glidinghorse::memory::l3_projection::ProjectionEngine;
-use glidinghorse::tools::skill_registry::SkillRegistry;
-use glidinghorse::CoreConfig;
+use wild_agent_os_core::core::validation::{JsonLdValidator, MetaValidator, ValidationEngine};
+use wild_agent_os_core::memory::l2_blackboard::{Blackboard, GraphPermission};
+use wild_agent_os_core::memory::l3_projection::ProjectionEngine;
+use wild_agent_os_core::tools::skill_registry::SkillRegistry;
+use wild_agent_os_core::CoreConfig;
 use serde_json::json;
 
 fn create_test_node(iri: &str, node_type: &str, properties: HashMap<&str, serde_json::Value>) -> String {

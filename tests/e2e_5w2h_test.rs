@@ -6,20 +6,20 @@ use std::path::Path;
 use std::sync::Arc;
 use std::collections::HashMap;
 
-use glidinghorse::core::five_w2h::{Task5W2H, FillStage, WhenDetail, HowDetail, WhereDetail, HowMuchDetail, WhoDetail};
-use glidinghorse::core::sa::SupervisorAgent;
-use glidinghorse::core::agent_runner::AgentRunner;
-use glidinghorse::core::event_bus::EventBus;
-use glidinghorse::gateway::unified_gateway::UnifiedGateway;
-use glidinghorse::memory::l0_store::L0Store;
-use glidinghorse::memory::l2_blackboard::Blackboard;
-use glidinghorse::memory::l3_projection::ProjectionEngine;
-use glidinghorse::memory::memory_manager::MemoryManager;
-use glidinghorse::templates::template_engine::TemplateEngine;
-use glidinghorse::tools::skill_registry::SkillRegistry;
-use glidinghorse::config::settings::{GatewaySettings, AgentSettings};
-use glidinghorse::perception::proactive_engine::ProactiveEngine;
-use glidinghorse::CoreConfig;
+use wild_agent_os_core::core::five_w2h::{Task5W2H, FillStage, WhenDetail, HowDetail, WhereDetail, HowMuchDetail, WhoDetail};
+use wild_agent_os_core::core::sa::SupervisorAgent;
+use wild_agent_os_core::core::agent_runner::AgentRunner;
+use wild_agent_os_core::core::event_bus::EventBus;
+use wild_agent_os_core::gateway::unified_gateway::UnifiedGateway;
+use wild_agent_os_core::memory::l0_store::L0Store;
+use wild_agent_os_core::memory::l2_blackboard::Blackboard;
+use wild_agent_os_core::memory::l3_projection::ProjectionEngine;
+use wild_agent_os_core::memory::memory_manager::MemoryManager;
+use wild_agent_os_core::templates::template_engine::TemplateEngine;
+use wild_agent_os_core::tools::skill_registry::SkillRegistry;
+use wild_agent_os_core::config::settings::{GatewaySettings, AgentSettings};
+use wild_agent_os_core::perception::proactive_engine::ProactiveEngine;
+use wild_agent_os_core::CoreConfig;
 
 const OUTPUT_DIR: &str = "/tmp/agent_os_e2e_5w2h";
 
@@ -252,7 +252,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             assignees: vec!["agent:pa".to_string()],
             stakeholders: vec![],
             required_role: Some("Do".to_string()),
-            access_level: Some(glidinghorse::core::five_w2h::AccessLevel::Write),
+            access_level: Some(wild_agent_os_core::core::five_w2h::AccessLevel::Write),
         })
         .with_when(WhenDetail {
             deadline: Some(chrono::Utc::now() + chrono::Duration::hours(24)),

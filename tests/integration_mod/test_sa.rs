@@ -1,18 +1,18 @@
 use std::sync::Arc;
 use std::collections::HashMap;
 
-use glidinghorse::core::sa::{SupervisorAgent, TaskComplexity};
-use glidinghorse::core::agent_instance::{AgentRole, AgentInstance, AgentStatus};
-use glidinghorse::core::event_bus::EventBus;
-use glidinghorse::gateway::UnifiedGateway;
-use glidinghorse::memory::l0_store::L0Store;
-use glidinghorse::memory::l2_blackboard::Blackboard;
-use glidinghorse::memory::l3_projection::ProjectionEngine;
-use glidinghorse::memory::memory_manager::MemoryManager;
-use glidinghorse::templates::template_engine::TemplateEngine;
-use glidinghorse::tools::skill_registry::SkillRegistry;
-use glidinghorse::config::GatewaySettings;
-use glidinghorse::CoreConfig;
+use wild_agent_os_core::core::sa::{SupervisorAgent, TaskComplexity};
+use wild_agent_os_core::core::agent_instance::{AgentRole, AgentInstance, AgentStatus};
+use wild_agent_os_core::core::event_bus::EventBus;
+use wild_agent_os_core::gateway::UnifiedGateway;
+use wild_agent_os_core::memory::l0_store::L0Store;
+use wild_agent_os_core::memory::l2_blackboard::Blackboard;
+use wild_agent_os_core::memory::l3_projection::ProjectionEngine;
+use wild_agent_os_core::memory::memory_manager::MemoryManager;
+use wild_agent_os_core::templates::template_engine::TemplateEngine;
+use wild_agent_os_core::tools::skill_registry::SkillRegistry;
+use wild_agent_os_core::config::GatewaySettings;
+use wild_agent_os_core::CoreConfig;
 use std::path::Path;
 
 fn test_gateway_settings() -> GatewaySettings {
@@ -36,9 +36,9 @@ fn make_sa() -> SupervisorAgent {
         .unwrap_or_else(|_| TemplateEngine::new(Path::new("/nonexistent")).unwrap()));
     let gateway = Arc::new(UnifiedGateway::new(&test_gateway_settings()).unwrap());
     let skills = Arc::new(SkillRegistry::new());
-    let runner = Arc::new(glidinghorse::core::agent_runner::AgentRunner::new(
+    let runner = Arc::new(wild_agent_os_core::core::agent_runner::AgentRunner::new(
         gateway, skills.clone(), l2, l0, mm, templates.clone(),
-        glidinghorse::config::AgentSettings::default(),
+        wild_agent_os_core::config::AgentSettings::default(),
     ));
     let event_bus = Arc::new(EventBus::new(100));
 

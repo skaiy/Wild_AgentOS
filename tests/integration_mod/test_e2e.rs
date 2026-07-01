@@ -1,20 +1,20 @@
 use std::sync::Arc;
 use std::path::Path;
 
-use glidinghorse::config::GatewaySettings;
-use glidinghorse::core::agent_instance::AgentRole;
-use glidinghorse::core::agent_runner::{AgentRunner, TaskContext};
-use glidinghorse::core::event_bus::EventBus;
-use glidinghorse::core::sa::SupervisorAgent;
-use glidinghorse::gateway::UnifiedGateway;
-use glidinghorse::memory::l0_store::L0Store;
-use glidinghorse::memory::l2_blackboard::Blackboard;
-use glidinghorse::memory::l3_projection::ProjectionEngine;
-use glidinghorse::memory::memory_manager::MemoryManager;
-use glidinghorse::templates::template_engine::TemplateEngine;
-use glidinghorse::tools::skill_registry::SkillRegistry;
-use glidinghorse::config::AgentSettings;
-use glidinghorse::CoreConfig;
+use wild_agent_os_core::config::GatewaySettings;
+use wild_agent_os_core::core::agent_instance::AgentRole;
+use wild_agent_os_core::core::agent_runner::{AgentRunner, TaskContext};
+use wild_agent_os_core::core::event_bus::EventBus;
+use wild_agent_os_core::core::sa::SupervisorAgent;
+use wild_agent_os_core::gateway::UnifiedGateway;
+use wild_agent_os_core::memory::l0_store::L0Store;
+use wild_agent_os_core::memory::l2_blackboard::Blackboard;
+use wild_agent_os_core::memory::l3_projection::ProjectionEngine;
+use wild_agent_os_core::memory::memory_manager::MemoryManager;
+use wild_agent_os_core::templates::template_engine::TemplateEngine;
+use wild_agent_os_core::tools::skill_registry::SkillRegistry;
+use wild_agent_os_core::config::AgentSettings;
+use wild_agent_os_core::CoreConfig;
 use tempfile::TempDir;
 
 fn build_system(max_iterations: u32) -> (SupervisorAgent, TempDir) {
@@ -95,7 +95,7 @@ fn build_runner() -> (Arc<AgentRunner>, TempDir) {
 async fn test_e2e_da_single_agent_programming() {
     let (runner, _dir) = build_runner();
 
-    let mut agent = glidinghorse::core::agent_instance::AgentInstance::new(
+    let mut agent = wild_agent_os_core::core::agent_instance::AgentInstance::new(
         "e2e_da_001".to_string(),
         AgentRole::Do,
     );

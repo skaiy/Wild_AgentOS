@@ -1,6 +1,6 @@
 use axum::{routing::post, Json, Router};
-use glidinghorse::tools::mcp_client::McpClient;
-use glidinghorse::tools::skill_registry::SkillRegistry;
+use wild_agent_os_core::tools::mcp_client::McpClient;
+use wild_agent_os_core::tools::skill_registry::SkillRegistry;
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 

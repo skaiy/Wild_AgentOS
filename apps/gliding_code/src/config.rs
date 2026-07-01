@@ -1,4 +1,4 @@
-use glidinghorse::config::{GatewaySettings, McpStdioServerConfig};
+use wild_agent_os_core::config::{GatewaySettings, McpStdioServerConfig};
 use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -83,11 +83,14 @@ impl CliConfig {
 
         // Try to load memory limits from agent_os config file, fall back to env vars, then defaults
         let (max_l1_mb, max_l2_mb, max_l3_mb) = Self::load_memory_limits();
-        let data_dir = std::env::var("GLIDING_HORSE_DATA").ok().or_else(|| {
-            std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
-                .ok()
-                .map(|home| format!("{}/.gliding_horse/data", home))
-        });
+        let data_dir = std::env::var("WILD_AGENT_OS_DATA")
+            .ok()
+            .or_else(|| std::env::var("GLIDING_HORSE_DATA").ok())
+            .or_else(|| {
+                std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
+                    .ok()
+                    .map(|home| format!("{}/.wild-agent-os/data", home))
+            });
 
         let mcp_servers = Self::load_mcp_servers();
         let mcp_stdio_servers = Self::load_mcp_stdio_servers();
@@ -111,7 +114,7 @@ impl CliConfig {
     /// Load memory limits from agent_os Settings (config file / env vars) or use defaults.
     fn load_memory_limits() -> (u64, u64, u64) {
         // First, try to load from the agent_os Settings config file
-        if let Ok(settings) = glidinghorse::config::Settings::load() {
+        if let Ok(settings) = wild_agent_os_core::config::Settings::load() {
             return (
                 settings.memory.l1.max_memory_mb,
                 settings.memory.l2.max_memory_mb,

@@ -60,6 +60,7 @@ impl Default for WorkspaceMonitorConfig {
                 "venv/".into(),
                 ".next/".into(),
                 "data/".into(),
+                ".wild-agent-os/".into(),
                 ".gliding_horse/".into(),
             ],
             content_store_max_bytes: 64 * 1024 * 1024, // 64 MB

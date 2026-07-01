@@ -5,7 +5,7 @@ use crossterm::style::{Color, Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{Clear, ClearType};
 use crossterm::{execute, queue};
 
-use glidinghorse::core::event_bus::Event;
+use wild_agent_os_core::core::event_bus::Event;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColorTheme {

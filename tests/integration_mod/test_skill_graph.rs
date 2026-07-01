@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use glidinghorse::skill_graph::*;
-use glidinghorse::tools::{SkillRegistry, ToolExecutor};
+use wild_agent_os_core::skill_graph::*;
+use wild_agent_os_core::tools::{SkillRegistry, ToolExecutor};
 
 const AXURE_TO_VUE2_SKILL_MD: &str = include_str!("../../.trae-test-skills/axure-to-vue2-skill/SKILL.md");
 const AXURE_VUE2_REFACTOR_SKILL_MD: &str = include_str!("../../.trae-test-skills/axure-vue2-refactor/SKILL.md");
@@ -424,7 +424,7 @@ fn test_skill_creator_register_axure_to_vue2() {
     };
 
     let gateway = Arc::new(
-        glidinghorse::gateway::UnifiedGateway::new(&glidinghorse::config::GatewaySettings {
+        wild_agent_os_core::gateway::UnifiedGateway::new(&wild_agent_os_core::config::GatewaySettings {
             base_url: "http://localhost:3000".to_string(),
             api_key: "test".to_string(),
             default_model: "test".to_string(),
@@ -514,7 +514,7 @@ fn test_skill_creator_register_axure_vue2_refactor() {
     };
 
     let gateway = Arc::new(
-        glidinghorse::gateway::UnifiedGateway::new(&glidinghorse::config::GatewaySettings {
+        wild_agent_os_core::gateway::UnifiedGateway::new(&wild_agent_os_core::config::GatewaySettings {
             base_url: "http://localhost:3000".to_string(),
             api_key: "test".to_string(),
             default_model: "test".to_string(),
@@ -557,7 +557,7 @@ fn test_skill_creator_two_skills_coexist() {
     };
 
     let gateway = Arc::new(
-        glidinghorse::gateway::UnifiedGateway::new(&glidinghorse::config::GatewaySettings {
+        wild_agent_os_core::gateway::UnifiedGateway::new(&wild_agent_os_core::config::GatewaySettings {
             base_url: "http://localhost:3000".to_string(),
             api_key: "test".to_string(),
             default_model: "test".to_string(),
@@ -671,7 +671,7 @@ fn test_skill_creator_json_ld_validity() {
     };
 
     let gateway = Arc::new(
-        glidinghorse::gateway::UnifiedGateway::new(&glidinghorse::config::GatewaySettings {
+        wild_agent_os_core::gateway::UnifiedGateway::new(&wild_agent_os_core::config::GatewaySettings {
             base_url: "http://localhost:3000".to_string(),
             api_key: "test".to_string(),
             default_model: "test".to_string(),
@@ -728,7 +728,7 @@ fn test_skill_creator_disclosure_levels() {
     };
 
     let gateway = Arc::new(
-        glidinghorse::gateway::UnifiedGateway::new(&glidinghorse::config::GatewaySettings {
+        wild_agent_os_core::gateway::UnifiedGateway::new(&wild_agent_os_core::config::GatewaySettings {
             base_url: "http://localhost:3000".to_string(),
             api_key: "test".to_string(),
             default_model: "test".to_string(),

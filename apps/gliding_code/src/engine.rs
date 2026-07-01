@@ -1,22 +1,22 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
-use glidinghorse::config::{AgentSettings, McpServerConfig, McpStdioServerConfig};
-use glidinghorse::core::agent_runner::TaskResult;
-use glidinghorse::core::event_bus::{EventBus, Event};
-use glidinghorse::core::sa::SupervisorAgent;
-use glidinghorse::gateway::UnifiedGateway;
-use glidinghorse::memory::embedding_service::{create_embedding_service_from_config, FallbackEmbeddingService};
-use glidinghorse::memory::hyperspace_store::HyperspaceStore;
-use glidinghorse::memory::l0_store::L0Store;
-use glidinghorse::memory::l2_blackboard::Blackboard;
-use glidinghorse::memory::l3_projection::ProjectionEngine;
-use glidinghorse::memory::memory_manager::MemoryManager;
-use glidinghorse::templates::template_engine::TemplateEngine;
-use glidinghorse::tools::mcp_client::McpClient;
-use glidinghorse::tools::skill_registry::SkillRegistry;
-use glidinghorse::tools::workspace_monitor::{WorkspaceMonitor, WorkspaceMonitorConfig};
-use glidinghorse::CoreConfig;
+use wild_agent_os_core::config::{AgentSettings, McpServerConfig, McpStdioServerConfig};
+use wild_agent_os_core::core::agent_runner::TaskResult;
+use wild_agent_os_core::core::event_bus::{EventBus, Event};
+use wild_agent_os_core::core::sa::SupervisorAgent;
+use wild_agent_os_core::gateway::UnifiedGateway;
+use wild_agent_os_core::memory::embedding_service::{create_embedding_service_from_config, FallbackEmbeddingService};
+use wild_agent_os_core::memory::hyperspace_store::HyperspaceStore;
+use wild_agent_os_core::memory::l0_store::L0Store;
+use wild_agent_os_core::memory::l2_blackboard::Blackboard;
+use wild_agent_os_core::memory::l3_projection::ProjectionEngine;
+use wild_agent_os_core::memory::memory_manager::MemoryManager;
+use wild_agent_os_core::templates::template_engine::TemplateEngine;
+use wild_agent_os_core::tools::mcp_client::McpClient;
+use wild_agent_os_core::tools::skill_registry::SkillRegistry;
+use wild_agent_os_core::tools::workspace_monitor::{WorkspaceMonitor, WorkspaceMonitorConfig};
+use wild_agent_os_core::CoreConfig;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
@@ -83,8 +83,8 @@ impl CodeCliEngine {
         );
 
         // Initialize HyperspaceEngine-backed vector store for semantic search
-        let embed: Arc<dyn glidinghorse::memory::embedding_service::EmbeddingService> =
-            match glidinghorse::config::Settings::load() {
+        let embed: Arc<dyn wild_agent_os_core::memory::embedding_service::EmbeddingService> =
+            match wild_agent_os_core::config::Settings::load() {
                 Ok(settings) => create_embedding_service_from_config(&settings.embedding),
                 Err(_) => Arc::new(FallbackEmbeddingService::new()),
             };
@@ -126,7 +126,7 @@ impl CodeCliEngine {
         let agent_settings = AgentSettings::default();
 
         let workspace_root = std::path::PathBuf::from(&config.workspace);
-        let runner = Arc::new(glidinghorse::core::agent_runner::AgentRunner::new(
+        let runner = Arc::new(wild_agent_os_core::core::agent_runner::AgentRunner::new(
             gateway,
             skills.clone(),
             l2.clone(),
@@ -134,7 +134,7 @@ impl CodeCliEngine {
             mm_for_runner,
             tmpl.clone(),
             agent_settings,
-        ).with_prompt_loader(glidinghorse::core::prompt_loader::PromptLoader::new(
+        ).with_prompt_loader(wild_agent_os_core::core::prompt_loader::PromptLoader::new(
             Default::default(),
             tmpl.clone(),
         )).with_workspace_root(workspace_root.clone()));
@@ -300,7 +300,7 @@ impl CodeCliEngine {
         let result = if let Some(ref wf_path) = self.config.workflow_path {
             let wf_jsonld = std::fs::read_to_string(wf_path)
                 .map_err(|e| anyhow::anyhow!("读取工作流文件 '{}' 失败: {}", wf_path, e))?;
-            let ctx = glidinghorse::core::agent_runner::TaskContext::new(&task_iri, user_input, self.config.max_iterations)
+            let ctx = wild_agent_os_core::core::agent_runner::TaskContext::new(&task_iri, user_input, self.config.max_iterations)
                 .with_original_task(user_input)
                 .with_workflow(&wf_jsonld);
             self.sa.process_task_with_context(user_input, &task_iri, ctx).await?
@@ -401,10 +401,10 @@ impl CodeCliEngine {
         (l1, l2, l3)
     }
 
-    pub async fn list_checkpoints(&self) -> anyhow::Result<Vec<glidinghorse::core::checkpoint::CheckpointData>> {
+    pub async fn list_checkpoints(&self) -> anyhow::Result<Vec<wild_agent_os_core::core::checkpoint::CheckpointData>> {
         let prefix = "iri://checkpoint/";
         let entries = self.l0.scan_iri_prefix(prefix, 100)?;
-        let mut results: Vec<glidinghorse::core::checkpoint::CheckpointData> = entries
+        let mut results: Vec<wild_agent_os_core::core::checkpoint::CheckpointData> = entries
             .iter()
             .filter_map(|e| serde_json::from_str(&e.content).ok())
             .collect();
@@ -414,7 +414,7 @@ impl CodeCliEngine {
     }
 
     pub async fn resume_task(&mut self, task_iri: &str) -> anyhow::Result<TaskResult> {
-        let cm = glidinghorse::core::checkpoint::CheckpointManager::with_persistence(self.l0.clone());
+        let cm = wild_agent_os_core::core::checkpoint::CheckpointManager::with_persistence(self.l0.clone());
         let cp = cm.restore_latest(task_iri)?
             .ok_or_else(|| anyhow::anyhow!("没有找到 task_iri={} 的 checkpoint", task_iri))?;
 
@@ -428,7 +428,7 @@ impl CodeCliEngine {
     }
 
     /// 从 checkpoint 恢复任务，包含完整的历史上下文消息
-    pub async fn resume_task_with_messages(&mut self, task_iri: &str, resumed_messages: Vec<glidinghorse::gateway::unified_gateway::ChatMessage>) -> anyhow::Result<TaskResult> {
+    pub async fn resume_task_with_messages(&mut self, task_iri: &str, resumed_messages: Vec<wild_agent_os_core::gateway::unified_gateway::ChatMessage>) -> anyhow::Result<TaskResult> {
         let resume_input = "继续执行之前中断的任务。请从上次中断处继续。".to_string();
         self.process_task_with_iri_and_messages(&resume_input, task_iri, Some(resumed_messages)).await
     }
@@ -444,7 +444,7 @@ impl CodeCliEngine {
         &mut self,
         user_input: &str,
         task_iri: &str,
-        resumed_messages: Option<Vec<glidinghorse::gateway::unified_gateway::ChatMessage>>,
+        resumed_messages: Option<Vec<wild_agent_os_core::gateway::unified_gateway::ChatMessage>>,
     ) -> anyhow::Result<TaskResult> {
         // Lazy MCP connect — connect to registered servers on first task
         if let Some(ref mut client) = self.mcp_client {
@@ -465,7 +465,7 @@ impl CodeCliEngine {
             }
         }
 
-        use glidinghorse::core::agent_runner::TaskContext;
+        use wild_agent_os_core::core::agent_runner::TaskContext;
 
         let ctx = TaskContext::new(task_iri, user_input, self.config.max_iterations)
             .with_original_task(user_input);

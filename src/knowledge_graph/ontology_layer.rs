@@ -20,6 +20,16 @@ pub fn ev(s: &str) -> String { format!("https://agentos.ontology/ev/{}", s) }
 #[serde(rename_all = "snake_case")]
 pub enum PropertyType { String, Text, Integer, Number, Boolean, DateTime, Enum }
 
+/// 对象数据归属：知识（沉淀于图谱）vs 业务（图谱外，未来经 MCP 对接业务库查询）。
+/// 默认 Knowledge，保证既有已序列化数据反序列化时向后兼容。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectKind {
+    #[default]
+    Knowledge,
+    Business,
+}
+
 /// 对象类型的属性规格。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PropertySpec {
@@ -53,7 +63,28 @@ pub struct ObjectType {
     pub color: String,
     pub primary_key: String,
     pub title_property: String,
+    /// 数据归属（知识/业务）。业务对象不入图谱，未来经 MCP 对接业务库。
+    #[serde(default)]
+    pub kind: ObjectKind,
     pub properties: Vec<PropertySpec>,
+}
+
+impl ObjectType {
+    /// 标记为业务对象（实例数据归业务库，未来经 MCP 查询）。
+    pub fn business(mut self) -> Self {
+        self.kind = ObjectKind::Business;
+        self
+    }
+}
+
+/// 按对象类型 id 返回其数据归属（未知类型默认 Knowledge）。
+pub fn object_kind_of(id: &str) -> ObjectKind {
+    ev_repair_ontology()
+        .object_types
+        .iter()
+        .find(|o| o.id == id)
+        .map(|o| o.kind)
+        .unwrap_or_default()
 }
 
 /// 链接基数。
@@ -177,7 +208,7 @@ fn obj(id: &str, label: &str, desc: &str, icon: &str, color: &str, pk: &str, tit
     ObjectType {
         id: id.into(), iri: ev(id), label: label.into(), description: desc.into(),
         icon: icon.into(), color: color.into(), primary_key: pk.into(),
-        title_property: title.into(), properties: props,
+        title_property: title.into(), kind: ObjectKind::Knowledge, properties: props,
     }
 }
 
@@ -210,7 +241,7 @@ pub fn ev_repair_ontology() -> OntologyDefinition {
             ps("mileage", "里程(km)", Integer),
             ps("plate", "车牌号", PStr),
             ps("production_date", "出厂日期", DateTime),
-        ]),
+        ]).business(),
         obj("System", "系统", "整车功能系统", "Cpu", "violet", "system_id", "name", vec![
             ps("system_id", "系统ID", PStr).required(),
             ps("name", "系统名称", PStr).required(),
@@ -283,7 +314,7 @@ pub fn ev_repair_ontology() -> OntologyDefinition {
             ps("soh", "健康度SOH(%)", Number),
             ps("cycle_count", "循环次数", Integer),
             ps("warranty_years", "质保年限", Integer),
-        ]),
+        ]).business(),
         obj("RepairOrder", "维修工单", "由诊断动作生成的可执行工单", "ClipboardList", "purple", "order_id", "order_id", vec![
             ps("order_id", "工单号", PStr).required(),
             ps("vehicle_vin", "车架号", PStr).required(),
@@ -292,7 +323,7 @@ pub fn ev_repair_ontology() -> OntologyDefinition {
             ps("created_at", "创建时间", DateTime),
             ps("estimated_cost", "预估费用(元)", Number),
             ps("assigned_to", "指派技师", PStr),
-        ]),
+        ]).business(),
     ];
 
     let link_types = vec![

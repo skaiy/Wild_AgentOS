@@ -50,6 +50,7 @@ impl Default for WorkspaceSettings {
                 "venv/".into(),
                 ".next/".into(),
                 "data/".into(),
+                ".wild-agent-os/".into(),
                 ".gliding_horse/".into(),
             ],
             watch_enabled: true,
@@ -244,10 +245,10 @@ impl LoggingSettings {
                 max_files: 10,
             },
             filters: vec![
-                LogFilter { module: "glidinghorse::core".to_string(), level: "debug".to_string() },
-                LogFilter { module: "glidinghorse::gateway".to_string(), level: "debug".to_string() },
-                LogFilter { module: "glidinghorse::memory".to_string(), level: "info".to_string() },
-                LogFilter { module: "glidinghorse::tools".to_string(), level: "info".to_string() },
+                LogFilter { module: "wild_agent_os_core::core".to_string(), level: "debug".to_string() },
+                LogFilter { module: "wild_agent_os_core::gateway".to_string(), level: "debug".to_string() },
+                LogFilter { module: "wild_agent_os_core::memory".to_string(), level: "info".to_string() },
+                LogFilter { module: "wild_agent_os_core::tools".to_string(), level: "info".to_string() },
                 LogFilter { module: "redb".to_string(), level: "warn".to_string() },
             ],
             sensitive_fields: vec![
@@ -272,8 +273,8 @@ impl Default for LoggingSettings {
                 max_files: 30,
             },
             filters: vec![
-                LogFilter { module: "glidinghorse::gateway".to_string(), level: "debug".to_string() },
-                LogFilter { module: "glidinghorse::core".to_string(), level: "debug".to_string() },
+                LogFilter { module: "wild_agent_os_core::gateway".to_string(), level: "debug".to_string() },
+                LogFilter { module: "wild_agent_os_core::core".to_string(), level: "debug".to_string() },
             ],
             sensitive_fields: vec![
                 "api_key".to_string(),
@@ -844,8 +845,8 @@ mod tests {
         assert!(settings.file_output.enabled);
         assert_eq!(settings.file_output.prefix, "test_prefix");
         assert!(settings.filters.iter().any(|f| f.module == "redb" && f.level == "warn"));
-        assert!(settings.filters.iter().any(|f| f.module == "glidinghorse::core" && f.level == "debug"));
-        assert!(settings.filters.iter().any(|f| f.module == "glidinghorse::memory" && f.level == "info"));
+        assert!(settings.filters.iter().any(|f| f.module == "wild_agent_os_core::core" && f.level == "debug"));
+        assert!(settings.filters.iter().any(|f| f.module == "wild_agent_os_core::memory" && f.level == "info"));
     }
 
     #[test]

@@ -1,20 +1,20 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use glidinghorse::core::agent_instance::{AgentInstance, AgentRole};
-use glidinghorse::core::agent_runner::{AgentRunner, TaskContext};
-use glidinghorse::core::event_bus::EventBus;
-use glidinghorse::core::sa::SupervisorAgent;
-use glidinghorse::core::syscall_gate::SyscallGate;
-use glidinghorse::gateway::unified_gateway::UnifiedGateway;
-use glidinghorse::memory::l0_store::L0Store;
-use glidinghorse::memory::l2_blackboard::Blackboard;
-use glidinghorse::memory::l3_projection::ProjectionEngine;
-use glidinghorse::memory::memory_manager::MemoryManager;
-use glidinghorse::templates::template_engine::TemplateEngine;
-use glidinghorse::tools::skill_registry::SkillRegistry;
-use glidinghorse::config::settings::AgentSettings;
-use glidinghorse::CoreConfig;
+use wild_agent_os_core::core::agent_instance::{AgentInstance, AgentRole};
+use wild_agent_os_core::core::agent_runner::{AgentRunner, TaskContext};
+use wild_agent_os_core::core::event_bus::EventBus;
+use wild_agent_os_core::core::sa::SupervisorAgent;
+use wild_agent_os_core::core::syscall_gate::SyscallGate;
+use wild_agent_os_core::gateway::unified_gateway::UnifiedGateway;
+use wild_agent_os_core::memory::l0_store::L0Store;
+use wild_agent_os_core::memory::l2_blackboard::Blackboard;
+use wild_agent_os_core::memory::l3_projection::ProjectionEngine;
+use wild_agent_os_core::memory::memory_manager::MemoryManager;
+use wild_agent_os_core::templates::template_engine::TemplateEngine;
+use wild_agent_os_core::tools::skill_registry::SkillRegistry;
+use wild_agent_os_core::config::settings::AgentSettings;
+use wild_agent_os_core::CoreConfig;
 
 const OUTPUT: &str = "/tmp/agent_os_research2";
 const USER_INPUT: &str = "AI Agent在安防监控场景有哪些好的应用？";
@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let key = std::env::var("DEEPSEEK_API_KEY")?;
     let url = std::env::var("DEEPSEEK_API_URL").unwrap_or_else(|_| "https://api.deepseek.com".to_string());
 
-    let gateway_settings = glidinghorse::config::GatewaySettings {
+    let gateway_settings = wild_agent_os_core::config::GatewaySettings {
         base_url: url,
         api_key: key,
         default_model: "deepseek-chat".to_string(),

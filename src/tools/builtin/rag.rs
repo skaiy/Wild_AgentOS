@@ -3,15 +3,16 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-fn gliding_data_dir() -> PathBuf {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(&home).join(".gliding_horse").join("data")
+use crate::utils::data_paths::{resolve_user_subpath, user_subpath};
+
+fn rag_data_dir() -> PathBuf {
+    resolve_user_subpath("data")
+        .or_else(|| user_subpath("data"))
+        .unwrap_or_else(|| PathBuf::from("data"))
 }
 
 fn rag_index_dir() -> PathBuf {
-    gliding_data_dir().join("rag_index")
+    rag_data_dir().join("rag_index")
 }
 
 #[derive(Debug, Deserialize)]

@@ -6,6 +6,7 @@ use std::time::SystemTime;
 use serde_json::Value;
 
 use crate::templates::template_engine::TemplateEngine;
+use crate::utils::data_paths::{resolve_project_subpath, resolve_user_subpath};
 
 fn builtin_fallback(role: &str) -> &'static str {
     match role {
@@ -65,19 +66,16 @@ impl PromptLoader {
     pub fn load(&self, role: &str, template: &str, vars: &HashMap<String, Value>) -> String {
         let fname = format!("{}/{}.md", role, template);
 
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_default();
-        if !home.is_empty() {
-            let path = PathBuf::from(&home).join(".gliding_horse").join("prompts").join(&fname);
+        if let Some(path) = resolve_user_subpath(&format!("prompts/{fname}")) {
             if let Some(content) = self.read_cached(&path) {
                 return self.post_process(role, &Self::render_string(&content, vars));
             }
         }
 
-        let proj_path = PathBuf::from(".gliding_horse").join("prompts").join(&fname);
-        if let Some(content) = self.read_cached(&proj_path) {
-            return self.post_process(role, &Self::render_string(&content, vars));
+        if let Some(proj_path) = resolve_project_subpath(&format!("prompts/{fname}")) {
+            if let Some(content) = self.read_cached(&proj_path) {
+                return self.post_process(role, &Self::render_string(&content, vars));
+            }
         }
 
         if let Ok(content) = self.engine.render_prompt(role, template, vars, false, None) {

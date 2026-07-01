@@ -1,22 +1,22 @@
 use std::sync::Arc;
 use std::path::Path;
 
-use glidinghorse::config::GatewaySettings;
-use glidinghorse::config::settings::LoggingSettings;
-use glidinghorse::core::agent_runner::AgentRunner;
-use glidinghorse::core::event_bus::EventBus;
-use glidinghorse::core::sa::SupervisorAgent;
-use glidinghorse::core::validation::ValidationEngine;
-use glidinghorse::gateway::UnifiedGateway;
-use glidinghorse::memory::l0_store::L0Store;
-use glidinghorse::memory::l2_blackboard::Blackboard;
-use glidinghorse::memory::l3_projection::ProjectionEngine;
-use glidinghorse::memory::memory_manager::MemoryManager;
-use glidinghorse::templates::template_engine::TemplateEngine;
-use glidinghorse::tools::skill_registry::SkillRegistry;
-use glidinghorse::config::AgentSettings;
-use glidinghorse::utils::init_logging;
-use glidinghorse::CoreConfig;
+use wild_agent_os_core::config::GatewaySettings;
+use wild_agent_os_core::config::settings::LoggingSettings;
+use wild_agent_os_core::core::agent_runner::AgentRunner;
+use wild_agent_os_core::core::event_bus::EventBus;
+use wild_agent_os_core::core::sa::SupervisorAgent;
+use wild_agent_os_core::core::validation::ValidationEngine;
+use wild_agent_os_core::gateway::UnifiedGateway;
+use wild_agent_os_core::memory::l0_store::L0Store;
+use wild_agent_os_core::memory::l2_blackboard::Blackboard;
+use wild_agent_os_core::memory::l3_projection::ProjectionEngine;
+use wild_agent_os_core::memory::memory_manager::MemoryManager;
+use wild_agent_os_core::templates::template_engine::TemplateEngine;
+use wild_agent_os_core::tools::skill_registry::SkillRegistry;
+use wild_agent_os_core::config::AgentSettings;
+use wild_agent_os_core::utils::init_logging;
+use wild_agent_os_core::CoreConfig;
 use tempfile::TempDir;
 use serde_json::Value;
 
@@ -28,7 +28,7 @@ fn init_e2e_logging() {
             level: "debug".to_string(),
             format: "text".to_string(),
             console_output: true,
-            file_output: glidinghorse::config::settings::FileOutputSettings {
+            file_output: wild_agent_os_core::config::settings::FileOutputSettings {
                 enabled: true,
                 path: "./logs".to_string(),
                 prefix: "e2e_programming".to_string(),
@@ -36,23 +36,23 @@ fn init_e2e_logging() {
                 max_files: 10,
             },
             filters: vec![
-                glidinghorse::config::settings::LogFilter {
-                    module: "glidinghorse::core".to_string(),
+                wild_agent_os_core::config::settings::LogFilter {
+                    module: "wild_agent_os_core::core".to_string(),
                     level: "debug".to_string(),
                 },
-                glidinghorse::config::settings::LogFilter {
-                    module: "glidinghorse::gateway".to_string(),
+                wild_agent_os_core::config::settings::LogFilter {
+                    module: "wild_agent_os_core::gateway".to_string(),
                     level: "debug".to_string(),
                 },
-                glidinghorse::config::settings::LogFilter {
-                    module: "glidinghorse::memory".to_string(),
+                wild_agent_os_core::config::settings::LogFilter {
+                    module: "wild_agent_os_core::memory".to_string(),
                     level: "info".to_string(),
                 },
-                glidinghorse::config::settings::LogFilter {
-                    module: "glidinghorse::tools".to_string(),
+                wild_agent_os_core::config::settings::LogFilter {
+                    module: "wild_agent_os_core::tools".to_string(),
                     level: "info".to_string(),
                 },
-                glidinghorse::config::settings::LogFilter {
+                wild_agent_os_core::config::settings::LogFilter {
                     module: "redb".to_string(),
                     level: "warn".to_string(),
                 },

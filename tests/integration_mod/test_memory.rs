@@ -1,9 +1,9 @@
-use glidinghorse::memory::l0_store::L0Store;
-use glidinghorse::memory::l1_session::L1Session;
-use glidinghorse::memory::l2_blackboard::Blackboard;
-use glidinghorse::memory::l3_projection::ProjectionEngine;
-use glidinghorse::memory::memory_manager::MemoryManager;
-use glidinghorse::CoreConfig;
+use wild_agent_os_core::memory::l0_store::L0Store;
+use wild_agent_os_core::memory::l1_session::L1Session;
+use wild_agent_os_core::memory::l2_blackboard::Blackboard;
+use wild_agent_os_core::memory::l3_projection::ProjectionEngine;
+use wild_agent_os_core::memory::memory_manager::MemoryManager;
+use wild_agent_os_core::CoreConfig;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -28,7 +28,7 @@ fn test_memory_pipeline() {
 
     // L2 blackboard
     let json_ld = r#"{"@id":"iri://task/1","@type":"Test"}"#;
-    let config = glidinghorse::CoreConfig::default();
+    let config = wild_agent_os_core::CoreConfig::default();
     l2.write_node("iri://task/1/node_1", json_ld, &config).unwrap();
     let node = l2.read_node("iri://task/1/node_1").unwrap().unwrap();
     assert_eq!(node.node_type.as_ref().unwrap(), "Test");
@@ -65,8 +65,8 @@ fn test_memory_manager() {
 /// Test MemoryManager → HyperspaceStore integration via vector_store accessor.
 #[test]
 fn test_memory_manager_with_vector_store() {
-    use glidinghorse::memory::embedding_service::FallbackEmbeddingService;
-    use glidinghorse::memory::hyperspace_store::HyperspaceStore;
+    use wild_agent_os_core::memory::embedding_service::FallbackEmbeddingService;
+    use wild_agent_os_core::memory::hyperspace_store::HyperspaceStore;
 
     let dir = tempdir().unwrap();
     let vdir = tempdir().unwrap();
@@ -88,7 +88,7 @@ fn test_memory_manager_with_vector_store() {
         // Filter by tag
         let filtered = store.search_with_filter(
             "test",
-            &glidinghorse::memory::hyperspace_store::HybridSearchFilter::new()
+            &wild_agent_os_core::memory::hyperspace_store::HybridSearchFilter::new()
                 .with_must_tags(vec!["tag_a".into()]),
             10,
         ).await.unwrap();
@@ -108,8 +108,8 @@ fn test_memory_manager_with_vector_store() {
 /// Test MemoryManager → ProjectionEngine → HyperspaceStore end-to-end pipeline.
 #[test]
 fn test_full_pipeline_with_vector_store() {
-    use glidinghorse::memory::embedding_service::FallbackEmbeddingService;
-    use glidinghorse::memory::hyperspace_store::HyperspaceStore;
+    use wild_agent_os_core::memory::embedding_service::FallbackEmbeddingService;
+    use wild_agent_os_core::memory::hyperspace_store::HyperspaceStore;
 
     let _dir = tempdir().unwrap();
     let vdir = tempdir().unwrap();
@@ -147,7 +147,7 @@ fn test_full_pipeline_with_vector_store() {
 
         // Create a session (L1) + L2 write + L3 projection still works
         let json_ld = r#"{"@id":"iri://task/vs","@type":"VectorStoreTest"}"#;
-        let config = glidinghorse::CoreConfig::default();
+        let config = wild_agent_os_core::CoreConfig::default();
         l2.write_node("iri://task/vs/n1", json_ld, &config).unwrap();
         let node = l2.read_node("iri://task/vs/n1").unwrap().unwrap();
         assert_eq!(node.node_type.as_ref().unwrap(), "VectorStoreTest");

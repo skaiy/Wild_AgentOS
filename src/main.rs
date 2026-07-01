@@ -1,10 +1,15 @@
-use glidinghorse::api::grpc::server::AgentOSService;
-use glidinghorse::config::settings::Settings;
-use glidinghorse::utils::init_logging;
-use glidinghorse::api::grpc::server::seapp::se_kernel_service_server::SeKernelServiceServer;
+use wild_agent_os_core::api::grpc::server::AgentOSService;
+use wild_agent_os_core::config::settings::Settings;
+use wild_agent_os_core::utils::data_paths::migrate_legacy_home_data;
+use wild_agent_os_core::utils::init_logging;
+use wild_agent_os_core::api::grpc::server::seapp::se_kernel_service_server::SeKernelServiceServer;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if let Err(e) = migrate_legacy_home_data() {
+        eprintln!("Warning: legacy data directory migration skipped: {}", e);
+    }
+
     let settings = Settings::load().unwrap_or_else(|e| {
         eprintln!("Warning: Failed to load config ({}), using defaults", e);
         Settings::default()

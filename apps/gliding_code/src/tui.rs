@@ -6,10 +6,10 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use glidinghorse::core::agent_runner::TaskResult;
-use glidinghorse::core::event_bus::EventBus;
-use glidinghorse::core::execution_event::{ExecutionEvent, ExecutionEventKind};
-use glidinghorse::gateway::unified_gateway::ChatMessage;
+use wild_agent_os_core::core::agent_runner::TaskResult;
+use wild_agent_os_core::core::event_bus::EventBus;
+use wild_agent_os_core::core::execution_event::{ExecutionEvent, ExecutionEventKind};
+use wild_agent_os_core::gateway::unified_gateway::ChatMessage;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -72,7 +72,7 @@ pub struct App {
     current_phase: String,
     current_task_iri: Option<String>,
     /// 从 checkpoint 恢复的历史消息（用于 resume 模式）
-    resumed_messages: Option<Vec<glidinghorse::gateway::unified_gateway::ChatMessage>>,
+    resumed_messages: Option<Vec<wild_agent_os_core::gateway::unified_gateway::ChatMessage>>,
     /// 标记当前会话是否为 resume 模式（防止事件重置计数）
     is_resume_session: bool,
     session_turn_count: u32,
@@ -112,9 +112,9 @@ pub struct App {
     max_l2_mb: u64,
     max_l3_mb: u64,
     /// Lock-free handles for memory stats (no engine lock needed)
-    l2_bb: Arc<glidinghorse::memory::l2_blackboard::Blackboard>,
-    proj: Arc<glidinghorse::memory::l3_projection::ProjectionEngine>,
-    mm: Arc<tokio::sync::Mutex<glidinghorse::memory::memory_manager::MemoryManager>>,
+    l2_bb: Arc<wild_agent_os_core::memory::l2_blackboard::Blackboard>,
+    proj: Arc<wild_agent_os_core::memory::l3_projection::ProjectionEngine>,
+    mm: Arc<tokio::sync::Mutex<wild_agent_os_core::memory::memory_manager::MemoryManager>>,
     /// Token counter Arcs (lock-free reads from AgentRunner)
     prompt_tokens: Arc<std::sync::atomic::AtomicU64>,
     completion_tokens: Arc<std::sync::atomic::AtomicU64>,
@@ -650,7 +650,7 @@ impl App {
 
         // Resume mode: load checkpoint from L0 and restore conversation
         if let Some(ref task_iri) = resume_task_iri {
-            let cm = glidinghorse::core::checkpoint::CheckpointManager::with_persistence(l0);
+            let cm = wild_agent_os_core::core::checkpoint::CheckpointManager::with_persistence(l0);
             if let Ok(Some(cp)) = cm.restore_latest(task_iri) {
                 // Restore current_task_iri so new input continues the same task
                 app.current_task_iri = Some(task_iri.clone());
@@ -713,7 +713,7 @@ impl App {
                     .any(|m| matches!(m.role, MessageRole::User | MessageRole::Assistant))
                 {
                     let phase_label =
-                        glidinghorse::core::checkpoint::parse_checkpoint_phase(&cp.name);
+                        wild_agent_os_core::core::checkpoint::parse_checkpoint_phase(&cp.name);
                     let turn_str = serde_json::from_str::<serde_json::Value>(&cp.agent_state_json)
                         .ok()
                         .and_then(|v| v.get("turn").and_then(|t| t.as_u64()))

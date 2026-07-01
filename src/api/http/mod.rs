@@ -627,6 +627,42 @@ fn trunc(s: &str, n: usize) -> String {
 
 /// POST /api/v1/agents/:id/chat — 基于该 Agent 绑定知识图谱的检索增强问答（RAG）。
 /// 流程：定位 Agent → 抽取故障码/品牌 token → SPARQL 检索 FaultCode 事实 →
+/// 决策层（Phase 4）：将诊断出的故障码意图映射到适用的动力层 ActionType。
+///
+/// 取首个命中的故障码作为动作目标（applies_to=FaultCode 的动作），生成「建议动作」供前端
+/// 渲染「诊断 → 建议 → 一键执行」。`requires_business_data=true` 的动作（如生成维修工单需车辆
+/// VIN 等业务数据）当前工单系统尚未接入，前端仅弹窗占位，不直接落库。
+fn build_action_suggestions(sources: &[Value]) -> Vec<Value> {
+    let code = sources
+        .first()
+        .and_then(|s| s.get("code"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if code.is_empty() {
+        return Vec::new();
+    }
+    vec![
+        json!({
+            "action": "GenerateRepairOrder",
+            "label": "生成维修工单",
+            "icon": "Wrench",
+            "target": code,
+            "requires_business_data": true,
+            "note": "需车辆VIN等业务数据，工单系统对接中（规划中）",
+            "reason": format!("针对诊断故障码 {code} 一键生成维修工单"),
+        }),
+        json!({
+            "action": "AppendFaq",
+            "label": "沉淀为常见问答",
+            "icon": "MessageCirclePlus",
+            "target": code,
+            "requires_business_data": false,
+            "reason": format!("将本次诊断沉淀为故障码 {code} 的 FAQ"),
+        }),
+    ]
+}
+
 /// 组装为上下文交由 LLM 网关生成简体中文回答 → 返回 answer 与 sources。
 async fn agent_chat_handler(
     State(state): State<Arc<AppState>>,
@@ -763,6 +799,7 @@ async fn agent_chat_handler(
                     "sources": sources,
                     "retrieved": rows.len(),
                     "model": state.gateway.default_model(),
+                    "suggested_actions": build_action_suggestions(&sources),
                 })),
             )
         }
@@ -783,6 +820,7 @@ async fn agent_chat_handler(
                         "sources": sources,
                         "retrieved": rows.len(),
                         "warning": format!("LLM 网关不可用，已回退为图谱直出：{}", e),
+                        "suggested_actions": build_action_suggestions(&sources),
                     })),
                 )
             } else {
@@ -1377,6 +1415,22 @@ fn ev_object_exists(kg: &KnowledgeGraphStore, iri: &str) -> bool {
     kg.query_sparql(&q, None).map(|r| !r.is_empty()).unwrap_or(false)
 }
 
+/// 对象存在性前置条件解析（知识/业务分流，MCP 向后兼容扩展位）。
+///
+/// - 知识对象（FaultCode / VehicleModel / FAQ…）：查询知识命名图。
+/// - 业务对象（Vehicle / Battery / RepairOrder…）：业务数据不入图谱，未来经 MCP
+///   对接业务库查询；当前 MCP 未接入，回退查询命名图以保持向后兼容——接入 MCP 后
+///   只需替换 Business 分支，调用方（build_action_effects）无需改动。
+fn resolve_object_exists(kg: &KnowledgeGraphStore, object_type: &str, key: &str) -> bool {
+    use crate::knowledge_graph::ontology_layer::{object_kind_of, ObjectKind};
+    let iri = ev_instance_iri(object_type, key);
+    match object_kind_of(object_type) {
+        ObjectKind::Knowledge => ev_object_exists(kg, &iri),
+        // TODO(MCP): 业务库接入后改为经 MCP 查询业务对象是否存在；当前回退命名图。
+        ObjectKind::Business => ev_object_exists(kg, &iri),
+    }
+}
+
 fn p_str(params: &serde_json::Map<String, Value>, name: &str) -> Option<String> {
     match params.get(name) {
         Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
@@ -1482,11 +1536,12 @@ fn build_action_effects(
             let fault_code = req.target.clone().ok_or_else(|| bad("缺少 target（故障码主键）".into()))?;
             let vin = p_str(&req.params, "vehicle_vin").unwrap();
             let vehicle_iri = ev_instance_iri("Vehicle", &vin);
-            if !ev_object_exists(kg, &vehicle_iri) {
+            // 车辆为业务对象：当前回退命名图校验，未来经 MCP 业务库校验（见 resolve_object_exists）。
+            if !resolve_object_exists(kg, "Vehicle", &vin) {
                 return Err(bad(format!("前置条件不满足：车辆VIN不存在于图谱 ({vin})")));
             }
             let fault_iri = ev_instance_iri("FaultCode", &fault_code);
-            if !ev_object_exists(kg, &fault_iri) {
+            if !resolve_object_exists(kg, "FaultCode", &fault_code) {
                 return Err(bad(format!("前置条件不满足：故障码未确诊/不存在 ({fault_code})")));
             }
             let order_id = format!("RO-{}", uuid::Uuid::new_v4().hyphenated());
@@ -1519,7 +1574,8 @@ fn build_action_effects(
                 return Err(bad("前置条件不满足：SOH 取值需在 0-100".into()));
             }
             let bat_iri = ev_instance_iri("Battery", &battery_id);
-            if !ev_object_exists(kg, &bat_iri) {
+            // 电池为业务对象：当前回退命名图校验，未来经 MCP 业务库校验。
+            if !resolve_object_exists(kg, "Battery", &battery_id) {
                 return Err(bad(format!("前置条件不满足：电池对象不存在 ({battery_id})")));
             }
             let mut stmts = upsert_prop_stmts(&bat_iri, &ev_prop_iri("soh"), &lit_decimal(soh));
@@ -1531,7 +1587,7 @@ fn build_action_effects(
             let model_id = p_str(&req.params, "model_id").unwrap();
             let reason = p_str(&req.params, "recall_reason").unwrap();
             let model_iri = ev_instance_iri("VehicleModel", &model_id);
-            if !ev_object_exists(kg, &model_iri) {
+            if !resolve_object_exists(kg, "VehicleModel", &model_id) {
                 return Err(bad(format!("前置条件不满足：车型对象不存在 ({model_id})")));
             }
             let mut stmts = upsert_prop_stmts(&model_iri, &ev_prop_iri("recalled"), &lit("true"));
@@ -1545,7 +1601,7 @@ fn build_action_effects(
             let question = p_str(&req.params, "question").unwrap();
             let answer = p_str(&req.params, "answer").unwrap();
             let fault_iri = ev_instance_iri("FaultCode", &code);
-            if !ev_object_exists(kg, &fault_iri) {
+            if !resolve_object_exists(kg, "FaultCode", &code) {
                 return Err(bad(format!("前置条件不满足：故障码对象不存在 ({code})")));
             }
             let faq_id = format!("FAQ-{}", uuid::Uuid::new_v4().hyphenated());

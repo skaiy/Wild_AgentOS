@@ -3,11 +3,12 @@ use serde_json::{json, Value};
 use std::path::Path;
 use chrono::{DateTime, Utc};
 
+use crate::utils::data_paths::{resolve_user_subpath, user_subpath};
+
 fn rag_index_dir() -> std::path::PathBuf {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-    std::path::PathBuf::from(&home).join(".gliding_horse").join("data").join("rag_index")
+    resolve_user_subpath("data/rag_index")
+        .or_else(|| user_subpath("data/rag_index"))
+        .unwrap_or_else(|| std::path::PathBuf::from("data/rag_index"))
 }
 
 #[derive(Debug, Deserialize)]
