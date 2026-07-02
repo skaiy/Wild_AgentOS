@@ -1350,6 +1350,44 @@ impl App {
                     mermaid_blocks,
                 });
                 self.add_event("COMPLETE", &format!("{} {}", icon, tr.status));
+
+                // ── Multi-turn conversation carryover ──
+                // Capture this turn's conversation history so the next user input
+                // is processed with prior context. The Vec starts with a dummy
+                // "system" entry that BizAgent's resume code skips (skip(1)).
+                let mut conversation: Vec<ChatMessage> = vec![
+                    ChatMessage {
+                        role: "system".to_string(),
+                        content: String::new(),
+                        name: None,
+                        tool_calls: None,
+                        tool_call_id: None,
+                        reasoning_content: None,
+                    },
+                ];
+                // Previous turns' history (if any) accumulated in resumed_messages
+                if let Some(prev) = self.resumed_messages.take() {
+                    // Skip the dummy system entry at index 0 — keep real user/assistant pairs
+                    conversation.extend(prev.into_iter().skip(1));
+                }
+                // Current turn: user input → assistant response
+                conversation.push(ChatMessage {
+                    role: "user".to_string(),
+                    content: self.last_user_input.clone(),
+                    name: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    reasoning_content: None,
+                });
+                conversation.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: output_text.to_string(),
+                    name: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    reasoning_content: None,
+                });
+                self.resumed_messages = Some(conversation);
             }
             Err(e) => {
                 self.messages.push(Message {

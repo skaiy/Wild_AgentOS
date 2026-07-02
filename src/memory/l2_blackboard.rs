@@ -200,32 +200,61 @@ impl Blackboard {
             // Role index
             if let Some(role_str) = parsed.get("role").and_then(|v| v.as_str()) {
                 if let Ok(role) = role_str.parse::<AgentRole>() {
-                    self.role_index.write()
-                        .entry((task_iri.clone(), role))
-                        .or_default()
-                        .push(node_iri.to_string());
+                    let mut idx = self.role_index.write();
+                    let entry = idx.entry((task_iri.clone(), role)).or_default();
+                    if !entry.contains(&node_iri.to_string()) {
+                        entry.push(node_iri.to_string());
+                    }
                 }
             }
 
             // Cycle index
             if let Some(cycle_id) = parsed.get("cycle_id").and_then(|v| v.as_str()) {
-                let cycle_str = cycle_id.to_string();
-                self.cycle_index.write()
-                    .entry((task_iri.clone(), cycle_str))
-                    .or_default()
-                    .push(node_iri.to_string());
+                let mut idx = self.cycle_index.write();
+                let entry = idx.entry((task_iri.clone(), cycle_id.to_string())).or_default();
+                if !entry.contains(&node_iri.to_string()) {
+                    entry.push(node_iri.to_string());
+                }
             }
 
             // Type index
             if let Some(node_type) = jsonld_types.first() {
-                self.type_index.write()
-                    .entry((task_iri.clone(), node_type.clone()))
-                    .or_default()
-                    .push(node_iri.to_string());
+                let mut idx = self.type_index.write();
+                let entry = idx.entry((task_iri.clone(), node_type.clone())).or_default();
+                if !entry.contains(&node_iri.to_string()) {
+                    entry.push(node_iri.to_string());
+                }
             }
         }
 
-        if !is_update {
+            // ── Update secondary indices for batch ──
+            if let Some(task_iri) = &task_iri {
+                if let Some(role_str) = parsed.get("role").and_then(|v| v.as_str()) {
+                    if let Ok(role) = role_str.parse::<AgentRole>() {
+                        let mut idx = self.role_index.write();
+                        let entry = idx.entry((task_iri.clone(), role)).or_default();
+                        if !entry.contains(&node_iri.to_string()) {
+                            entry.push(node_iri.to_string());
+                        }
+                    }
+                }
+                if let Some(cycle_id) = parsed.get("cycle_id").and_then(|v| v.as_str()) {
+                    let mut idx = self.cycle_index.write();
+                    let entry = idx.entry((task_iri.clone(), cycle_id.to_string())).or_default();
+                    if !entry.contains(&node_iri.to_string()) {
+                        entry.push(node_iri.to_string());
+                    }
+                }
+                if let Some(node_type) = jsonld_types.first() {
+                    let mut idx = self.type_index.write();
+                    let entry = idx.entry((task_iri.clone(), node_type.clone())).or_default();
+                    if !entry.contains(&node_iri.to_string()) {
+                        entry.push(node_iri.to_string());
+                    }
+                }
+            }
+
+            if !is_update {
             self.node_count.fetch_add(1, Ordering::Relaxed);
         }
         self.total_bytes.fetch_add(size as u64, Ordering::Relaxed);
@@ -753,27 +782,30 @@ impl Blackboard {
                 }
             }
 
-            // Secondary indices for batch (same logic as write_node)
+            // Secondary indices for named-graph write (same logic as write_node)
             if let Some(task_iri) = &task_iri {
                 if let Some(role_str) = parsed.get("role").and_then(|v| v.as_str()) {
                     if let Ok(role) = role_str.parse::<AgentRole>() {
-                        self.role_index.write()
-                            .entry((task_iri.clone(), role))
-                            .or_default()
-                            .push(node_iri.to_string());
+                        let mut idx = self.role_index.write();
+                        let entry = idx.entry((task_iri.clone(), role)).or_default();
+                        if !entry.contains(&node_iri.to_string()) {
+                            entry.push(node_iri.to_string());
+                        }
                     }
                 }
                 if let Some(cycle_id) = parsed.get("cycle_id").and_then(|v| v.as_str()) {
-                    self.cycle_index.write()
-                        .entry((task_iri.clone(), cycle_id.to_string()))
-                        .or_default()
-                        .push(node_iri.to_string());
+                    let mut idx = self.cycle_index.write();
+                    let entry = idx.entry((task_iri.clone(), cycle_id.to_string())).or_default();
+                    if !entry.contains(&node_iri.to_string()) {
+                        entry.push(node_iri.to_string());
+                    }
                 }
                 if let Some(node_type) = jsonld_types.first() {
-                    self.type_index.write()
-                        .entry((task_iri.clone(), node_type.clone()))
-                        .or_default()
-                        .push(node_iri.to_string());
+                    let mut idx = self.type_index.write();
+                    let entry = idx.entry((task_iri.clone(), node_type.clone())).or_default();
+                    if !entry.contains(&node_iri.to_string()) {
+                        entry.push(node_iri.to_string());
+                    }
                 }
             }
 
@@ -1028,23 +1060,26 @@ impl Blackboard {
             if let Some(task_iri) = &task_iri {
                 if let Some(role_str) = parsed.get("role").and_then(|v| v.as_str()) {
                     if let Ok(role) = role_str.parse::<AgentRole>() {
-                        self.role_index.write()
-                            .entry((task_iri.clone(), role))
-                            .or_default()
-                            .push(node_iri.to_string());
+                        let mut idx = self.role_index.write();
+                        let entry = idx.entry((task_iri.clone(), role)).or_default();
+                        if !entry.contains(&node_iri.to_string()) {
+                            entry.push(node_iri.to_string());
+                        }
                     }
                 }
                 if let Some(cycle_id) = parsed.get("cycle_id").and_then(|v| v.as_str()) {
-                    self.cycle_index.write()
-                        .entry((task_iri.clone(), cycle_id.to_string()))
-                        .or_default()
-                        .push(node_iri.to_string());
+                    let mut idx = self.cycle_index.write();
+                    let entry = idx.entry((task_iri.clone(), cycle_id.to_string())).or_default();
+                    if !entry.contains(&node_iri.to_string()) {
+                        entry.push(node_iri.to_string());
+                    }
                 }
                 if let Some(node_type) = jsonld_types.first() {
-                    self.type_index.write()
-                        .entry((task_iri.clone(), node_type.clone()))
-                        .or_default()
-                        .push(node_iri.to_string());
+                    let mut idx = self.type_index.write();
+                    let entry = idx.entry((task_iri.clone(), node_type.clone())).or_default();
+                    if !entry.contains(&node_iri.to_string()) {
+                        entry.push(node_iri.to_string());
+                    }
                 }
             }
 

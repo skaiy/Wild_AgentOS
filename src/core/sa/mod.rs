@@ -1174,9 +1174,11 @@ Complexity definitions:
                 AgentRole::Check => Some(AgentRole::Do),
                 _ => None,
             };
+            // Only apply cycle_id filter when we have a specific role filter
+            // (PA sees all context nodes; DA/CA see only the previous agent's output from this cycle)
             let filter = QueryFilter {
-                role: prev_role,
-                cycle_id: Some(cycle_id.to_string()),
+                role: prev_role.clone(),
+                cycle_id: prev_role.map(|_| cycle_id.to_string()),
                 node_type: None,
             };
             let nodes = blackboard.query_nodes_filtered(&context.task_iri, &filter).unwrap_or_default();
@@ -1608,7 +1610,8 @@ Complexity definitions:
                 self.max_iterations,
             )
             .with_original_task(user_input)
-            .with_step_info(&step.expected_output, &step.success_criteria);
+            .with_step_info(&step.expected_output, &step.success_criteria)
+            .with_cycle_id(&cycle_id);
 
             context = context.with_five_w2h(five_w2h_iri, five_w2h.clone());
 
@@ -1762,6 +1765,11 @@ Complexity definitions:
                         archive_iri: None,
                     });
                 }
+
+                // Propagate this agent's output summary to the next agent in the DAG pipeline.
+                // Without this, the next agent sees stale prev_summary (None or old cycle_feedback)
+                // instead of the previous agent's actual plan/result — breaking cross-cycle PDCA.
+                prev_summary = Some(result.summary.clone());
 
                 if let Some(ref updates) = result.five_w2h_updates {
                     if let Ok(Some(snapshot)) = self.runner.l0_store.retrieve(&five_w2h_iri) {
@@ -1967,11 +1975,32 @@ Complexity definitions:
                 let cp_name = format!("step_complete_{}", role_name);
                 let tags = vec![role_name.clone(), "step_complete".to_string()];
 
+                // Capture session messages from blackboard AgentTurn nodes for checkpoint resume
+                let session_msgs_json: String = if let Some(ref bb) = self.blackboard {
+                    let filter = crate::memory::l2_blackboard::QueryFilter {
+                        role: None,
+                        cycle_id: Some(cycle_id.clone()),
+                        node_type: Some("AgentTurn".to_string()),
+                    };
+                    let nodes = bb.query_nodes_filtered(task_iri, &filter).unwrap_or_default();
+                    let msgs: Vec<serde_json::Value> = nodes.iter().filter_map(|n| {
+                        let parsed: serde_json::Value = serde_json::from_str(&n.json_ld).ok()?;
+                        Some(serde_json::json!({
+                            "role": parsed.get("role").and_then(|r| r.as_str()).unwrap_or("assistant"),
+                            "content": parsed.get("content").and_then(|c| c.as_str()).unwrap_or(""),
+                            "summary": parsed.get("summary").and_then(|s| s.as_str()),
+                        }))
+                    }).collect();
+                    serde_json::to_string(&msgs).unwrap_or_else(|_| "[]".to_string())
+                } else {
+                    "[]".to_string()
+                };
+
                 if let Err(e) = cm.create_ext(
                     task_iri,
                     &cp_name,
                     "[]",
-                    "[]",  // step_boundary: messages are in finer-grained React loop checkpoints
+                    &session_msgs_json,
                     &state_json,
                     &tags,
                     Some(&role_name),
