@@ -18,7 +18,7 @@
 [**English**](README.md) · [**中文**](README.zh.md) · [**Design Detail →**](docs/DESIGN_DETAIL.md)
 [**medium URL**](https://medium.com/@doiito-sun)
 [**中文稀土掘金**](https://juejin.cn/column/7647868075887165450)
-[**中文思否博客**](https://segmentfault.com/u/doiito/articles)
+[**中文博客园**](https://www.cnblogs.com/doiito)
 [**中文CSDN博客**](https://blog.csdn.net/2604_96270735)
 [**B站播客**](https://space.bilibili.com/1547455799/lists)
 
