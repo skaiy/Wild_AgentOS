@@ -1,7 +1,7 @@
 //! Cross-domain graph abstraction layer.
 //!
-//! Three traits that decouple causal analysis, timeline versioning, and
-//! GNN-style feature extraction from any specific graph storage backend:
+//! Three traits that decouple causal analysis, snapshot versioning, and
+//! topological feature extraction from any specific graph storage backend:
 //!
 //! - [`GraphBackend`] — causal traversal (used by [`CausalEngine`])
 //! - [`SnapshotBackend`] — versioning via snapshot/restore (used by [`TimelineStore`])
@@ -12,8 +12,8 @@
 //! that queries the shared [`KnowledgeGraphStore`] (Oxigraph RDF store) over SPARQL.
 //!
 //! [`CausalEngine`]: crate::causal::engine::CausalEngine
-//! [`TimelineStore`]: crate::temporal::timeline::TimelineStore
-//! [`FeatureExtractor`]: crate::gnn::features::FeatureExtractor
+//! [`TimelineStore`]: crate::snapshots::timeline::TimelineStore
+//! [`FeatureExtractor`]: crate::graph_features::features::FeatureExtractor
 //! [`SkillGraphStore`]: crate::skill_graph::graph_store::SkillGraphStore
 //! [`KnowledgeGraphStore`]: crate::knowledge_graph::store::KnowledgeGraphStore
 
@@ -58,7 +58,7 @@ pub trait GraphBackend: Send + Sync {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// SnapshotBackend — temporal versioning
+// SnapshotBackend — snapshot versioning
 // ════════════════════════════════════════════════════════════════════════
 
 /// A serializable node that a [`SnapshotBackend`] can read/write.
@@ -84,7 +84,7 @@ impl SnapshotNode {
 
 /// Abstract backend for snapshot/restore operations.
 ///
-/// Used by [`TimelineStore`](crate::temporal::timeline::TimelineStore) to
+/// Used by [`TimelineStore`](crate::snapshots::timeline::TimelineStore) to
 /// decouple versioning from any specific store.
 pub trait SnapshotBackend: Send + Sync {
     /// Read the current state as a list of serializable nodes.
@@ -113,7 +113,7 @@ pub enum Direction {
 
 /// Abstract graph for topological feature extraction.
 ///
-/// Used by [`FeatureExtractor`](crate::gnn::features::FeatureExtractor)
+/// Used by [`FeatureExtractor`](crate::graph_features::features::FeatureExtractor)
 /// so it can compute degree, PageRank, betweenness, and community metrics
 /// over any graph — not just the skill-graph petgraph.
 pub trait FeatureGraph: Send + Sync {

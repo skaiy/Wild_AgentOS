@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::graph_backend::{SnapshotBackend, SnapshotNode};
 use crate::skill_graph::types::{Hyperedge, KnowledgeFragment, MOCNode, SkillGraphNode};
-use crate::temporal::types::{
+use crate::snapshots::types::{
     GraphDiff, GraphMutation, GraphSnapshot, SnapshotMeta,
 };
 

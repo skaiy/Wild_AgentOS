@@ -132,9 +132,9 @@ pub struct App {
     #[allow(dead_code)]
     discovery_engine: Arc<glidinghorse::skill_graph::discovery::SkillDiscoveryEngine>,
     #[allow(dead_code)]
-    feature_extractor: Arc<glidinghorse::gnn::features::FeatureExtractor>,
+    feature_extractor: Arc<glidinghorse::graph_features::features::FeatureExtractor>,
     causal_engine: Arc<glidinghorse::causal::engine::CausalEngine>,
-    timeline: Arc<glidinghorse::temporal::timeline::TimelineStore>,
+    timeline: Arc<glidinghorse::snapshots::timeline::TimelineStore>,
     /// Cached skill graph stats (refreshed each frame)
     sg_nodes: usize,
     sg_edges: usize,
