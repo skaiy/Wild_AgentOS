@@ -32,10 +32,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent_os_service = AgentOSService::new(settings)
         .map_err(|e| Box::<dyn std::error::Error>::from(e))?;
 
-    // 异步初始化 BatchAgent 系统（注册 agent、启动触发器）
+    // async initialize BatchAgent system (register agents, start triggers)
     agent_os_service.init_batch_system().await;
 
-    // 把已存在的 axum HTTP/SSE 路由(build_router) 与 gRPC 并行挂载，复用同一运行期状态。
+    // mount existing axum HTTP/SSE routes (build_router) alongside gRPC, sharing runtime state
     let http_router = agent_os_service.build_http_router();
     let http_port: u16 = std::env::var("AGENT_OS_HTTP_PORT")
         .ok()

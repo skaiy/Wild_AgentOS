@@ -152,7 +152,7 @@ impl ProactiveEngine {
         }
     }
 
-    /// 设置主动感知存储，使 ProactiveEngine 能向 Agent 注入告警感知数据
+    /// Set proactive perception store, enabling ProactiveEngine to inject alert perception data into Agent
     pub fn with_perception_store(mut self, store: Arc<PerceptionStore>) -> Self {
         self.perception_store = Some(store);
         self
@@ -434,14 +434,14 @@ impl ProactiveEngine {
         }
     }
 
-    /// 向 PerceptionStore 注入冲突告警
+    /// Inject conflict alerts into PerceptionStore
     fn inject_conflict_perception(&self, conflict_type: &str, path: &str, task_iri: &str) {
         if let Some(ref store) = self.perception_store {
             let type_label = match conflict_type {
-                "stale_file_write" => "stale 文件写入",
-                "concurrent_write" => "并发写入冲突",
-                "unread_write" => "未读取写入",
-                _ => "资源冲突",
+                "stale_file_write" => "stale file write",
+                "concurrent_write" => "concurrent write conflict",
+                "unread_write" => "unread write",
+                _ => "resource conflict",
             };
             let entry = PerceptionEntry::new(
                 PerceptionSource::PerceptionEngine,
@@ -463,7 +463,7 @@ impl ProactiveEngine {
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
 
-        // 向感知区域注入告警
+        // inject alerts into perception area
         self.inject_conflict_perception(conflict_type, resource_path, task_iri);
 
         let (diagnosis, actions, priority, interrupt) = match conflict_type {
@@ -1035,7 +1035,7 @@ mod tests_5w2h {
         // PerceptionStore should have the conflict entry
         assert!(ps.has_new("iri://task/store_test"), "PerceptionStore should have entry after conflict");
         let text = ps.take_perception_text("iri://task/store_test");
-        assert!(text.contains("告警"), "Should contain alert prefix: {}", text);
+        assert!(text.contains("Alert"), "Should contain alert prefix: {}", text);
         assert!(text.contains("stale"), "Should mention stale file: {}", text);
     }
 
@@ -1055,7 +1055,7 @@ mod tests_5w2h {
         let _plan = engine.on_resource_conflict(&conflict, "iri://task/concurrent");
 
         let text = ps.take_perception_text("iri://task/concurrent");
-        assert!(text.contains("并发"), "Should mention concurrent write: {}", text);
+        assert!(text.contains("concurrent"), "Should mention concurrent write: {}", text);
     }
 
     #[test]
@@ -1073,7 +1073,7 @@ mod tests_5w2h {
         let _plan = engine.on_resource_conflict(&conflict, "iri://task/unread");
 
         let text = ps.take_perception_text("iri://task/unread");
-        assert!(text.contains("未读取"), "Should mention unread write: {}", text);
+        assert!(text.contains("unread"), "Should mention unread write: {}", text);
     }
 
     #[test]

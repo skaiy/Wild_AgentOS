@@ -1,13 +1,13 @@
-//! JSON-LD DAG 工作流引擎
+//! JSON-LD DAG workflow engine
 //!
-//! 提供可选的 JSON-LD 定义的工作流执行能力，与现有 SA ExecutionPlan 并存。
+//! Provides optional JSON-LD-defined workflow execution, co-existing with SA ExecutionPlan.
 //!
-//! ## 架构
+//! ## Architecture
 //!
-//! - `definition.rs` — JSON-LD 序列化类型（Web UI 编辑/保存的格式）
-//! - `loader.rs` — 解析 JSON-LD → petgraph DiGraph，含环检测 + 拓扑排序
-//! - `engine.rs` — DAG 执行引擎，条件分支 + 重试
-//! - `adapter.rs` — ExecutionPlan → DAG 转换器，统一执行路径
+//! - `definition.rs` — JSON-LD serialization types (Web UI edit/save format)
+//! - `loader.rs` — Parse JSON-LD → petgraph DiGraph, cycle detection + topological sort
+//! - `engine.rs` — DAG execution engine, conditional branches + retry
+//! - `adapter.rs` — ExecutionPlan → DAG adapter, unified execution path
 
 pub mod adapter;
 pub mod definition;

@@ -267,7 +267,7 @@ impl SharingProtocol {
         }
     }
 
-    /// 注入审计日志（可选）
+    /// Inject audit log (optional)
     pub fn with_audit_log(mut self, audit_log: Arc<SharingAuditLog>) -> Self {
         self.audit_log = Some(audit_log);
         self
@@ -313,7 +313,7 @@ impl SharingProtocol {
 
             shares.insert(share_id, ref_.clone());
 
-            // 非阻塞写入审计日志
+            // non-blocking write to audit log
             if let Some(ref audit) = self.audit_log {
                 audit.log_share_created(
                     &ref_.share_id,

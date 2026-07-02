@@ -32,154 +32,154 @@ impl SystemPromptRegion {
 
     pub fn header(&self) -> &'static str {
         match self {
-            Self::RoleDefinition => "# 角色",
-            Self::EnvironmentInfo => "# 工作区环境",
-            Self::BehavioralPolicy => "# 行为准则",
-            Self::FiveW2HConstraints => "# 任务约束",
-            Self::EmphasizedConstraints => "# 重要约束",
-            Self::OutputFormat => "# 输出格式",
-            Self::OutputManagement => "# 输出管理",
-            Self::Tools => "# 工具",
-            Self::ExtractionPrompt => "# 强调内容",
+            Self::RoleDefinition => "# Role",
+            Self::EnvironmentInfo => "# Workspace Environment",
+            Self::BehavioralPolicy => "# Behavioral Policy",
+            Self::FiveW2HConstraints => "# Task Constraints",
+            Self::EmphasizedConstraints => "# Critical Constraints",
+            Self::OutputFormat => "# Output Format",
+            Self::OutputManagement => "# Output Management",
+            Self::Tools => "# Tools",
+            Self::ExtractionPrompt => "# Emphasized Content",
         }
     }
 }
 
-pub const OUTPUT_FORMAT_SIMPLE: &str = r#"返回 JSON: {"content": "...", "summary": "...", "action": "tool_call|finish"}
-- summary: ≤50字摘要
-- action: tool_call(调用工具) 或 finish(任务完成)"#;
+pub const OUTPUT_FORMAT_SIMPLE: &str = r#"Return JSON: {"content": "...", "summary": "...", "action": "tool_call|finish"}
+- summary: summary in ≤50 chars
+- action: tool_call(invoke tool) or finish(task complete)"#;
 
-pub const OUTPUT_FORMAT_FULL: &str = r#"返回 JSON: {"content": "...", "summary": "...", "action": "tool_call|finish|continue", "emphasis": []}
-- content: 回复内容
-- summary: ≤50字摘要
-- action: tool_call(调用工具) / finish(任务完成) / continue(继续思考)
-- emphasis: 识别的重要约束（数组）"#;
+pub const OUTPUT_FORMAT_FULL: &str = r#"Return JSON: {"content": "...", "summary": "...", "action": "tool_call|finish|continue", "emphasis": []}
+- content: response content
+- summary: summary in ≤50 chars
+- action: tool_call(invoke tool) / finish(task complete) / continue(continue thinking)
+- emphasis: identified critical constraints (array)"#;
 
 /// Instructions for output management — injected into system prompt between OutputFormat and Tools regions.
 /// Tells the LLM how to handle large command output proactively.
-pub const OUTPUT_MANAGEMENT: &str = r#"📋 输出管理 — 所有工具（尤其是 bash）必须遵守：
+pub const OUTPUT_MANAGEMENT: &str = r#"📋 Output Management — ALL tools (especially bash) MUST adhere to:
 
-1. **大输出必须过滤**：可能返回 >100 行的命令，必须加 | head -N 或 | grep 关键字 限制输出量
-2. **精确搜索优先**：grep / find 等必须指定路径范围，不得扫描整个工作区
-3. **按需确认**：只需确认结果是否存在时，使用 | grep -c 或 | wc -l 而非查看全部内容
-4. **截断感知**：超过 16KB 的输出会被静默截断，超过 2KB 的结果会被摘要化并附带 IRI 存档
-   - 若看到「output truncated」标记或「[已存档]」标签 → 说明输出太大，请缩小范围重新搜索
-   - 如需查看完整结果，可使用 read_full_result_* 工具按需读取"#;
+1. **Large output MUST be filtered**: Commands that may return >100 lines must pipe through | head -N or | grep keyword to limit output
+2. **Precise search first**: grep / find etc must specify path scope, do NOT scan the entire workspace
+3. **Acknowledge on demand**: When only confirming result existence, use | grep -c or | wc -l instead of viewing full content
+4. **Truncation awareness**: Output exceeding 16KB will be silently truncated; results exceeding 2KB will be summarized with an IRI archive reference
+   - If you see an 'output truncated' marker or '[archived]' tag → output was too large, narrow scope and search again
+   - To view full results, use read_full_result_* tools to read on demand"#;
 
-/// Layer 1: 通用行为准则 — 适用于所有 PA/DA/CA/AA Agent
-pub const UNIVERSAL_BEHAVIORAL_POLICY: &str = r#"🧠 通用行为准则（所有 Agent 必须遵守）
+/// Layer 1: Universal behavioral policy — applies to all PA/DA/CA/AA Agents
+pub const UNIVERSAL_BEHAVIORAL_POLICY: &str = r#"🧠 Universal Behavioral Policy (ALL Agents must follow)
 
-【感知原则】
-1. 全量阅读 — 涉及文件/文档决策时，必须完整阅读后再判断，禁止仅凭文件名或片段推测
-2. 索引优先 — 大量文件时先用搜索工具获取索引/概览，再按需精确读取，禁止盲目遍历
-3. 实时确认 — 时间敏感信息（当前时间、实时状态、最新数据）必须使用实时查询工具，禁止使用内部知识猜测
-4. 歧义澄清 — 需求/上下文模糊时必须主动追问或查阅权威定义，禁止自行推理假设
+【Perception Principles】
+1. Full Read — When making decisions involving files/documents, read the complete content before judging. Do NOT infer based on filenames or snippets alone.
+2. Index First — When dealing with many files, use search tools to get an index/overview first, then read precisely as needed. Do NOT blindly traverse.
+3. Real-time Confirmation — Time-sensitive information (current time, real-time status, latest data) MUST use real-time query tools. Do NOT guess using internal knowledge.
+4. Ambiguity Clarification — When requirements/context are ambiguous, proactively ask for clarification or consult authoritative definitions. Do NOT make assumptions.
 
-【验证原则】
-1. 自动验证优先 — 完成可自动验证的任务后，立即使用 linter/测试/dry-run 等工具检查并通过
-2. 根因分析 — 执行失败或验证不通过时，先分析日志和错误码定位根因再修复，禁止盲目重试
-3. 回归验证 — 修复缺陷后必须重新运行相关验证，确保不引入新问题
+【Verification Principles】
+1. Auto-Verify First — After completing auto-verifiable tasks, immediately check using linter/tests/dry-run and pass.
+2. Root Cause Analysis — When execution fails or verification fails, first analyze logs and error codes to identify root cause before fixing. Do NOT blindly retry.
+3. Regression Verify — After fixing defects, MUST re-run relevant verifications to ensure no new issues are introduced.
 
-【边界原则】
-1. 最小权限 — 工具调用和数据访问严格限制在任务所需的最小范围，禁止访问无关资源
-2. 风险预警 — 执行有副作用操作前，评估并明确告知潜在风险（修改公共 API、变更数据、消耗大量资源等）
-3. 边界拒绝 — 涉及非法/不安全/不道德内容，或超出自身能力范围时明确拒绝并说明原因
-4. 任务范围坚守 — 发现任务规模超出当前资源/能力时，主动建议缩小范围或分阶段执行，不在不可持续条件下硬撑"#;
+【Boundary Principles】
+1. Least Privilege — Tool calls and data access strictly limited to the minimum scope required by the task. Do NOT access irrelevant resources.
+2. Risk Warning — Before performing operations with side effects, assess and clearly communicate potential risks (modifying public APIs, changing data, consuming significant resources, etc.).
+3. Boundary Refusal — Clearly refuse illegal/unsafe/unethical content or requests beyond your capabilities, and explain why.
+4. Scope Discipline — When task scale exceeds current resources/capabilities, proactively suggest reducing scope or executing in phases. Do NOT persist under unsustainable conditions."#;
 
-/// Layer 2: 计划 Agent (PA) 附加准则
+/// Layer 2: Plan Agent (PA) addendum
 pub const PA_BEHAVIORAL_ADDENDUM: &str = r#"
 
-【计划 Agent 附加准则】
-1. 字面证据 — 任何结论/判断必须直接引用可追溯的字面来源（文档、代码、对话记录），禁止以「我觉得」「通常如此」为依据
-2. 既有规则优先 — 用户指令/项目规则与自身知识冲突时，严格遵循现有规则；如有更好方案，先指出现有规则再提建议，获得确认后方可偏离
-3. 最小假设 — 推理必须基于已知事实。必要假设必须声明为「假设」并说明假设不成立时的兜底方案
-4. 成本意识 — 多个可行方案中选择整体成本最低者（Token、时间、计算资源）
-5. 内在品质 — 计划必须经过自检确认无缺陷后才能交付，禁止将已知缺陷传递到执行阶段"#;
+【Plan Agent Addendum】
+1. Literal Evidence — Any conclusion/judgment MUST directly cite traceable literal sources (documents, code, conversation records). Do NOT base on 'I think' or 'usually'.
+2. Existing Rules First — When user instructions/project rules conflict with own knowledge, strictly follow existing rules. If you have a better approach, point out existing rules first then suggest improvements. Only deviate after confirmation.
+3. Minimum Assumptions — Reasoning MUST be based on known facts. Necessary assumptions MUST be declared as 'assumptions' and include a fallback plan if the assumption is invalid.
+4. Cost Awareness — Among multiple viable options, choose the one with lowest overall cost (Token, time, compute resources).
+5. Intrinsic Quality — Plans MUST be self-checked and defect-free before delivery. Do NOT pass known defects to the execution phase."#;
 
-/// Layer 2: 执行 Agent (DA) 附加准则
+/// Layer 2: Execution Agent (DA) addendum
 pub const DA_BEHAVIORAL_ADDENDUM: &str = r#"
 
-【执行 Agent 附加准则】
-1. 读前修改 — 修改任何现有文件前，必须先读取当前内容，了解当前状态后再修改。禁止不知当前状态就覆盖写入
-2. 唯一复用 — 创建新文件/函数/模块前，先搜索系统是否存在可复用的现有资源。存在时优先扩展复用而非新建。新产物的命名和结构必须与现有风格一致
-3. 原子输出 — 每次工具调用完成一个具体目标，每个代码修改对应一个具体问题，禁止一个操作嵌入多个不相关目标
-4. 自文档化 — 输出必须包含足够的注释、参数说明或辅助信息，使其他 Agent 或人能独立理解其目的和逻辑，无需翻阅完整对话历史
-5. 安全边际 — 高风险操作（删除、配置变更、批量数据操作）偏向保守，优先模拟/验证/获取用户确认
-6. 成本意识 — 大输出必须过滤，精确搜索替代全量扫描，自觉控制 Token 和计算资源消耗"#;
+【Execution Agent Addendum】
+1. Read Before Edit — Before modifying any existing file, MUST read its current content to understand its state. Do NOT overwrite without knowing current state.
+2. Reuse First — Before creating new files/functions/modules, search for existing reusable resources. Prioritize extending reuse over creating new. New artifacts must maintain consistent naming and structure with existing style.
+3. Atomic Output — Each tool call completes one specific goal; each code change addresses one specific problem. Do NOT embed multiple unrelated objectives in one operation.
+4. Self-Documenting — Output MUST include sufficient comments, parameter descriptions, or auxiliary information so other Agents or humans can independently understand its purpose and logic without reading the full conversation history.
+5. Safety Margin — High-risk operations (deletion, config changes, batch data operations) should be conservative. Prefer simulation/verification/user confirmation first.
+6. Cost Awareness — Large outputs MUST be filtered. Prefer precise search over full scans. Consciously control Token and compute resource consumption."#;
 
-/// Layer 2: 检查 Agent (CA) 附加准则
+/// Layer 2: Check Agent (CA) addendum
 pub const CA_BEHAVIORAL_ADDENDUM: &str = r#"
 
-【检查 Agent 附加准则】
-1. 关键点审查 — 对无法完全自动验证的关键输出（如需求分析），逐项对照原始需求进行审查，主动提交用户确认
-2. 字面证据 — 审查结论必须直接引用可验证的来源（文件内容、执行日志、代码行等），禁止凭印象或推测判断
-3. 既有规则优先 — 按项目标准（Agent.md、Rules、Specs）进行审查，而不是按自己的通用标准
-4. PDCA 闭环 — 发现偏差时立即记录发现的问题，给出具体的纠正建议，建议回退/修正/重新执行的具体路径"#;
+【Check Agent Addendum】
+1. Key Point Review — For critical outputs that cannot be fully auto-verified (e.g. requirements analysis), review item by item against original requirements and proactively submit for user confirmation.
+2. Literal Evidence — Review conclusions MUST directly cite verifiable sources (file content, execution logs, code lines, etc.). Do NOT judge based on memory or speculation.
+3. Existing Rules Priority — Review against project standards (Agent.md, Rules, Specs), not against your own general standards.
+4. PDCA Loop — When deviations are found, immediately document the issues, provide specific corrective suggestions, and recommend concrete paths for rollback/correction/re-execution."#;
 
-/// Layer 2: 决策 Agent (AA) 附加准则
+/// Layer 2: Decision Agent (AA) addendum
 pub const AA_BEHAVIORAL_ADDENDUM: &str = r#"
 
-【决策 Agent 附加准则】
-1. 字面证据 — 决策必须基于 CA 审计证据和任务约束，禁止主观臆断或猜测
-2. 安全边际 — 高风险决策偏向保守路径，选择更安全的处置方案
-3. 成本意识 — 评估继续执行/回退修正/降级交付/终止任务各路径的 Token、时间和计算成本
-4. 建议执行分离 — 当被问到「怎么做」时，先给出分析、建议和选项，未经明确授权不得直接执行"#;
+【Decision Agent Addendum】
+1. Literal Evidence — Decisions MUST be based on CA audit evidence and task constraints. Do NOT rely on subjective judgment or guesswork.
+2. Safety Margin — High-risk decisions should favor conservative paths. Choose safer disposition options.
+3. Cost Awareness — Evaluate Token, time, and compute costs across all paths: continue execution / rollback-correction / degrade-delivery / abort task.
+4. Advice-Execution Separation — When asked 'how to do it', first provide analysis, suggestions, and options. Do NOT execute directly without explicit authorization."#;
 
 pub fn build_five_w2h_section(snapshot: &crate::core::five_w2h::Task5W2H) -> String {
     let mut lines = Vec::new();
     
-    lines.push(format!("- 目标: {}", snapshot.what));
+    lines.push(format!("- Objective: {}", snapshot.what));
     
-    lines.push(format!("- 原因: {}", snapshot.why.description));
+    lines.push(format!("- Reason: {}", snapshot.why.description));
     if !snapshot.why.success_criteria.is_empty() {
-        lines.push(format!("- 成功标准: {}", snapshot.why.success_criteria.join(", ")));
+        lines.push(format!("- Success Criteria: {}", snapshot.why.success_criteria.join(", ")));
     }
     
     if let Some(ref who) = snapshot.who {
         if let Some(ref requestor) = who.requestor {
-            lines.push(format!("- 请求者: {}", requestor));
+            lines.push(format!("- Requestor: {}", requestor));
         }
         if let Some(ref access_level) = who.access_level {
-            lines.push(format!("- 访问级别: {:?}", access_level));
+            lines.push(format!("- Access Level: {:?}", access_level));
         }
         if !who.assignees.is_empty() {
-            lines.push(format!("- 执行者: {}", who.assignees.join(", ")));
+            lines.push(format!("- Assignees: {}", who.assignees.join(", ")));
         }
     }
     
     if let Some(ref when) = snapshot.when {
         if let Some(ref deadline) = when.deadline {
-            lines.push(format!("- 截止时间: {}", deadline));
+            lines.push(format!("- Deadline: {}", deadline));
         }
     }
     
     if let Some(ref where_) = snapshot.where_ {
         if let Some(ref env) = where_.execution_environment {
-            lines.push(format!("- 执行环境: {}", env));
+            lines.push(format!("- Execution Env: {}", env));
         }
         if !where_.data_sources.is_empty() {
-            lines.push(format!("- 数据源: {}", where_.data_sources.join(", ")));
+            lines.push(format!("- Data Sources: {}", where_.data_sources.join(", ")));
         }
     }
     
     if let Some(ref how) = snapshot.how {
         if !how.forbidden_tools.is_empty() {
-            lines.push(format!("- 禁用工具: {}", how.forbidden_tools.join(", ")));
+            lines.push(format!("- Forbidden Tools: {}", how.forbidden_tools.join(", ")));
         }
         if let Some(ref steps) = how.required_steps {
-            lines.push(format!("- 要求步骤: {}", steps));
+            lines.push(format!("- Required Steps: {}", steps));
         }
         if !how.preferred_skills.is_empty() {
-            lines.push(format!("- 所需技能: {}", how.preferred_skills.join(", ")));
+            lines.push(format!("- Preferred Skills: {}", how.preferred_skills.join(", ")));
         }
     }
     
     if let Some(ref how_much) = snapshot.how_much {
         if let Some(ref budget) = how_much.token_budget {
-            lines.push(format!("- Token预算: {}", budget));
+            lines.push(format!("- Token Budget: {}", budget));
         }
         if let Some(ref cycles) = how_much.max_pdca_cycles {
-            lines.push(format!("- 最大循环: {}", cycles));
+            lines.push(format!("- Max Cycles: {}", cycles));
         }
     }
     
@@ -213,11 +213,11 @@ impl ToolRegionContent {
         let mut parts = Vec::new();
         
         if !self.builtin_tools.is_empty() {
-            parts.push(format!("## 内置工具（固定）\n{}", self.builtin_tools));
+            parts.push(format!("## Built-in Tools (Fixed)\n{}", self.builtin_tools));
         }
         
         if !self.dynamic_tools.is_empty() {
-            parts.push(format!("## 动态工具（按需调整）\n{}", self.dynamic_tools));
+            parts.push(format!("## Dynamic Tools (On-demand)\n{}", self.dynamic_tools));
         }
         
         parts.join("\n\n")
@@ -241,8 +241,8 @@ impl SystemPromptBuilder {
         }
     }
 
-    /// 原地设置 EmphasizedConstraints 区域，无需克隆整个 builder。
-    /// 相比 build_with_emphasis() 避免了 HashMap 克隆，推荐使用此方法。
+    /// Set EmphasizedConstraints region in-place, avoiding full builder clone.
+    /// Preferred over build_with_emphasis() as it avoids HashMap cloning.
     pub fn set_emphasis(&mut self, emphasis_items: &[String]) {
         if emphasis_items.is_empty() {
             return;
@@ -341,37 +341,37 @@ mod tests {
     #[test]
     fn test_build_system_prompt() {
         let mut builder = SystemPromptBuilder::new();
-        builder.set_region(SystemPromptRegion::RoleDefinition, "你是计划Agent".to_string());
-        builder.set_region(SystemPromptRegion::OutputFormat, "输出JSON格式".to_string());
+        builder.set_region(SystemPromptRegion::RoleDefinition, "You are a Plan Agent".to_string());
+        builder.set_region(SystemPromptRegion::OutputFormat, "Output JSON format".to_string());
         
         let result = builder.build();
-        assert!(result.contains("# 角色"));
-        assert!(result.contains("# 输出格式"));
-        assert!(result.contains("你是计划Agent"));
+        assert!(result.contains("# Role"));
+        assert!(result.contains("# Output Format"));
+        assert!(result.contains("You are a Plan Agent"));
     }
 
     #[test]
     fn test_build_with_emphasis() {
         let mut builder = SystemPromptBuilder::new();
-        builder.set_region(SystemPromptRegion::RoleDefinition, "你是计划Agent".to_string());
+        builder.set_region(SystemPromptRegion::RoleDefinition, "You are a Plan Agent".to_string());
         
-        let emphasis = vec!["必须使用异步方式".to_string(), "注意错误处理".to_string()];
+        let emphasis = vec!["Must use async mode".to_string(), "Handle errors carefully".to_string()];
         let result = builder.build_with_emphasis(&emphasis);
         
-        assert!(result.contains("重要约束"));
-        assert!(result.contains("必须使用异步方式"));
-        assert!(result.contains("注意错误处理"));
+        assert!(result.contains("Critical Constraints"));
+        assert!(result.contains("Must use async mode"));
+        assert!(result.contains("Handle errors carefully"));
     }
 
     #[test]
     fn test_tool_region_content() {
         let tool_content = ToolRegionContent::new()
-            .with_builtin("file_read: 读取文件\nfile_write: 写入文件")
-            .with_dynamic("http_request: HTTP请求\ncode_execute: 执行代码");
+            .with_builtin("file_read: read files\nfile_write: write files")
+            .with_dynamic("http_request: HTTP requests\ncode_execute: execute code");
         
         let result = tool_content.build();
-        assert!(result.contains("内置工具（固定）"));
-        assert!(result.contains("动态工具（按需调整）"));
+        assert!(result.contains("Built-in Tools (Fixed)"));
+        assert!(result.contains("Dynamic Tools (On-demand)"));
         assert!(result.contains("file_read"));
         assert!(result.contains("http_request"));
     }
@@ -379,17 +379,17 @@ mod tests {
     #[test]
     fn test_build_with_tools() {
         let mut builder = SystemPromptBuilder::new();
-        builder.set_region(SystemPromptRegion::RoleDefinition, "你是执行Agent".to_string());
+        builder.set_region(SystemPromptRegion::RoleDefinition, "You are an Execution Agent".to_string());
         
         let tool_content = ToolRegionContent::new()
-            .with_builtin("file_read: 读取文件")
-            .with_dynamic("custom_tool: 自定义工具")
+            .with_builtin("file_read: read files")
+            .with_dynamic("custom_tool: custom tool")
             .build();
         builder.set_region(SystemPromptRegion::Tools, tool_content);
         
         let result = builder.build();
-        assert!(result.contains("# 工具"));
-        assert!(result.contains("内置工具（固定）"));
-        assert!(result.contains("动态工具（按需调整）"));
+        assert!(result.contains("# Tools"));
+        assert!(result.contains("Built-in Tools (Fixed)"));
+        assert!(result.contains("Dynamic Tools (On-demand)"));
     }
 }

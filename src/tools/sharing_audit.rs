@@ -1,22 +1,22 @@
-//! Share 审计日志 — 不改变 SharingProtocol 主数据源 (HashMap) 的前提下，记录所有共享操作
+//! Share audit log — records all share operations without altering the SharingProtocol primary data source (HashMap)
 //!
-//! # 设计决策
+//! # Design Decisions
 //!
-//! - **非阻塞**：审计是侧效（side effect），失败不阻止共享操作
-//! - **内存优先**：写入内存 Vec 再异步刷入 Oxigraph，避免 SharingProtocol 持有 Store 引用
-//! - **仅追加**：审计日志永不修改或删除
+//! - **Non-blocking**: audit is a side effect, failure does not block share operations
+//! - **Memory-first**: writes to in-memory Vec, async flush to Oxigraph avoids SharingProtocol holding a Store reference
+//! - **Append-only**: audit log is never modified or deleted
 //!
-//! # 有意简化
+//! # Deliberately Simplified
 //!
-//! - 不提供索引查询（审计场景查询量低，全量扫描足够）
-//! - 不使用 SPARQL 插入（保持独立于 Oxigraph）
-//! - flush_to_store 是未来可选项，当前仅内存存储
+//! - No index queries (low audit query volume, full scan is sufficient)
+//! - No SPARQL inserts (keeps independent of Oxigraph)
+//! - flush_to_store is a future option, currently memory-only
 
 use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
-/// 共享事件类型
+/// Share event type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SharingEvent {
     Created,
@@ -36,7 +36,7 @@ impl SharingEvent {
     }
 }
 
-/// 共享审计条目
+/// Share audit entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SharingAuditEntry {
     pub event_type: SharingEvent,
@@ -50,10 +50,10 @@ pub struct SharingAuditEntry {
     pub timestamp: DateTime<Utc>,
 }
 
-/// 共享审计日志
+/// Share audit log
 ///
-/// 以内存 Vec 存储所有审计条目，避免 SharingProtocol 持有 Oxigraph Store 引用。
-/// 当外部 Store 可用时，可通过 `flush_to_store()` 方法导出。
+/// Stores all audit entries in an in-memory Vec, avoiding SharingProtocol holding an Oxigraph Store reference.
+/// Can be exported via `flush_to_store()` when an external Store is available.
 pub struct SharingAuditLog {
     entries: RwLock<Vec<SharingAuditEntry>>,
 }
@@ -65,12 +65,12 @@ impl SharingAuditLog {
         }
     }
 
-    /// 记录一条审计条目
+    /// Record an audit entry
     pub fn log(&self, entry: SharingAuditEntry) {
         self.entries.write().push(entry);
     }
 
-    /// 记录共享创建
+    /// Log share creation
     pub fn log_share_created(
         &self,
         share_id: &str,
@@ -94,7 +94,7 @@ impl SharingAuditLog {
         });
     }
 
-    /// 记录共享解析
+    /// Log share resolution
     pub fn log_share_resolved(&self, share_id: &str, by_agent: &str) {
         self.log(SharingAuditEntry {
             event_type: SharingEvent::Resolved,
@@ -109,7 +109,7 @@ impl SharingAuditLog {
         });
     }
 
-    /// 记录共享撤销
+    /// Log share revocation
     pub fn log_share_revoked(&self, share_id: &str) {
         self.log(SharingAuditEntry {
             event_type: SharingEvent::Revoked,
@@ -124,7 +124,7 @@ impl SharingAuditLog {
         });
     }
 
-    /// 查询某 Agent 收到的共享历史
+    /// Query share history received by an Agent
     pub fn query_shares_for_agent(&self, agent_iri: &str) -> Vec<SharingAuditEntry> {
         self.entries
             .read()
@@ -134,7 +134,7 @@ impl SharingAuditLog {
             .collect()
     }
 
-    /// 查询某 IRI 的共享历史
+    /// Query share history for an IRI
     pub fn query_shares_for_node(&self, node_iri: &str) -> Vec<SharingAuditEntry> {
         self.entries
             .read()
@@ -144,12 +144,12 @@ impl SharingAuditLog {
             .collect()
     }
 
-    /// 获取全部审计条目
+    /// Get all audit entries
     pub fn all_entries(&self) -> Vec<SharingAuditEntry> {
         self.entries.read().clone()
     }
 
-    /// 审计条目数量
+    /// Number of audit entries
     pub fn len(&self) -> usize {
         self.entries.read().len()
     }
@@ -158,7 +158,7 @@ impl SharingAuditLog {
         self.len() == 0
     }
 
-    /// 将内存审计条目序列化为 JSON（供外部消费）
+    /// Serialize in-memory audit entries to JSON (for external consumption)
     pub fn to_json(&self) -> serde_json::Value {
         let entries = self.entries.read();
         serde_json::to_value(&*entries).unwrap_or_default()

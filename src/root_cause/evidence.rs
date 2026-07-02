@@ -30,12 +30,12 @@ impl EvidenceChainManager {
 
         // 3. Chain must have a root cause
         if !chain.has_root_cause() {
-            errors.push("未到达根因：回溯过早终止".to_string());
+            errors.push("Root cause not reached: traceback terminated prematurely".to_string());
         }
 
         // 4. Minimum trace depth
         if chain.depth() < 2 {
-            errors.push(format!("证据链深度不足: {} 级 (最低 2 级)", chain.depth()));
+            errors.push(format!("Evidence chain depth insufficient: {} levels (minimum 2)", chain.depth()));
         }
 
         if errors.is_empty() {
@@ -48,19 +48,19 @@ impl EvidenceChainManager {
     /// Validate a single level's evidence
     fn validate_level(&self, level: &TraceLevel, errors: &mut Vec<String>) {
         if level.evidence.source.is_empty() {
-            errors.push(format!("Level {}: 缺少证据来源", level.level));
+            errors.push(format!("Level {}: missing evidence source", level.level));
         }
         if level.evidence.confidence < 0.0 || level.evidence.confidence > 1.0 {
-            errors.push(format!("Level {}: 置信度超出范围 ({})", level.level, level.evidence.confidence));
+            errors.push(format!("Level {}: confidence out of range ({})", level.level, level.evidence.confidence));
         }
         if level.evidence.confidence < self.config.min_confidence {
             errors.push(format!(
-                "Level {}: 置信度过低 ({:.2} < {:.2})",
+                "Level {}: confidence too low ({:.2} < {:.2})",
                 level.level, level.evidence.confidence, self.config.min_confidence
             ));
         }
         if level.description.is_empty() {
-            errors.push(format!("Level {}: 级别描述为空", level.level));
+            errors.push(format!("Level {}: level description is empty", level.level));
         }
     }
 
@@ -70,7 +70,7 @@ impl EvidenceChainManager {
     ) {
         if b.level != a.level + 1 {
             errors.push(format!(
-                "Level {} → {}: 级别编号不连续",
+                "Level {} → {}: level numbers are not sequential",
                 a.level, b.level
             ));
         }
@@ -80,7 +80,7 @@ impl EvidenceChainManager {
             && !a.evidence.source.is_empty()
         {
             errors.push(format!(
-                "Level {} → {}: 证据来源与描述完全重复 ({})",
+                "Level {} → {}: evidence source and description are fully duplicated ({})",
                 a.level, b.level, a.evidence.source
             ));
         }
@@ -109,28 +109,28 @@ impl EvidenceChainManager {
     /// Generate a human-readable evidence report
     pub fn evidence_report(&self, chain: &TraceChain) -> String {
         let mut report = String::new();
-        report.push_str(&format!("===== 证据链报告 [{}] =====\n", chain.trace_id));
-        report.push_str(&format!("代理: {} | 任务: {}\n\n",
+        report.push_str(&format!("===== Evidence Chain Report [{}] =====\n", chain.trace_id));
+        report.push_str(&format!("Agent: {} | Task: {}\n\n",
             chain.agent_id,
             chain.task_id.as_deref().unwrap_or("N/A"),
         ));
 
         for level in &chain.levels {
-            let flag = if level.is_root_cause { " [根因]" } else { "" };
+            let flag = if level.is_root_cause { " [Root Cause]" } else { "" };
             report.push_str(&format!(
                 "  L{} {}{}\n", level.level, level.label, flag
             ));
-            report.push_str(&format!("    描述: {}\n", level.description));
-            report.push_str(&format!("    来源: {}\n", level.evidence.source));
-            report.push_str(&format!("    置信度: {:.2}\n", level.evidence.confidence));
+            report.push_str(&format!("    Description: {}\n", level.description));
+            report.push_str(&format!("    Source: {}\n", level.evidence.source));
+            report.push_str(&format!("    Confidence: {:.2}\n", level.evidence.confidence));
             report.push('\n');
         }
 
         report.push_str(&format!(
-            "综合置信度: {:.2}\n", self.chain_confidence(chain)
+            "Overall Confidence: {:.2}\n", self.chain_confidence(chain)
         ));
         report.push_str(&format!(
-            "状态: {}", if chain.resolved { "已定位根因" } else { "未定位根因" }
+            "Status: {}", if chain.resolved { "Root Cause Identified" } else { "Root Cause Not Identified" }
         ));
         report
     }
@@ -156,21 +156,21 @@ mod tests {
         let mut chain = TraceChain::new("test_chain", "agent_1");
         chain.add_level(TraceLevel {
             level: 1, label: "symptom".into(),
-            description: "错误发生".into(),
+            description: "error occurred".into(),
             source_location: "file.rs:10".into(),
             is_root_cause: false,
             evidence: Evidence::new("file.rs:10", json!("error"), 0.9),
         });
         chain.add_level(TraceLevel {
             level: 2, label: "intermediate".into(),
-            description: "调用者".into(),
+            description: "caller".into(),
             source_location: "caller.rs:20".into(),
             is_root_cause: false,
             evidence: Evidence::new("caller.rs:20", json!("caller"), 0.8),
         });
         chain.add_level(TraceLevel {
             level: 3, label: "root_cause".into(),
-            description: "根因".into(),
+            description: "root cause".into(),
             source_location: "root.rs:1".into(),
             is_root_cause: true,
             evidence: Evidence::new("root.rs:1", json!("root"), 0.85),
@@ -236,9 +236,9 @@ mod tests {
         let manager = EvidenceChainManager::new(RootCauseConfig::default());
         let chain = make_chain();
         let report = manager.evidence_report(&chain);
-        assert!(report.contains("证据链报告"));
+        assert!(report.contains("Evidence Chain Report"));
         assert!(report.contains("test_chain"));
-        assert!(report.contains("根因"));
+        assert!(report.contains("Root Cause"));
     }
 
     #[test]
@@ -258,7 +258,7 @@ mod tests {
         let result = manager.validate_chain(&chain);
         assert!(result.is_err());
         let error_msg = format!("{:?}", result);
-        assert!(error_msg.contains("完全重复"), "Should detect fully duplicate level");
+        assert!(error_msg.contains("fully duplicated"), "Should detect fully duplicate level");
     }
 
     #[test]
@@ -266,7 +266,7 @@ mod tests {
         let manager = EvidenceChainManager::new(RootCauseConfig::default());
         let mut chain = make_chain();
         chain.levels[1].evidence.source = "file.rs:10".to_string(); // same as L1 but diff desc
-        // descriptions differ (L1="错误发生", L2="调用者")
+        // descriptions differ (L1="error occurred", L2="caller")
         assert!(manager.validate_chain(&chain).is_ok(),
             "Same source with different descriptions is valid");
     }

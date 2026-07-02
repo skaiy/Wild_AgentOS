@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn test_5w2h_lifecycle_progressive_filling() {
-        let mut w2h = Task5W2H::new("创建Web服务", "提供REST API");
+        let mut w2h = Task5W2H::new("Create Web service", "Provide REST API");
         assert!(w2h.is_minimal_set_ready());
         assert!(w2h.how.is_none());
         assert!(w2h.where_.is_none());
@@ -625,7 +625,7 @@ mod tests {
             plan_iri: Some("iri://plan/web-service".to_string()),
             preferred_skills: vec!["file_read".to_string(), "file_write".to_string()],
             forbidden_tools: vec!["bash".to_string()],
-            required_steps: Some("1.设计API 2.实现路由 3.测试".to_string()),
+            required_steps: Some("1. Design API 2. Implement routes 3. Test".to_string()),
             dependencies: vec![],
         }).with_where(WhereDetail {
             data_sources: vec!["src/api/".to_string()],
@@ -654,7 +654,7 @@ mod tests {
 
     #[test]
     fn test_5w2h_json_ld_with_all_dimensions() {
-        let w2h = Task5W2H::new("完整测试", "验证全量5W2H")
+        let w2h = Task5W2H::new("Full test", "Verify full 5W2H")
             .with_who(WhoDetail {
                 requestor: Some("user:test".to_string()),
                 assignees: vec!["agent:pa".to_string(), "agent:da".to_string()],
@@ -679,7 +679,7 @@ mod tests {
                 plan_iri: Some("iri://plan/full-test".to_string()),
                 preferred_skills: vec!["file_read".to_string(), "code_execute".to_string()],
                 forbidden_tools: vec!["bash".to_string()],
-                required_steps: Some("步骤1 步骤2 步骤3".to_string()),
+                required_steps: Some("Step 1 Step 2 Step 3".to_string()),
                 dependencies: vec!["dep1".to_string()],
             })
             .with_how_much(HowMuchDetail {
@@ -706,7 +706,7 @@ mod tests {
         assert!(json_ld.get("task:dimensionMeta").is_some());
 
         let restored = Task5W2H::from_json_ld(&json_ld).unwrap();
-        assert_eq!(restored.what, "完整测试");
+        assert_eq!(restored.what, "Full test");
         assert_eq!(restored.who.unwrap().access_level, Some(AccessLevel::Write));
         assert_eq!(restored.how_much.unwrap().actual_cost.unwrap().tokens_used, 80000);
         assert!(!restored.frozen);
@@ -716,11 +716,11 @@ mod tests {
 
     #[test]
     fn test_task5w2h_new_minimal_set() {
-        let w2h = Task5W2H::new("创建Rust项目", "学习Rust语言");
-        assert_eq!(w2h.what, "创建Rust项目");
-        assert_eq!(w2h.why.description, "学习Rust语言");
+        let w2h = Task5W2H::new("Create Rust project", "Learn Rust language");
+        assert_eq!(w2h.what, "Create Rust project");
+        assert_eq!(w2h.why.description, "Learn Rust language");
         assert!(w2h.is_minimal_set_ready());
-        assert_eq!(w2h.derive_objective(), "创建Rust项目");
+        assert_eq!(w2h.derive_objective(), "Create Rust project");
         assert!(w2h.who.is_none());
         assert!(w2h.when.is_none());
         assert!(w2h.where_.is_none());
@@ -734,7 +734,7 @@ mod tests {
 
     #[test]
     fn test_task5w2h_builder_pattern() {
-        let w2h = Task5W2H::new("重构模块", "提高代码质量")
+        let w2h = Task5W2H::new("Refactor module", "Improve code quality")
             .with_who(WhoDetail {
                 requestor: Some("user:1".to_string()),
                 assignees: vec!["agent:1".to_string()],
@@ -759,7 +759,7 @@ mod tests {
                 plan_iri: Some("iri://plan/1".to_string()),
                 preferred_skills: vec!["file_read".to_string()],
                 forbidden_tools: vec!["bash".to_string()],
-                required_steps: Some("1.读取 2.分析 3.重构".to_string()),
+                required_steps: Some("1. Read 2. Analyze 3. Refactor".to_string()),
                 dependencies: vec![],
             })
             .with_how_much(HowMuchDetail {
@@ -780,7 +780,7 @@ mod tests {
 
     #[test]
     fn test_task5w2h_json_ld_roundtrip() {
-        let original = Task5W2H::new("测试任务", "验证JSON-LD转换")
+        let original = Task5W2H::new("Test task", "Verify JSON-LD roundtrip")
             .with_when(WhenDetail {
                 deadline: Some("2026-06-01T00:00:00Z".parse().unwrap()),
                 start_after: None,
@@ -797,7 +797,7 @@ mod tests {
             });
         let json_ld = original.to_json_ld("test-123").unwrap();
         assert_eq!(json_ld["@type"], "task:5W2H");
-        assert_eq!(json_ld["task:what"], "测试任务");
+        assert_eq!(json_ld["task:what"], "Test task");
         assert_eq!(json_ld["@id"], "iri://task/test-123/5w2h");
         let restored = Task5W2H::from_json_ld(&json_ld).unwrap();
         assert_eq!(restored.what, original.what);
@@ -808,7 +808,7 @@ mod tests {
 
     #[test]
     fn test_task5w2h_minimal_set_validation() {
-        let valid = Task5W2H::new("任务", "意图");
+        let valid = Task5W2H::new("Task", "Purpose");
         assert!(valid.is_minimal_set_ready());
         let mut empty_what = valid.clone();
         empty_what.what = String::new();
@@ -844,7 +844,7 @@ mod tests {
 
     #[test]
     fn test_record_fill() {
-        let mut w2h = Task5W2H::new("任务", "原因");
+        let mut w2h = Task5W2H::new("Task", "Reason");
         assert_eq!(w2h.dimension_meta.len(), 2);
         w2h.record_fill("who", FillStage::Plan, "PA");
         assert!(w2h.dimension_meta.contains_key("who"));
@@ -855,7 +855,7 @@ mod tests {
 
     #[test]
     fn test_check_completeness() {
-        let w2h = Task5W2H::new("任务", "原因");
+        let w2h = Task5W2H::new("Task", "Reason");
         let missing_instant = w2h.check_completeness("Instant");
         assert!(missing_instant.is_empty());
         let missing_simple = w2h.check_completeness("Simple");
@@ -870,7 +870,7 @@ mod tests {
 
     #[test]
     fn test_freeze() {
-        let mut w2h = Task5W2H::new("任务", "原因");
+        let mut w2h = Task5W2H::new("Task", "Reason");
         assert!(!w2h.frozen);
         w2h.freeze();
         assert!(w2h.frozen);
@@ -878,7 +878,7 @@ mod tests {
 
     #[test]
     fn test_reminder_before_json_ld_roundtrip() {
-        let w2h = Task5W2H::new("提醒测试", "验证提醒")
+        let w2h = Task5W2H::new("Reminder test", "Verify reminder")
             .with_when(WhenDetail {
                 deadline: Some("2026-12-31T23:59:59Z".parse().unwrap()),
                 start_after: None,

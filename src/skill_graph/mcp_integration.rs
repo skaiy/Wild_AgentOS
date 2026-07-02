@@ -122,7 +122,7 @@ impl MCPRegistry {
 
     pub async fn register_server(&self, config: MCPServerConfig) -> Result<(), CoreError> {
         let server_id = config.server_id.clone();
-        info!("注册 MCP 服务器: {} ({})", config.server_name, server_id);
+        info!("Registering MCP server: {} ({})", config.server_name, server_id);
 
         let mut servers = self.servers.write().await;
         servers.insert(server_id, config);
@@ -156,7 +156,7 @@ impl MCPRegistry {
 
     pub async fn register_tool(&self, tool: MCPToolInfo) -> Result<(), CoreError> {
         let tool_key = format!("{}:{}", tool.server_id, tool.tool_name);
-        debug!("注册 MCP 工具: {}", tool_key);
+        debug!("Registering MCP tool: {}", tool_key);
 
         let mut tools = self.tools.write().await;
         tools.insert(tool_key, tool);
@@ -183,7 +183,7 @@ impl MCPRegistry {
 
     pub async fn create_mapping(&self, mapping: MCPSkillMapping) -> Result<(), CoreError> {
         info!(
-            "创建 MCP 技能映射: {} -> {}:{}",
+            "Creating MCP skill mapping: {} -> {}:{}",
             mapping.skill_iri, mapping.mcp_server_id, mapping.mcp_tool_name
         );
 
@@ -246,14 +246,14 @@ impl MCPIntegration {
                 Ok(true) => result.tools_added += 1,
                 Ok(false) => result.tools_updated += 1,
                 Err(e) => {
-                    warn!("创建技能失败: {} - {}", tool.tool_name, e);
+                    warn!("Failed to create skill: {} - {}", tool.tool_name, e);
                     result.add_error(&format!("{}: {}", tool.tool_name, e));
                 }
             }
         }
 
         info!(
-            "MCP 工具同步完成: {} (新增={}, 更新={}, 错误={})",
+            "MCP tool sync complete: {} (added={}, updated={}, errors={})",
             server_id, result.tools_added, result.tools_updated, result.errors.len()
         );
 
@@ -352,7 +352,7 @@ impl MCPIntegration {
         let mcp_params = self.transform_params(&mapping, params)?;
 
         debug!(
-            "调用 MCP 工具: {}:{} with params {:?}",
+            "Invoking MCP tool: {}:{} with params {:?}",
             mapping.mcp_server_id, mapping.mcp_tool_name, mcp_params
         );
 

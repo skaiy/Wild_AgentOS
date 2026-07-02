@@ -4,7 +4,7 @@
 
 ## 模块架构
 
-**源文件目录**: `src/skill_graph/`（12 个模块）
+**源文件目录**: `src/skill_graph/`（15 个模块）
 
 ```mermaid
 graph TB
@@ -64,6 +64,9 @@ graph TB
 | `bootstrap.rs` | BootstrapEngine | 自举学习 |
 | `mcp_integration.rs` | MCPIntegration | MCP 工具同步 |
 | `query_templates.rs` | QueryEngine | 查询模板 |
+| `embedding.rs` | SkillEmbeddingEngine | 庞加莱结构嵌入计算 |
+| `graph_algorithms.rs` | GraphAlgorithmEngine | 图算法（PageRank/介数中心性/社区发现） |
+| `verification.rs` | InvariantVerifier | 形式化不变式验证（6 种检查） |
 
 ## 核心类型
 
@@ -133,7 +136,7 @@ classDiagram
 
 | 层级 | 类型 | 说明 |
 |------|------|------|
-| `L0Permanent` | sled | 永久存储，核心技能 |
+| `L0Permanent` | redb | 永久存储，核心技能 |
 | `L1Session` | 内存 | 会话级临时技能 |
 | `L2Blackboard` | Oxigraph | 共享黑板，跨 Agent 可见 |
 | `L3Projection` | SPARQL | 按需投影 |
@@ -253,6 +256,84 @@ graph TD
     S1_1 -.->|"Related"| S3_2
 ```
 
+## 新增高级特性
+
+### 庞加莱结构嵌入 (SkillEmbeddingEngine)
+
+**文件**: `src/skill_graph/embedding.rs`
+
+从图谱拓扑结构自动计算技能节点的几何嵌入向量。嵌入依据：
+- 先决条件深度（Prerequisite depth）
+- 标签指纹（Tag fingerprinting）
+- 链接拓扑模式
+
+嵌入向量用于庞加莱球空间中的语义相似度搜索和结构聚类。
+
+### 图算法引擎 (GraphAlgorithmEngine)
+
+**文件**: `src/skill_graph/graph_algorithms.rs`
+
+内置图算法引擎提供丰富的图谱分析能力：
+
+| 算法 | 用途 |
+|------|------|
+| PageRank | 技能重要性排序，识别核心技能 |
+| 介数中心性 (Betweenness) | 关键路径瓶颈检测 |
+| 标签传播社区发现 | 自动技能聚类 |
+| DFS 先决条件链 | 发现完整技能依赖链 |
+| Tarjan SCC | 循环依赖检测 |
+
+### 形式化不变式验证 (InvariantVerifier)
+
+**文件**: `src/skill_graph/verification.rs`
+
+对技能图谱执行 6 种不变式检查，确保图结构完整性：
+
+| 检查 | 说明 |
+|------|------|
+| 无环性 | 无循环依赖 |
+| 链接存在性 | 无悬空引用 |
+| 组合可达性 | 所有子技能可访问 |
+| 无废弃先决条件 | 无已废弃技能被引用 |
+| 有效 5W2H | 所有技能 5W2H 元数据完整 |
+| 有效安全等级 | 无越权链接 |
+
+违反检查的操作在提交前被拒绝，并返回具体错误原因。
+
+### 超图组合 (Hypergraph)
+
+技能图谱支持第一类超图组合，通过 `Hyperedge` 类型和 `CompositionType` 枚举定义复杂工作流：
+
+| 组合类型 | 语义 |
+|---------|------|
+| Sequential | 顺序执行 |
+| Parallel | 并行执行 |
+| Conditional | 条件分支 |
+| Optional | 可选步骤 |
+| Fallback | 回退策略 |
+
+### 时间版本控制 (Temporal Versioning)
+
+技能图谱支持快照和回滚机制：
+- 每次图操作前自动创建快照
+- 验证失败时自动回滚
+- 手动创建基线快照用于发布版本
+
+### Oxigraph SPARQL 桥接
+
+实现 `SkillGraphStore` 与统一 Oxigraph RDF 存储之间的实时双向同步：
+- 图写入时通过 SPARQL INSERT 同步到 `system:skills` 命名图
+- 外部 SPARQL 更新时自动反同步回内存图
+- 命名图隔离防止跨子系统数据污染
+
+### 语义技能发现增强
+
+`SkillDiscoveryEngine` 已集成 HyperspaceEngine 向量存储：
+- `suggest_links()` 从 Jaccard 标签重叠降级为 HyperspaceStore 余弦相似度搜索
+- `find_skill_chain()` BFS 路径搜索
+- `get_skill_tree()` 组合树构建
+- 混合文本×结构搜索（向量×图拓扑）
+
 ## 与知识图谱的关系
 
 技能图谱和知识图谱是互补的双层架构：
@@ -274,8 +355,11 @@ graph LR
 
 | 维度 | 技能图谱 | 知识图谱 |
 |------|---------|---------|
-| 存储 | L0 sled + L2 Oxigraph | Oxigraph Memory（`Arc<Mutex>`） |
+| 存储 | L0 redb + L2 Oxigraph | Oxigraph Memory（`Arc<Mutex>`） |
 | 命名图 | `graph:skill` | `graph:world` / `graph:code` |
 | 描述 | 5W2H 结构化 | RDF Quads |
-| 发现 | 5W2H 匹配 + 向量检索 | SPARQL + 模糊搜索 |
-| 进化 | 使用追踪 + 进化建议 | 增量更新（SHA256） |
+| 发现 | 5W2H 匹配 + HyperspaceEngine 向量检索 + 图算法 | SPARQL + 模糊搜索 |
+| 进化 | 使用追踪 + 进化建议 + 形式化验证 | 增量更新（SHA256） |
+| 超图 | Hyperedge + CompositionType（顺序/并行/条件/可选/回退） | — |
+| 不变式验证 | 6 种验证（无环/可达性/无废弃/安全/5W2H） | — |
+| 版本控制 | 快照 + 回滚 | — |

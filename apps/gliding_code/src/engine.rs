@@ -288,6 +288,15 @@ impl CodeCliEngine {
         self.event_bus.subscribe()
     }
 
+    /// Reset workspace perception state for a new task topic.
+    /// Clears WorkspaceMonitor inventory and PerceptionStore global entries
+    /// to prevent files from previous tasks leaking into the new task's context.
+    pub fn reset_perception(&self) {
+        if let Some(ref wm) = self.workspace_monitor {
+            wm.reset_inventory();
+        }
+    }
+
     pub async fn process_task(&mut self, user_input: &str) -> anyhow::Result<(String, TaskResult)> {
         // 首次进入 async 上下文时完成 WorkspaceMonitor 的异步初始化
         if let Some(ref wm) = self.workspace_monitor {
@@ -342,6 +351,11 @@ impl CodeCliEngine {
     /// L0Store reference (for checkpoint loading during resume).
     pub fn l0(&self) -> Arc<L0Store> {
         self.l0.clone()
+    }
+
+    /// WorkspaceMonitor reference (for topic shift perception reset).
+    pub fn workspace_monitor(&self) -> Option<Arc<WorkspaceMonitor>> {
+        self.workspace_monitor.clone()
     }
 
     /// Token counter Arcs (lock-free reads from TUI).

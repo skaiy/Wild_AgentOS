@@ -39,7 +39,7 @@ impl ToolController {
                     .map(|(name, _)| name.clone())
                     .collect();
                 if !write_calls.is_empty() {
-                    warn!("[PA] 检测到写操作工具调用: {:?}，已过滤", write_calls);
+                    warn!("[PA] Detected write tool calls: {:?}, filtered", write_calls);
                 }
                 tool_calls.iter()
                     .filter(|(name, _)| self.is_readonly_tool(name))

@@ -10,10 +10,10 @@ use crate::utils::data_paths::{resolve_project_subpath, resolve_user_subpath};
 
 fn builtin_fallback(role: &str) -> &'static str {
     match role {
-        "pa" => "你是计划 Agent(PA)。分析任务并制定执行计划。完成后输出 JSON 格式结果。",
-        "da" => "你是执行 Agent(DA)。执行任务，创建产物。优先使用 web_search 获取最新信息。完成后输出 JSON 格式结果。",
-        "ca" => "你是检查 Agent(CA)。验证执行结果是否满足要求。完成后输出 JSON 格式结果。",
-        "aa" => "你是决策 Agent(AA)。基于审计结果做最终决策和总结。完成后输出 JSON 格式结果。",
+        "pa" => "You are the Planning Agent (PA). Analyze the task and create an execution plan. Output JSON-formatted results when done.",
+        "da" => "You are the Doing Agent (DA). Execute the task and create artifacts. Prioritize using web_search for current information. Output JSON-formatted results when done.",
+        "ca" => "You are the Checking Agent (CA). Verify whether execution results meet requirements. Output JSON-formatted results when done.",
+        "aa" => "You are the Acting Agent (AA). Make final decisions and summaries based on audit results. Output JSON-formatted results when done.",
         _ => "",
     }
 }
@@ -34,7 +34,7 @@ impl Default for PromptConfig {
 pub struct PromptLoader {
     config: PromptConfig,
     engine: Arc<TemplateEngine>,
-    /// (content, mtime) 缓存，按文件路径索引
+    /// (content, mtime) cache, indexed by file path
     file_cache: std::sync::Mutex<HashMap<PathBuf, (String, SystemTime)>>,
 }
 
@@ -43,7 +43,7 @@ impl PromptLoader {
         Self { config, engine, file_cache: std::sync::Mutex::new(HashMap::new()) }
     }
 
-    /// 带 mtime 检测的文件读取缓存。文件未变更时跳过 IO。
+    /// File read cache with mtime check. Skips IO when file hasn't changed.
     fn read_cached(&self, path: &PathBuf) -> Option<String> {
         let metadata = std::fs::metadata(path).ok()?;
         let modified = metadata.modified().ok()?;
@@ -100,7 +100,7 @@ impl PromptLoader {
         }
 
         if let Some(ref override_content) = self.config.role_overrides.get(role) {
-            result = format!("{}\n\n---\n\n## 用户追加约束\n{}", result, override_content);
+            result = format!("{}\n\n---\n\n## User Additional Constraints\n{}", result, override_content);
         }
 
         result

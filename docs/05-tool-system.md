@@ -17,7 +17,7 @@ graph TB
         FILE_OPS["FileOps<br/>文件操作"]
         SEARCH["grep_search<br/>glob_search"]
         WEB["WebSearch<br/>WebFetch"]
-        RAG["rag_search<br/>rag_index"]
+        KNOWLEDGE_EMB["knowledge_search<br/>embedding_index"]
         KNOWLEDGE["knowledge_list<br/>knowledge_search"]
     end
 
@@ -69,7 +69,7 @@ graph TB
         CWM["ContextWindowManager<br/>上下文窗口"]
     end
 
-    TE --> BASH & FILE_OPS & SEARCH & WEB & RAG & KNOWLEDGE
+    TE --> BASH & FILE_OPS & SEARCH & WEB & KNOWLEDGE
     TE --> KE & KQ & KS & KN & KI & KEC & OR & KB
     TE --> RR
     RR --> GF & SM & MT
@@ -124,7 +124,7 @@ Plan Agent 仅允许使用只读工具：
 ```
 file_read, file_list, glob_search, grep_search,
 WebSearch, WebFetch, ToolSearch,
-rag_search, knowledge_list, knowledge_search, kg_search,
+knowledge_list, knowledge_search, kg_search,
 knowledge_extract_code
 ```
 
@@ -418,9 +418,11 @@ AgentRunner::new(...)
 | grep_search | 正则搜索文件内容（支持 context/head_limit/offset 等参数） |
 | glob_search | Glob 模式匹配文件名 |
 
-### 5.3.3 Embedding 服务
+### 5.3.3 HyperspaceEngine 向量检索
 
-**文件**: `src/memory/vector_store.rs`
+**文件**: `src/memory/hyperspace_store.rs`, `src/memory/embedding_service.rs`
+
+自包含的嵌入向量引擎，零外部向量数据库依赖。支持 HNSW ANN 搜索、运行时可切换度量（Poincaré/Cosine/Euclidean/Lorentz）、WAL 崩溃安全。
 
 支持多种 Embedding 服务提供商：
 
@@ -430,14 +432,7 @@ AgentRunner::new(...)
 | OneAPI | `oneapi` | OpenAI 兼容 API |
 | Fallback | `fallback` | 随机向量兜底 |
 
-### 5.3.4 RAG 工具
-
-| 工具 | 功能 |
-|------|------|
-| rag_search | 语义搜索文档 |
-| rag_index | 索引文档到向量存储 |
-
-### 5.3.5 知识图谱工具
+### 5.3.4 知识图谱工具
 
 | 工具 | 功能 | PA 可用 |
 |------|------|---------|

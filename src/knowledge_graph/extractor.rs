@@ -62,41 +62,41 @@ impl KnowledgeExtractor {
 
     pub fn build_extraction_prompt(text: &str, vocabulary: &str) -> String {
         format!(
-            r#"你是一个知识图谱抽取专家。请从给定文本中提取实体和关系。
+            r#"You are a knowledge graph extraction expert. Extract entities and relations from the given text.
 
 {vocabulary}
 
-## 输出格式要求
+## Output Format Requirements
 
-请严格输出以下 JSON 格式，不要包含任何其他文字、解释或 markdown 代码块标记：
+Output strictly in the following JSON format, without any additional text, explanations, or markdown code block markers:
 
 {{
   "nodes": [
     {{
-      "id": "实体唯一标识（英文/拼音，无空格）",
-      "node_type": "使用上面列出的实体类型 IRI",
-      "label": "实体中文名称",
+      "id": "Unique entity identifier (English/pinyin, no spaces)",
+      "node_type": "Use the entity type IRI listed above",
+      "label": "Entity name",
       "properties": {{}}
     }}
   ],
   "edges": [
     {{
-      "source": "源实体 id",
-      "target": "目标实体 id",
-      "relation": "使用上面列出的关系 IRI",
+      "source": "Source entity id",
+      "target": "Target entity id",
+      "relation": "Use the relation IRI listed above",
       "properties": {{}}
     }}
   ]
 }}
 
-## 规则
-1. nodes 和 edges 中的所有字段不能为空
-2. 至少提取一个实体（node）
-3. type 和 relation 字段必须使用上面列出的 IRI
-4. id 使用英文或拼音，不要使用中文
-5. properties 可以为空对象 {{}}
+## Rules
+1. All fields in nodes and edges must not be empty
+2. Extract at least one entity (node)
+3. type and relation fields must use the IRIs listed above
+4. id must use English or pinyin, not Chinese
+5. properties can be an empty object {{}}
 
-## 待抽取文本
+## Text to Extract
 
 {text}"#
         )
@@ -105,7 +105,7 @@ impl KnowledgeExtractor {
     async fn call_llm(&self, prompt: &str) -> Result<String, String> {
         let client = Client::builder()
             .build()
-            .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+            .map_err(|e| format!("failed to create HTTP client: {}", e))?;
 
         let url = format!(
             "{}/chat/completions",
@@ -121,7 +121,7 @@ impl KnowledgeExtractor {
             temperature: 0.1,
         };
 
-        debug!(model = %self.model, url = %url, "调用 LLM API 进行知识抽取");
+        debug!(model = %self.model, url = %url, "calling LLM API for knowledge extraction");
 
         let resp = client
             .post(&url)
@@ -130,33 +130,33 @@ impl KnowledgeExtractor {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("LLM API 请求失败: {}", e))?;
+            .map_err(|e| format!("LLM API request failed: {}", e))?;
 
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(format!("LLM API 返回错误 ({}): {}", status, text));
+            return Err(format!("LLM API returned error ({}): {}", status, text));
         }
 
         let response_text = resp
             .text()
             .await
-            .map_err(|e| format!("读取 LLM 响应失败: {}", e))?;
+            .map_err(|e| format!("failed to read LLM response: {}", e))?;
 
         let chat_resp: ChatCompletionResponse =
             serde_json::from_str(&response_text)
-                .map_err(|e| format!("解析 LLM 响应 JSON 失败: {} (原始响应: {})", e, truncate_str(&response_text, 200)))?;
+                .map_err(|e| format!("failed to parse LLM response JSON: {} (raw response: {})", e, truncate_str(&response_text, 200)))?;
 
         let choice = chat_resp
             .choices
             .into_iter()
             .next()
-            .ok_or_else(|| "LLM 响应中无 choices".to_string())?;
+            .ok_or_else(|| "no choices in LLM response".to_string())?;
 
         choice
             .message
             .content
-            .ok_or_else(|| "LLM 响应中 content 为空".to_string())
+            .ok_or_else(|| "LLM response content is empty".to_string())
     }
 
     pub fn validate_extraction(json_str: &str) -> Result<LLMExtractionOutput, String> {
@@ -164,37 +164,37 @@ impl KnowledgeExtractor {
 
         let output: LLMExtractionOutput = serde_json::from_str(&cleaned).map_err(|e| {
             format!(
-                "JSON 解析失败: {} (输入前 200 字符: {})",
+                "JSON parse failed: {} (first 200 chars: {})",
                 e,
                 truncate_str(&cleaned, 200)
             )
         })?;
 
         if output.nodes.is_empty() {
-            return Err("抽取结果中至少需要一个实体 (node)".to_string());
+            return Err("extraction result requires at least one entity (node)".to_string());
         }
 
         for (i, node) in output.nodes.iter().enumerate() {
             if node.id.trim().is_empty() {
-                return Err(format!("第 {} 个实体的 id 为空", i + 1));
+                return Err(format!("entity {} id is empty", i + 1));
             }
             if node.node_type.trim().is_empty() {
-                return Err(format!("第 {} 个实体的 type 为空", i + 1));
+                return Err(format!("entity {} type is empty", i + 1));
             }
             if node.label.trim().is_empty() {
-                return Err(format!("第 {} 个实体的 label 为空", i + 1));
+                return Err(format!("entity {} label is empty", i + 1));
             }
         }
 
         for (i, edge) in output.edges.iter().enumerate() {
             if edge.source.trim().is_empty() {
-                return Err(format!("第 {} 条关系的 source 为空", i + 1));
+                return Err(format!("edge {} source is empty", i + 1));
             }
             if edge.target.trim().is_empty() {
-                return Err(format!("第 {} 条关系的 target 为空", i + 1));
+                return Err(format!("edge {} target is empty", i + 1));
             }
             if edge.relation.trim().is_empty() {
-                return Err(format!("第 {} 条关系的 relation 为空", i + 1));
+                return Err(format!("edge {} relation is empty", i + 1));
             }
         }
 
@@ -205,7 +205,7 @@ impl KnowledgeExtractor {
         let handle = tokio::runtime::Handle::try_current()
             .unwrap_or_else(|_| {
                 tokio::runtime::Runtime::new()
-                    .expect("创建 tokio 运行时失败")
+                    .expect("failed to create tokio runtime")
                     .handle()
                     .clone()
             });
@@ -218,18 +218,18 @@ impl KnowledgeExtractor {
         let mut current_prompt = base_prompt;
 
         for attempt in 1..=3 {
-            debug!(attempt, "知识抽取尝试");
+            debug!(attempt, "knowledge extraction attempt");
 
             let llm_result = handle.block_on(self.call_llm(&current_prompt));
 
             let raw_response = match llm_result {
                 Ok(resp) => resp,
                 Err(e) => {
-                    warn!(attempt, error = %e, "LLM API 调用失败");
+                    warn!(attempt, error = %e, "LLM API call failed");
                     last_error = e;
                     if attempt < 3 {
                         current_prompt = format!(
-                            "{}\n\n---\n上次调用失败，错误信息: {}\n请重试。",
+                            "{}\n\n---\nLast call failed, error: {}\nPlease retry.",
                             Self::build_extraction_prompt(text, &vocabulary),
                             last_error
                         );
@@ -249,17 +249,17 @@ impl KnowledgeExtractor {
                         entities = result.entity_count,
                         relations = result.relation_count,
                         quads = result.quads.len(),
-                        "知识抽取完成并写入存储"
+                        "knowledge extraction complete and written to store"
                     );
 
                     return Ok(result);
                 }
                 Err(e) => {
-                    warn!(attempt, error = %e, "抽取结果校验失败");
+                    warn!(attempt, error = %e, "extraction validation failed");
                     last_error = e;
                     if attempt < 3 {
                         current_prompt = format!(
-                            "{}\n\n---\n上次抽取结果校验失败，错误: {}\nLLM 原始输出:\n{}\n请修正后重新输出。",
+                            "{}\n\n---\nLast extraction validation failed, error: {}\nLLM raw output:\n{}\nPlease correct and re-output.",
                             Self::build_extraction_prompt(text, &vocabulary),
                             last_error,
                             truncate_str(&raw_response, 500)
@@ -270,7 +270,7 @@ impl KnowledgeExtractor {
         }
 
         Err(format!(
-            "知识抽取在 3 次尝试后仍失败，最后错误: {}",
+            "knowledge extraction failed after 3 attempts, last error: {}",
             last_error
         ))
     }
@@ -330,7 +330,7 @@ fn truncate_str(s: &str, max_len: usize) -> String {
         while end > 0 && !s.is_char_boundary(end) {
             end -= 1;
         }
-        format!("{}...(截断)", &s[..end])
+        format!("{}...(truncated)", &s[..end])
     }
 }
 
@@ -362,7 +362,7 @@ mod tests {
         let json = r#"{"nodes": [], "edges": []}"#;
         let result = KnowledgeExtractor::validate_extraction(json);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("至少需要一个实体"));
+        assert!(result.unwrap_err().contains("requires at least one entity"));
     }
 
     #[test]
@@ -370,7 +370,7 @@ mod tests {
         let json = r#"{"nodes": [{"id": "", "node_type": "T", "label": "L", "properties": {}}], "edges": []}"#;
         let result = KnowledgeExtractor::validate_extraction(json);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("id 为空"));
+        assert!(result.unwrap_err().contains("id is empty"));
     }
 
     #[test]
@@ -378,7 +378,7 @@ mod tests {
         let json = r#"{"nodes": [{"id": "a", "node_type": "T", "label": "L", "properties": {}}], "edges": [{"source": "", "target": "b", "relation": "R", "properties": {}}]}"#;
         let result = KnowledgeExtractor::validate_extraction(json);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("source 为空"));
+        assert!(result.unwrap_err().contains("source is empty"));
     }
 
     #[test]
@@ -396,16 +396,16 @@ mod tests {
         let json = "not json at all";
         let result = KnowledgeExtractor::validate_extraction(json);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("JSON 解析失败"));
+        assert!(result.unwrap_err().contains("JSON parse failed"));
     }
 
     #[test]
     fn test_build_extraction_prompt() {
-        let vocab = "## 可用实体类型\n- IRI: https://agentos.ontology/core/Person | 名称: 人物 | 表示一个人";
-        let prompt = KnowledgeExtractor::build_extraction_prompt("测试文本", vocab);
-        assert!(prompt.contains("知识图谱抽取专家"));
+        let vocab = "## Available entity types\n- IRI: https://agentos.ontology/core/Person | name: Person | Represents a person";
+        let prompt = KnowledgeExtractor::build_extraction_prompt("test text", vocab);
+        assert!(prompt.contains("knowledge graph extraction expert"));
         assert!(prompt.contains("https://agentos.ontology/core/Person"));
-        assert!(prompt.contains("测试文本"));
+        assert!(prompt.contains("test text"));
         assert!(prompt.contains("nodes"));
         assert!(prompt.contains("edges"));
     }
@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn test_truncate_str_long() {
         let result = truncate_str("abcdefghij", 5);
-        assert_eq!(result, "abcde...(截断)");
+        assert_eq!(result, "abcde...(truncated)");
     }
 
     #[test]

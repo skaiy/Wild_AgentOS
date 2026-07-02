@@ -48,7 +48,7 @@ impl GraphifyEngine {
                 entity_count: 0,
                 relation_count: 0,
                 entity_types: vec![],
-                summary: format!("图谱化失败: {}", e),
+                summary: format!("Graphify failed: {}", e),
                 micro_tools: vec![],
             };
         }
@@ -433,28 +433,28 @@ impl GraphifyEngine {
 
     pub fn generate_data_summary(analysis: &SchemaAnalysis) -> String {
         let mut summary = format!(
-            "数据摘要: {} 个实体, {} 个关系\n",
+            "Data summary: {} entities, {} relations\n",
             analysis.total_entities, analysis.total_relations
         );
 
         if !analysis.entity_types.is_empty() {
-            summary.push_str("实体类型分布:\n");
+            summary.push_str("Entity type distribution:\n");
             for (type_name, count) in &analysis.entity_types {
                 let short = type_name.split('/').last().unwrap_or(type_name);
-                summary.push_str(&format!("  - {}: {} 个\n", short, count));
+                summary.push_str(&format!("  - {}: {} count\n", short, count));
             }
         }
 
         if !analysis.relation_types.is_empty() {
             summary.push_str(&format!(
-                "关系类型: {}\n",
+                "Relation types: {}\n",
                 analysis.relation_types.join(", ")
             ));
         }
 
         if !analysis.property_names.is_empty() {
             summary.push_str(&format!(
-                "属性字段: {} (共 {} 个)\n",
+                "Property fields: {} (total {})\n",
                 analysis.property_names.iter().take(10).cloned().collect::<Vec<_>>().join(", "),
                 analysis.property_names.len()
             ));
@@ -563,7 +563,7 @@ mod tests {
         };
 
         let summary = GraphifyEngine::generate_data_summary(&analysis);
-        assert!(summary.contains("13 个实体"));
+        assert!(summary.contains("13 entities"));
         assert!(summary.contains("Person"));
         assert!(summary.contains("works_for"));
     }

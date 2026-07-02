@@ -73,7 +73,7 @@ pub struct KnowledgeUpdateInput {
 fn ensure_index_dir() -> Result<(), String> {
     let dir = rag_index_dir();
     if !dir.exists() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("创建索引目录失败: {}", e))?;
+        std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create index directory: {}", e))?;
     }
     Ok(())
 }
@@ -176,9 +176,9 @@ fn index_chunk(content: &str, iri: &str, chunk_index: usize, tags: &[String], so
     let file_name = chunk_iri.replace([':', '/', '#'], "_");
     let file_path = rag_index_dir().join(format!("{}.json", file_name));
     let json_str = serde_json::to_string_pretty(&doc)
-        .map_err(|e| format!("序列化 chunk 文档失败: {}", e))?;
+        .map_err(|e| format!("Failed to serialize chunk document: {}", e))?;
     std::fs::write(&file_path, json_str)
-        .map_err(|e| format!("写入索引文件失败: {}", e))?;
+        .map_err(|e| format!("Failed to write index file: {}", e))?;
     
     Ok(chunk_iri)
 }
@@ -189,11 +189,11 @@ pub async fn execute_knowledge_import_file(input: Value) -> Result<Value, String
     
     let path = Path::new(&params.path);
     if !path.exists() {
-        return Err(format!("文件不存在: {}", params.path));
+        return Err(format!("File does not exist: {}", params.path));
     }
     
     let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("读取文件失败: {}", e))?;
+        .map_err(|e| format!("Failed to read file: {}", e))?;
     
     let ext = path.extension()
         .and_then(|e| e.to_str())
@@ -248,9 +248,9 @@ pub async fn execute_knowledge_import_url(input: Value) -> Result<Value, String>
         .build()
         .map_err(|e| format!("HTTP client: {}", e))?;
     let resp = client.get(&params.url).send().await
-        .map_err(|e| format!("请求失败: {}", e))?;
+        .map_err(|e| format!("Request failed: {}", e))?;
     let html = resp.text().await
-        .map_err(|e| format!("读取失败: {}", e))?;
+        .map_err(|e| format!("Read failed: {}", e))?;
     
     let content = if let Some(ref selector) = params.selector {
         let re = regex::Regex::new(selector).map_err(|e| format!("Invalid selector: {}", e))?;
@@ -293,7 +293,7 @@ pub async fn execute_knowledge_import_directory(input: Value) -> Result<Value, S
     
     let path = Path::new(&params.path);
     if !path.exists() {
-        return Err(format!("目录不存在: {}", params.path));
+        return Err(format!("Directory does not exist: {}", params.path));
     }
     
     let pattern = params.pattern.clone().unwrap_or_else(|| "*.md,*.txt,*.html,*.json".to_string());
@@ -385,7 +385,7 @@ pub async fn execute_knowledge_list(input: Value) -> Result<Value, String> {
     
     let index_dir = rag_index_dir();
     let entries = std::fs::read_dir(index_dir)
-        .map_err(|e| format!("读取索引目录失败: {}", e))?;
+        .map_err(|e| format!("Failed to read index directory: {}", e))?;
     
     let mut results = Vec::new();
     let limit = params.limit.unwrap_or(100);
@@ -397,7 +397,7 @@ pub async fn execute_knowledge_list(input: Value) -> Result<Value, String> {
         }
         
         let content = std::fs::read_to_string(entry.path())
-            .map_err(|e| format!("读取索引文件失败: {}", e))?;
+            .map_err(|e| format!("Failed to read index file: {}", e))?;
         let doc: Value = serde_json::from_str(&content).unwrap_or_default();
         
         if let Some(ref filter_tags) = params.tags {
@@ -453,7 +453,7 @@ pub async fn execute_knowledge_delete(input: Value) -> Result<Value, String> {
     
     let index_dir = rag_index_dir();
     let entries = std::fs::read_dir(index_dir)
-        .map_err(|e| format!("读取索引目录失败: {}", e))?;
+        .map_err(|e| format!("Failed to read index directory: {}", e))?;
     
     let mut deleted = Vec::new();
     let mut deleted_count = 0;
@@ -464,7 +464,7 @@ pub async fn execute_knowledge_delete(input: Value) -> Result<Value, String> {
         }
         
         let content = std::fs::read_to_string(entry.path())
-            .map_err(|e| format!("读取索引文件失败: {}", e))?;
+            .map_err(|e| format!("Failed to read index file: {}", e))?;
         let doc: Value = serde_json::from_str(&content).unwrap_or_default();
         
         let should_delete = if params.all.unwrap_or(false) {
@@ -510,7 +510,7 @@ pub async fn execute_knowledge_search(input: Value) -> Result<Value, String> {
     
     let index_dir = rag_index_dir();
     let entries = std::fs::read_dir(index_dir)
-        .map_err(|e| format!("读取索引目录失败: {}", e))?;
+        .map_err(|e| format!("Failed to read index directory: {}", e))?;
     
     let mut results = Vec::new();
     
@@ -520,7 +520,7 @@ pub async fn execute_knowledge_search(input: Value) -> Result<Value, String> {
         }
         
         let content = std::fs::read_to_string(entry.path())
-            .map_err(|e| format!("读取索引文件失败: {}", e))?;
+            .map_err(|e| format!("Failed to read index file: {}", e))?;
         let doc: Value = serde_json::from_str(&content).unwrap_or_default();
         
         if let Some(ref filter_tags) = params.tags {
@@ -585,7 +585,7 @@ pub async fn execute_knowledge_update(input: Value) -> Result<Value, String> {
     
     let index_dir = rag_index_dir();
     let entries = std::fs::read_dir(index_dir)
-        .map_err(|e| format!("读取索引目录失败: {}", e))?;
+        .map_err(|e| format!("Failed to read index directory: {}", e))?;
     
     let mut updated_count = 0;
     
@@ -595,7 +595,7 @@ pub async fn execute_knowledge_update(input: Value) -> Result<Value, String> {
         }
         
         let content = std::fs::read_to_string(entry.path())
-            .map_err(|e| format!("读取索引文件失败: {}", e))?;
+            .map_err(|e| format!("Failed to read index file: {}", e))?;
         let mut doc: Value = serde_json::from_str(&content).unwrap_or_default();
         
         if doc["iri"].as_str() == Some(params.iri.as_str()) 
@@ -628,9 +628,9 @@ pub async fn execute_knowledge_update(input: Value) -> Result<Value, String> {
             doc["updated_at"] = json!(Utc::now().to_rfc3339());
             
             let json_str = serde_json::to_string_pretty(&doc)
-                .map_err(|e| format!("序列化更新文档失败: {}", e))?;
+                .map_err(|e| format!("Failed to serialize updated document: {}", e))?;
             std::fs::write(entry.path(), json_str)
-                .map_err(|e| format!("写入索引文件失败: {}", e))?;
+                .map_err(|e| format!("Failed to write index file: {}", e))?;
             
             updated_count += 1;
         }
@@ -649,7 +649,7 @@ mod tests {
     
     #[test]
     fn test_smart_chunk() {
-        let content = "第一段内容。\n\n第二段内容。\n\n第三段内容。";
+        let content = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
         let chunks = smart_chunk(content, 20, 5);
         assert!(!chunks.is_empty());
     }

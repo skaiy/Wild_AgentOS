@@ -165,10 +165,10 @@ impl SyscallGate {
             .to_string();
 
         if !self.whitelist_manager.check_permission_for_agent(agent_id, role, &tool_name) {
-            warn!(agent = %agent_id, role = %role, tool = %tool_name, "角色白名单拒绝");
+            warn!(agent = %agent_id, role = %role, tool = %tool_name, "Role whitelist denied");
             return Err(CoreError::ValidationFailed {
                 message: format!(
-                    "Agent {} (角色 {:?}) 无权调用工具 {}",
+                    "Agent {} (role {:?}) not authorized to call tool {}",
                     agent_id, role, tool_name
                 ),
             });
@@ -190,7 +190,7 @@ impl SyscallGate {
         if let Some(ref how) = snapshot.how {
             if how.forbidden_tools.iter().any(|t| t.eq_ignore_ascii_case(tool_name)) {
                 return Err(crate::CoreError::Internal {
-                    message: format!("工具 {} 在 5W2H forbiddenTools 列表中，禁止调用", tool_name),
+                    message: format!("Tool {} is in 5W2H forbiddenTools list, denied", tool_name),
                 });
             }
         }
@@ -202,7 +202,7 @@ impl SyscallGate {
                     && write_tools.iter().any(|t| t.eq_ignore_ascii_case(tool_name))
                 {
                     return Err(crate::CoreError::Internal {
-                        message: format!("5W2H accessLevel 为 Read，禁止调用写操作工具 {}", tool_name),
+                        message: format!("5W2H accessLevel is Read, write tool {} denied", tool_name),
                     });
                 }
             }
@@ -402,7 +402,7 @@ mod tests_5w2h {
     #[test]
     fn test_5w2h_forbidden_tools_constraint() {
         let gate = make_gate();
-        let w2h = Task5W2H::new("受限任务", "测试约束")
+        let w2h = Task5W2H::new("Restricted task", "Test constraints")
             .with_how(HowDetail {
                 plan_iri: None,
                 preferred_skills: vec![],
@@ -419,7 +419,7 @@ mod tests_5w2h {
     #[test]
     fn test_5w2h_access_level_read_constraint() {
         let gate = make_gate();
-        let w2h = Task5W2H::new("只读任务", "测试访问控制")
+        let w2h = Task5W2H::new("Read-only task", "Test access control")
             .with_who(WhoDetail {
                 requestor: None,
                 assignees: vec![],
@@ -436,7 +436,7 @@ mod tests_5w2h {
     #[test]
     fn test_5w2h_access_level_write_allowed() {
         let gate = make_gate();
-        let w2h = Task5W2H::new("写任务", "测试写权限")
+        let w2h = Task5W2H::new("Write task", "Test write permission")
             .with_who(WhoDetail {
                 requestor: None,
                 assignees: vec![],

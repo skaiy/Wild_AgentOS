@@ -22,36 +22,36 @@ pub struct CheckpointData {
     pub session_messages_json: String,
     pub agent_state_json: String,
 
-    // ── 扩展字段（Option 确保向后兼容旧 checkpoint） ──
+    // ── Extension fields (Option ensures backward compatibility with old checkpoints) ──
 
-    /// 当前执行的 agent role（PA/DA/CA/AA），用于 resume 决定 skip 哪些 phase
+    /// The currently executing agent role (PA/DA/CA/AA), used by resume to decide which phases to skip
     pub current_role: Option<String>,
 
-    /// 5W2H 快照（含 fill stage 跟踪），用于完整恢复 SA 执行上下文
+    /// 5W2H snapshot (with fill stage tracking), used for full SA execution context restoration
     pub five_w2h_json: Option<String>,
 
-    /// prev_summary 链值（PA→DA→CA→AA 传递的摘要）
+    /// prev_summary chain value (summary passed through PA→DA→CA→AA)
     pub prev_summary: Option<String>,
 
-    /// CycleState 序列化（phase, iteration, phase_history, experience_hints）
+    /// CycleState serialization (phase, iteration, phase_history, experience_hints)
     pub cycle_state_json: Option<String>,
 
-    /// 已完成的 DAG 节点结果（key=node_id, value=NodeResult JSON）
+    /// Completed DAG node results (key=node_id, value=NodeResult JSON)
     pub completed_nodes_json: Option<String>,
 
-    /// 待处理的人工审批请求
+    /// Pending human approval requests
     pub pending_approvals_json: Option<String>,
 
-    /// 待消费的补充输入条目
+    /// Pending supplementary input entries
     pub supplement_json: Option<String>,
 
-    /// React 循环中累积的工具错误计数 + 已注入恢复的工具集合
+    /// Accumulated tool error count + injected recovery tool set in the React loop
     pub tool_error_json: Option<String>,
 
-    /// ActionTracker 累积的已跟踪动作
+    /// ActionTracker accumulated tracked actions
     pub action_tracker_json: Option<String>,
 
-    /// 感知引擎异常历史（用于 dedup 去重）
+    /// Perception engine anomaly history (used for dedup)
     pub perception_anomaly_json: Option<String>,
 }
 
@@ -139,7 +139,7 @@ impl CheckpointManager {
         Ok(checkpoint)
     }
 
-    /// 扩展版创建方法：支持所有可选字段。None 字段不会出现在序列化中（节省 L0 空间）。
+    /// Extended creation method: supports all optional fields. None fields won't appear in serialization (saving L0 space).
     #[allow(clippy::too_many_arguments)]
     pub fn create_ext(
         &self,
@@ -245,11 +245,11 @@ impl CheckpointManager {
         Ok(list.into_iter().next())
     }
 
-    /// 恢复指定 task 的最新 checkpoint，并解析其 phase 标签。
-    /// 返回 (checkpoint, phase_label) 其中 phase_label 取值为：
+    /// Restore the latest checkpoint for a given task, parsing its phase label.
+    /// Returns (checkpoint, phase_label) where phase_label is one of:
     ///   "start_<Role>" / "turn_<Role>_N" / "finish_<Role>" / "max_turns_<Role>"
     ///   "force_end_<Role>" / "step_complete_<Role>" / "pre_dispatch_<Role>"
-    ///   或 "unknown"
+    ///   or "unknown"
     pub fn restore_latest_with_phase(&self, task_iri: &str) -> Result<Option<(CheckpointData, String)>, CoreError> {
         let cp = self.restore_latest(task_iri)?;
         Ok(cp.map(|c| {
@@ -258,8 +258,8 @@ impl CheckpointManager {
         }))
     }
 
-    /// 恢复指定 task 的最新 checkpoint 并根据 phase 推断哪些阶段已完成。
-    /// 返回 (checkpoint, skip_roles) — skip_roles 是 resume 时应跳过的 AgentRole 列表。
+    /// Restore the latest checkpoint for a given task and infer which phases are done based on the phase.
+    /// Returns (checkpoint, skip_roles) — skip_roles is the list of AgentRoles to skip during resume.
     pub fn restore_latest_with_skip_roles(
         &self, task_iri: &str,
     ) -> Result<Option<(CheckpointData, Vec<String>)>, CoreError> {
@@ -271,7 +271,7 @@ impl CheckpointManager {
     }
 
     pub fn list(&self, task_iri: &str, limit: i32) -> Vec<CheckpointData> {
-        // 先尝试内存索引（同进程内有效）
+        // Try in-memory index first (valid within the same process)
         {
             let task_cps = self.task_checkpoints.read();
             if let Some(cp_iris) = task_cps.get(task_iri) {
@@ -293,7 +293,7 @@ impl CheckpointManager {
                 return results;
             }
         }
-        // 内存索引未命中 → 从 L0 按 IRI 前缀扫描（跨进程恢复用）
+        // In-memory index miss → scan from L0 by IRI prefix (for cross-process recovery)
         if let Some(ref l0) = self.l0 {
             let stripped = task_iri.strip_prefix("iri://").unwrap_or(task_iri);
             let prefix = format!("iri://checkpoint/{}/", stripped);
@@ -333,8 +333,8 @@ impl CheckpointManager {
     }
 }
 
-/// 从 checkpoint name 中解析 phase 标签。
-/// 示例: "start_DA" → "start_DA", "turn_CA_5" → "turn_CA_5", "finish_PA" → "finish_PA"
+/// Parse the phase label from a checkpoint name.
+/// Examples: "start_DA" → "start_DA", "turn_CA_5" → "turn_CA_5", "finish_PA" → "finish_PA"
 ///       "step_complete_Do" → "step_complete_Do", "unknown_xxx" → "unknown"
 pub fn parse_checkpoint_phase(name: &str) -> String {
     let known_prefixes = ["start_", "turn_", "finish_", "max_turns_", "force_end_",
@@ -359,24 +359,24 @@ pub fn parse_checkpoint_phase(name: &str) -> String {
     "unknown".to_string()
 }
 
-/// 根据 checkpoint name 和 current_role 推断 resume 时应跳过的 AgentRole。
-/// 返回角色字符串列表，如 ["Plan", "Do"]。
-/// 规则：
-///   - "start_<Role>" / "turn_<Role>_N" → 此角色之前的所有角色已完成，跳过它们
-///   - "finish_<Role>" / "step_complete_<Role>" → 此角色已完成，跳过
-///   - 如果 current_role 明确指定，则以它为准决定跳过的角色
+/// Infer which AgentRoles to skip during resume based on checkpoint name and current_role.
+/// Returns a list of role strings, e.g. ["Plan", "Do"].
+/// Rules:
+///   - "start_<Role>" / "turn_<Role>_N" → all roles before this one are done, skip them
+///   - "finish_<Role>" / "step_complete_<Role>" → this role is done, skip it
+///   - If current_role is explicitly specified, it takes precedence
 pub fn compute_skip_roles_from_phase(name: &str, current_role: Option<&str>) -> Vec<String> {
-    // 角色顺序
+    // Role order
     let role_order = ["Plan", "Do", "Check", "Act"];
     let _alt_roles = ["PA", "DA", "CA", "AA"];
     let all_roles = ["Plan", "Do", "Check", "Act", "PA", "DA", "CA", "AA"];
 
-    // 优先使用 current_role
+    // Prefer current_role
     let active_role = current_role.and_then(|r| {
         all_roles.iter().find(|ar| ar.eq_ignore_ascii_case(r))
     }).copied();
 
-    // 从 name 中提取角色
+    // Extract role from name
     let name_role = {
         let mut found = None;
         for role in &all_roles {
@@ -391,7 +391,7 @@ pub fn compute_skip_roles_from_phase(name: &str, current_role: Option<&str>) -> 
     let target_role = active_role.or(name_role);
 
     if let Some(role) = target_role {
-        // 将角色规范化为标准名称
+        // Normalize role to canonical name
         let canonical = match role {
             "PA" => "Plan",
             "DA" => "Do",
@@ -415,7 +415,7 @@ pub fn compute_skip_roles_from_phase(name: &str, current_role: Option<&str>) -> 
         return skip;
     }
 
-    // fallback: 只跳过 Plan（兼容旧行为）
+    // fallback: only skip Plan (backward compatible)
     vec!["Plan".to_string()]
 }
 
@@ -456,7 +456,7 @@ mod tests {
         let l0 = Arc::new(L0Store::new(dir.path().to_str().unwrap()).unwrap());
         let mgr = CheckpointManager::with_persistence(l0.clone());
 
-        // 创建检查点（模拟在上一次进程中运行）
+        // Create checkpoint (simulating running in a previous process)
         mgr.create(
             "iri://task/abc-123",
             "finish_DA",
@@ -466,15 +466,15 @@ mod tests {
             &["DA".to_string()],
         ).unwrap();
 
-        // 新建 CheckpointManager（模拟跨进程：新实例、空内存索引）
+        // New CheckpointManager (simulating cross-process: new instance, empty memory index)
         let mgr2 = CheckpointManager::with_persistence(l0.clone());
 
-        // restore_latest 必须找到检查点（通过 scan_iri_prefix 回退）
+        // restore_latest must find the checkpoint (fallback via scan_iri_prefix)
         let cp = mgr2.restore_latest("iri://task/abc-123").unwrap();
-        assert!(cp.is_some(), "跨进程恢复必须找到检查点");
+        assert!(cp.is_some(), "cross-process recovery must find checkpoint");
         assert_eq!(cp.unwrap().task_iri, "iri://task/abc-123");
 
-        // list 也必须能找到
+        // list must also find it
         let list = mgr2.list("iri://task/abc-123", 10);
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].name, "finish_DA");

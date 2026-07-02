@@ -1,14 +1,14 @@
-//! ExecutionPlan → DAG 适配器
+//! ExecutionPlan → DAG adapter
 //!
-//! 将 SA 现有的 ExecutionPlan 线性序列自动转换为 DAG 内部表示，
-//! 使得新旧两种流程定义方式共享同一个 DAG 执行引擎。
+//! Automatically converts SA's existing linear ExecutionPlan sequence to DAG internal representation,
+//! allowing both old and new workflow definition styles to share the same DAG execution engine.
 
 use super::definition::*;
 use super::loader::*;
 use crate::core::agent_instance::AgentRole;
 use crate::core::sa::{ExecutionPlan, PlanStep};
 
-/// 将 ExecutionPlan 转换为 WorkflowDefinition（可被 DAG 引擎执行）
+/// Convert ExecutionPlan to WorkflowDefinition (executable by the DAG engine)
 pub fn plan_to_workflow(plan: &ExecutionPlan, _task_iri: &str) -> WorkflowDefinition {
     let plan_id = &plan.plan_id;
 
@@ -41,13 +41,13 @@ pub fn plan_to_workflow(plan: &ExecutionPlan, _task_iri: &str) -> WorkflowDefini
             extra: Default::default(),
         };
 
-        // 串联线性步骤为 next 链
+        // Chain linear steps into next links
         if let Some(ref pid) = prev_id {
-            // 找到前驱节点设置 next
+            // Find predecessor and set next
             if let Some(prev_node) = nodes.iter_mut().find(|n: &&mut WorkflowNodeDef| n.id == *pid) {
                 prev_node.next = Some(node_id.clone());
             }
-            // 当前节点依赖前驱
+            // Current node depends on predecessor
             if !node.dependencies.contains(pid) {
                 node.dependencies.push(pid.clone());
             }
@@ -56,7 +56,7 @@ pub fn plan_to_workflow(plan: &ExecutionPlan, _task_iri: &str) -> WorkflowDefini
         nodes.push(node);
     }
 
-    // 标记最后一个为 final
+    // Mark the last as final
     if let Some(last) = nodes.last_mut() {
         last.final_node = true;
     }
@@ -65,7 +65,7 @@ pub fn plan_to_workflow(plan: &ExecutionPlan, _task_iri: &str) -> WorkflowDefini
         .map(|n| n.id.clone())
         .unwrap_or_default();
 
-    // 处理并行组
+    // Handle parallel groups
     let parallel_updates: Vec<(String, Vec<String>)> = plan.parallel_groups.iter()
         .filter(|g| g.len() > 1)
         .filter_map(|group| {
@@ -94,14 +94,14 @@ pub fn plan_to_workflow(plan: &ExecutionPlan, _task_iri: &str) -> WorkflowDefini
     WorkflowDefinition {
         id: format!("iri://workflow/{}", plan_id),
         name: plan.description.clone(),
-        description: format!("从 ExecutionPlan '{}' 自动转换", plan.description),
+        description: format!("Auto-converted from ExecutionPlan '{}'", plan.description),
         version: "1.0".to_string(),
         entry_node,
         nodes,
     }
 }
 
-/// 将 DAG 节点 (WorkflowNodeDef) 转换为 PlanStep（统一迭代接口）
+/// Convert DAG node (WorkflowNodeDef) to PlanStep (unified iteration interface)
 pub fn node_to_planstep(node: &WorkflowNodeDef) -> PlanStep {
     PlanStep {
         step_id: node.id.clone(),
@@ -118,7 +118,7 @@ pub fn node_to_planstep(node: &WorkflowNodeDef) -> PlanStep {
     }
 }
 
-/// 从 agent_role 字符串解析 AgentRole
+/// Parse AgentRole from agent_role string
 fn parse_role_from_str(role: &str) -> AgentRole {
     match role.to_lowercase().as_str() {
         "plan" | "pa" => AgentRole::Plan,
@@ -129,12 +129,12 @@ fn parse_role_from_str(role: &str) -> AgentRole {
     }
 }
 
-/// 快速判断：ExecutionPlan 是否可被 DAG 引擎执行（总是可以，因 adapter）
+/// Quick check: whether ExecutionPlan is executable by DAG engine (always true, via adapter)
 pub fn is_plan_compatible(_plan: &ExecutionPlan) -> bool {
     true
 }
 
-/// 将 DAG (WorkflowDag) 转换回 ExecutionPlan（用于外部 workflow.jsonld 的统一执行路径）
+/// Convert DAG (WorkflowDag) back to ExecutionPlan (for unified execution path of external workflow.jsonld)
 pub fn dag_to_execution_plan(
     dag: &WorkflowDag,
     def: &WorkflowDefinition,
@@ -176,25 +176,25 @@ mod tests {
             agent_sequence: vec![AgentRole::Plan, AgentRole::Do, AgentRole::Check, AgentRole::Act],
             parallel_groups: vec![],
             task_complexity: crate::core::sa::TaskComplexity::Standard,
-            description: "测试计划".to_string(),
+            description: "Test plan".to_string(),
             steps: vec![
                 PlanStep {
                     step_id: "step_1".to_string(),
                     role: AgentRole::Plan,
-                    objective: "制定计划".to_string(),
+                    objective: "Create plan".to_string(),
                     expected_output: "plan".to_string(),
                     dependencies: vec![],
                     tools_allowed: vec!["file_read".to_string()],
-                    success_criteria: "计划完整".to_string(),
+                    success_criteria: "Plan complete".to_string(),
                 },
                 PlanStep {
                     step_id: "step_2".to_string(),
                     role: AgentRole::Do,
-                    objective: "执行任务".to_string(),
+                    objective: "Execute task".to_string(),
                     expected_output: "output".to_string(),
                     dependencies: vec!["step_1".to_string()],
                     tools_allowed: vec!["file_write".to_string(), "bash".to_string()],
-                    success_criteria: "产物完整".to_string(),
+                    success_criteria: "Output complete".to_string(),
                 },
             ],
             context_requirements: Default::default(),
@@ -218,12 +218,12 @@ mod tests {
             agent_sequence: vec![AgentRole::Do, AgentRole::Check],
             parallel_groups: vec![vec![AgentRole::Do, AgentRole::Do]],
             task_complexity: crate::core::sa::TaskComplexity::Standard,
-            description: "并行测试".to_string(),
+            description: "Parallel test".to_string(),
             steps: vec![
                 PlanStep {
                     step_id: "step_1".to_string(),
                     role: AgentRole::Do,
-                    objective: "模块A".to_string(),
+                    objective: "Module A".to_string(),
                     expected_output: "a".to_string(),
                     dependencies: vec![],
                     tools_allowed: vec![],
@@ -232,7 +232,7 @@ mod tests {
                 PlanStep {
                     step_id: "step_2".to_string(),
                     role: AgentRole::Do,
-                    objective: "模块B".to_string(),
+                    objective: "Module B".to_string(),
                     expected_output: "b".to_string(),
                     dependencies: vec![],
                     tools_allowed: vec![],
@@ -247,7 +247,7 @@ mod tests {
         };
 
         let wf = plan_to_workflow(&plan, "iri://task/test2");
-        // 两个 Do 节点并行：无 entry 的 next，应为 next_nodes
+        // Two Do nodes in parallel: no entry next, should be next_nodes
         assert_eq!(wf.nodes.len(), 2);
     }
 }

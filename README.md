@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![gRPC](https://img.shields.io/badge/gRPC-Protocol-green.svg)](https://grpc.io/)
 [![Knowledge Graph](https://img.shields.io/badge/Knowledge%20Graph-Oxigraph-purple.svg)](https://oxigraph.org/)
-[![Release](https://img.shields.io/github/v/release/doiito/gliding_horse)](https://github.com/doiito/gliding_horse/releases)
+[![Release](https://img.shields.io/badge/release-v0.1.2-blue)](https://github.com/doiito/gliding_horse/releases)
 
 ---
 
@@ -26,6 +26,25 @@
 
 ---
 
+## 🎉 v0.1.2 Release
+
+We are proud to announce the **v0.1.2 release** of Gliding Horse Agent OS.
+
+**What's new in v0.1.2:**
+
+| Feature | Description |
+|---------|-------------|
+| **HyperspaceEngine** | Production-grade vector embedding engine with HNSW ANN search, Write-Ahead Log (WAL), tangent-space pruning, and runtime-switchable metrics (Poincaré, Cosine, Euclidean, Lorentz). |
+| **Skill Graph Cognitive Network** | Hypergraph composition, Poincaré structural embeddings, PageRank/betweenness/community detection algorithms, causal failure analysis, temporal versioning with rollback, formal invariant verification (6 checks), hybrid text×structural search. |
+| **Semantic Skill Discovery** | Vector-store integration in `SkillDiscoveryEngine` — finds semantically related skills via HyperspaceStore cosine search, replaces Jaccard-only `suggest_links()` |
+| **Oxigraph SPARQL Bridge** | Real-time bidirectional sync between skill graph and Oxigraph RDF store via SPARQL INSERT/DELETE + named graph isolation |
+| **L2 Blackboard Memory** | Typed document store with JSON-LD threading, projections, message packs, and LRU eviction for long-term agent context |
+| **Workspace Monitor** | Real-time file system perception engine with 10 event triggers, anomaly deduplication, and 5W2H constraint checking |
+| **Batch Agent Manager** | Sliding-window-based batch processing with configurable triggers, event bus integration, and business-domain isolation |
+| **Gliding Code TUI** | Interactive terminal UI (ratatui v0.28) with Markdown rendering, MCP server support, checkpoint/resume, and multi-model backends |
+
+---
+
 ## What Is Gliding Horse?
 
 An **AI agent operating system** built in Rust that orchestrates multiple agents via the PDCA cycle, enabling coordinated, auditable, and self-improving systems. — much like how Zhuge Liang's **Wooden Ox and Gliding Horse** revolutionized logistics by harnessing mechanical power across treacherous terrain.
@@ -37,12 +56,15 @@ An **AI agent operating system** built in Rust that orchestrates multiple agents
 | Layer | Technology | Role |
 |-------|-----------|------|
 | **Core Coordination** (Rust) | `PDCA cycle` · `5W2H ontology` · `EventBus` | Agent orchestration & lifecycle |
-| **Memory System** | `L0: Sled+Qdrant` · `L2: Oxigraph` · `MESI coherence` | 5-layer hierarchical memory |
+| **Skill Graph** | `RDF` · `6 link types` · `18 modules` | Dynamic cognitive network |
+| **Memory System** | `L0 Sled` · `L1 Session` · `L2 Blackboard` · `L3 Projection` · `MESI coherence` | Hierarchical memory with prefetch |
+| **Knowledge Graph** | `Oxigraph RDF` · `SPARQL 1.1` · `Code AST` · `Named Graphs` | Cross-subsystem unified store |
+| **HyperspaceEngine** | `HNSW ANN` · `WAL` · `Poincaré/Cosine/Euclidean` · `Hybrid search` | Embedded vector embeddings |
+| **Gliding Code TUI** | `ratatui` · `crossterm` · `MCP` · `checkpoint/resume` | Terminal AI coding assistant |
 | **Data Bus** | `JSON-LD 1.1` · `@id/@type/@context` · `Named Graphs` | Universal interoperability |
-| **Knowledge Graph** | `Oxigraph RDF` · `SPARQL 1.1` · `Code AST` | Cross-subsystem unified store |
-| **Skill Graph** | `RDF` · `7.5k LOC` · `Self-evolving` | Dynamic cognitive network |
-| **Perception Engine** | `10 triggers` · `Anomaly dedup` · `5W2H constraint check` | Proactive monitoring |
 | **Gateway** | `gRPC` · `HTTP (OpenAI-compatible)` · `MCP` | Production interface |
+| **Perception Engine** | `10 triggers` · `Anomaly dedup` · `5W2H constraint check` | Proactive monitoring |
+| **Agent Workflow** | `PA/DA/CA` · `Tool system` · `Checkpoint` · `Tracked actions` | Multi-agent execution |
 
 ---
 
@@ -71,76 +93,63 @@ This ancient wisdom guides our design: **flexible orchestration that adapts to t
 
 ---
 
-## 🖥️ Software Engineering Team — The Flagship Application
+## 🔧 Key Highlights
 
-The **Software Engineering Team** app demonstrates the full power of Gliding Horse — a federated architecture where multiple AI agents collaborate on real-world software engineering tasks.
+### 1. HyperspaceEngine — Embedded Vector Engine
+Production-grade spatial memory engine with **runtime-switchable metrics** (Poincaré, Cosine, Euclidean, Lorentz). Features **HNSW approximate nearest neighbor search**, CRC32-verified **Write-Ahead Log (WAL)** with 3 sync modes, **tangent-space pruning** for Poincaré ball search, JSON-LD metadata index with RoaringBitmap filters, and dual-space **hybrid search** (text × structural). A self-contained crate with zero external vector database dependencies.
 
-![Dashboard](assets/dashboard.JPG)
-*Center dashboard — project oversight, agent status, pipeline progress*
+### 2. Skill Graph Cognitive Network
+Dynamic in-memory cognitive network with **6 semantic link types** (Prerequisite, Composition, Related, Alternative, Extends, Generalization). Includes **Poincaré structural embedding** computation from graph topology (prerequisite depth, tag fingerprinting), **hypergraph composition** with first-class `Hyperedge` and `CompositionType` (Sequential, Parallel, Conditional, Optional, Fallback), **graph algorithms** (PageRank, betweenness centrality, label-propagation community detection, DFS prerequisite chains, Tarjan SCC cycle detection), **causal failure analysis** with root cause inference, **formal invariant verification** (6 checks: acyclicity, link existence, composite reachability, no deprecated prereqs, valid 5W2H, valid security levels), and **temporal versioning** with snapshot/rollback.
 
-<div align="center">
-  <table>
-    <tr>
-      <td><img src="assets/project.JPG" alt="Project Management" width="400"/><br/><em>Project lifecycle management<br/>from req → design → code → review → deploy</em></td>
-      <td><img src="assets/pipeline.JPG" alt="Pipeline Visualization" width="400"/><br/><em>Multi-stage SDLC pipeline<br/>with real-time status tracking</em></td>
-    </tr>
-  </table>
-</div>
+### 3. Generalized PDCA — 7-Level Adaptive Execution
+Dynamically selects from 7 complexity levels (L0 instant → L5 recursive → L6 emergency) via 5W2H metadata. One engine handles everything from instant queries to multi-week projects — no rigid workflows. **PA/DA/CA agent roles** with template-driven prompt construction.
 
-![VS Code Plugin](assets/vscode_plugin.JPG)
-*VS Code Plugin — chat panel, graph view, and task panel for real-time agent collaboration*
+### 4. CPU Cache-Inspired Memory — 4 Layers + MESI Coherence
+First-ever application of CPU cache coherence protocol to multi-agent memory. **L0** Sled disk storage → **L1** session context → **L2** Oxigraph RDF + Blackboard → **L3** SPARQL projection cache. Intelligent prefetch engine reduces perceived latency by 90%. Solves context explosion and shared memory inconsistency across concurrent agents.
 
-### Architecture: Center + Edge Federation
+### 5. JSON-LD Universal Data Bus — W3C-Standard Interoperability
+`@context` duck-typing eliminates field name conflicts between skills. `@id` enables zero-cost cross-agent entity merging. `@graph` named graphs allow conflict-free parallel writes across subsystems. Turns interoperability hell into plug-and-play.
 
-```mermaid
-flowchart TB
-    subgraph VS["VS Code Plugin (TypeScript)"]
-        direction LR
-        CHAT["Chat Panel"]
-        GRAPH_V["Graph View"]
-        TASK_P["Task Panel"]
-    end
+### 6. Self-Evolving Skill Graph — Autonomous Learning
+AA agents create **knowledge fragments** and new semantic links after each task completion. `/learn` and `/reduce` mechanisms enable autonomous skill acquisition and consolidation. `BootstrapEngine` ingests markdown skills from the filesystem.
 
-    subgraph EDGE["Edge Daemon (Rust · axum)"]
-        API_EDGE["API Server<br/>ws / chat / health"]
-        AGENT_CORE["Agent Core<br/>SupervisorAgent · DoAgent · LLM Client"]
-        DOCKER["Docker Sandbox<br/>Safe execution · Compile / Test"]
-        SYNC_EDGE["Sync Layer<br/>Heartbeat · gRPC · JWT Auth"]
-        GRAPH_EDGE["Graph Layer<br/>Local Store (sled) · Delta Sync"]
-        
-        API_EDGE --- AGENT_CORE
-        AGENT_CORE --- DOCKER
-        API_EDGE --- SYNC_EDGE
-        AGENT_CORE --- GRAPH_EDGE
-    end
+### 7. Universal Knowledge Graph — Unified Cognitive Backbone
+All subsystems (skills, memories, tasks, code knowledge) share a single **Oxigraph RDF store** via named graphs, enabling cross-subsystem SPARQL joins. Code ASTs parsed by tree-sitter are automatically converted to RDF triples. **Bidirectional SPARQL sync** from `SkillGraphStore` keeps the cognitive graph in sync with the semantic store.
 
-    subgraph CTR["Center (Go · Gin)"]
-        API_CTR["HTTP API<br/>/api/v1/* · /ws"]
-        TEMPORAL["Temporal Workflow<br/>Orchestrator"]
-        AGENT_MGR["Agent Manager<br/>Register · Heartbeat · Dispatch"]
-        EXEC["Executors<br/>req → design → coding → review → test → cicd → deploy"]
-        STORE_CTR["Store<br/>SQLite · gRPC Client · Graph Sync"]
-        
-        API_CTR --- TEMPORAL
-        API_CTR --- AGENT_MGR
-        TEMPORAL --- EXEC
-        AGENT_MGR --- STORE_CTR
-    end
+### 8. Semantic Skill Discovery Engine
+`SkillDiscoveryEngine` wraps `HyperspaceStore` for vector-based semantic search across skills. `suggest_links()` falls back from Jaccard tag overlap to cosine similarity via embedding vectors. Includes BFS path finding (`find_skill_chain()`), composition tree construction (`get_skill_tree()`), and conflict detection.
 
-    VS <-->|"WebSocket / REST"| EDGE
-    EDGE <-->|"gRPC + REST"| CTR
-```
+### 9. 5W2H Dimension-Level Audit — Precision Rollback
+CA audits each of the 7 dimensions independently. What/Why fail → re-analyze. How/Where fail → re-plan. When/HowMuch fail → conditional pass. No more black-box "PASS/FAIL" — you know exactly what went wrong.
 
-**Key Design Patterns:**
-- **Center (Go)**: Workflow orchestration via Temporal, project CRUD, agent registry, graph sync
-- **Edge (Rust)**: Local LLM execution, Docker sandbox, VS Code WebSocket bridge
-- **VS Code Plugin**: Developer UI with real-time agent awareness
+### 10. Proactive Perception Engine
+10 execution triggers with 60-second anomaly deduplication. Monitors deadline violations, budget overruns (>80% tokens), role mismatches, environment conflicts. **Workspace Monitor** detects file creations/modifications/deletions in real-time. Auto-escalates to human when needed.
+
+### 11. Micro-Tool System — Tame Large Outputs
+Results >8KB auto-generate conversational micro-tools (e.g., "search_in_results"). Transforms unwieldy 50KB+ outputs into interactive, queryable artifacts within the LLM context.
+
+### 12. MCP Integration — One Protocol to Connect Them All
+Standard **Model Context Protocol** connects GitHub, Slack, Jira, and any MCP-compatible server. Dynamic tool discovery at runtime. Supports both HTTP SSE and stdio transport modes with repeatable `--mcp-server` CLI flags.
+
+### 13. Checkpoint & Recovery — Crash-Proof Long-Running Tasks
+Session state snapshots at critical points with full restoration on crash. Enables hour/day-long agent tasks and post-mortem replay debugging. `--resume <task_iri>` and `--list-checkpoints` commands for explicit session management.
+
+### 14. Center + Edge Federation — Local Autonomy, Global Orchestration
+Go Center handles workflow orchestration (Temporal), project management, agent registry. Rust Edge runs local LLM execution with Docker sandbox. VS Code Plugin provides real-time developer awareness. No single point of failure.
 
 ---
 
 ## 🖥️ Gliding Code — The Terminal AI Assistant
 
-**Gliding Code** is a terminal-based AI coding assistant that brings the power of Gliding Horse's knowledge graph and agent orchestration directly into your command line — no IDE required.
+**Gliding Code** is a terminal-based AI coding assistant (`ratatui` TUI) that brings the power of Gliding Horse's knowledge graph and agent orchestration directly into your command line — no IDE required.
+
+**Features:**
+- Interactive TUI with **Markdown rendering** (`tui-markdown`) and **mermaid diagram** support
+- **MCP server integration** via `--mcp-server` and `--mcp-server-stdio` flags
+- **Checkpoint/resume** with `--resume <task_iri>` and `--list-checkpoints`
+- **Multi-model backends**: DeepSeek, OpenAI-compatible APIs
+- **PDCA workflow execution** with plan/do/check/act cycles
+- **Configurable** workspace, max iterations, max PDCA cycles, verbosity
 
 ![Gliding Code Demo](assets/screenshot.gif)
 
@@ -154,18 +163,16 @@ flowchart TB
 
 ## 🚀 Quick Start
 
-Choose your path — **download and run** the pre-built terminal AI assistant (zero dependencies), or **build from source** for the full Software Engineering Team.
-
-### Option A: Download & Run — Gliding Code
+### Download & Run — Gliding Code
 
 No dependencies required. Just download, extract, and run:
 
 | Platform | Download |
 |----------|----------|
-| Linux (x86_64, musl) | [`glidingcode-x86_64-unknown-linux-musl.tar.gz`](https://github.com/doiito/gliding_horse/releases) (13.9 MB) |
-| Linux (aarch64, musl) | [`glidingcode-aarch64-unknown-linux-musl.tar.gz`](https://github.com/doiito/gliding_horse/releases) (12.9 MB) |
-| macOS (Apple Silicon) | [`glidingcode-aarch64-apple-darwin.tar.gz`](https://github.com/doiito/gliding_horse/releases) (12.1 MB) |
-| Windows (x86_64) | [`glidingcode-x86_64-pc-windows-msvc.zip`](https://github.com/doiito/gliding_horse/releases) (11.6 MB) |
+| Linux (x86_64, musl) | [`glidingcode-x86_64-unknown-linux-musl.tar.gz`](https://github.com/doiito/gliding_horse/releases) (~15 MB) |
+| Linux (aarch64, musl) | [`glidingcode-aarch64-unknown-linux-musl.tar.gz`](https://github.com/doiito/gliding_horse/releases) (~14 MB) |
+| macOS (Apple Silicon) | [`glidingcode-aarch64-apple-darwin.tar.gz`](https://github.com/doiito/gliding_horse/releases) (~13 MB) |
+| Windows (x86_64) | [`glidingcode-x86_64-pc-windows-msvc.zip`](https://github.com/doiito/gliding_horse/releases) (~12 MB) |
 
 ```bash
 # Linux / macOS
@@ -192,123 +199,70 @@ $env:DEEPSEEK_API_KEY="sk-..."           # Windows (PowerShell)
 export AGENT_OS_GATEWAY_API_KEY="sk-..."
 export AGENT_OS_GATEWAY_API_URL="https://your-endpoint/v1"
 
-# Run an interactive session (Linux/macOS: ./glidingcode, Windows: .\glidingcode)
+# Web search tool (powered by Exa):
+# Get your free API key at https://exa.ai/docs/reference/team-management/get-api-key
+# Falls back to DuckDuckGo (unreliable in China, not recommended for Chinese users)
+export EXA_API_KEY="your-exa-api-key"
+
+# Run an interactive session
 ./glidingcode
 
 # Or run a one-shot task
 ./glidingcode "Explain how Rust's borrow checker works"
+
+# With MCP server attached
+./glidingcode --mcp-server chrome=http://localhost:3000/sse
+
+# Resume from checkpoint
+./glidingcode --resume task:abc123
 ```
 
-### Option B: Full Setup — Software Engineering Team
-
-Build the complete multi-agent system from source (requires Rust + Go + Docker).
-
-#### Prerequisites
-
-- **Rust** 1.94+ · **Go** 1.24+ · **Docker** · **Temporal Server**
-- LLM API key (OpenAI-compatible)
-
-#### 1. Clone & Configure
+### Build from Source
 
 ```bash
 git clone https://github.com/doiito/gliding_horse.git
-cd gliding_horse/apps/software_engineering_team
+cd gliding_horse
 
-cp center/config.yaml center/config.local.yaml
-# Edit your LLM keys, Temporal host, etc.
+# Build the glidingcode binary (release, ~51 MB)
+cargo build -p code_cli --release
+./target/release/glidingcode --help
 ```
-
-#### 2. Start the Center
-
-```bash
-cd center
-go run ./cmd/server/...     # API server on :8080
-go run ./cmd/worker/...     # Temporal worker
-```
-
-#### 3. Start the Edge Daemon
-
-```bash
-cd edge/daemon
-cargo run -- daemon start   # Agent daemon on :7890
-```
-
-#### 4. Open VS Code
-
-Install the plugin from `edge/vscode/` and connect to the daemon — you now have an AI software engineering team at your fingertips.
-
-#### Or Use the API Directly
-
-```bash
-curl http://localhost:8080/api/v1/projects \
-  -X POST -H "Content-Type: application/json" \
-  -d '{"name":"My Project","description":"Build a microservice"}'
-```
-
----
-
-## 🔧 Key Highlights
-
-1. **Generalized PDCA — 7-Level Adaptive Execution**  
-   Dynamically selects from 7 complexity levels (L0 instant → L5 recursive → L6 emergency) via 5W2H metadata. One engine handles everything from instant queries to multi-week projects — no rigid workflows.
-
-2. **CPU Cache-Inspired Memory — 4 Layers + MESI Coherence**  
-   First-ever application of CPU cache coherence to multi-agent memory. L0 disk → L1 context → L2 Oxigraph RDF → L3 SPARQL projection. Intelligent prefetching reduces perceived latency by 90%. Solves context explosion and shared memory inconsistency.
-
-3. **JSON-LD Universal Data Bus — W3C-Standard Interoperability**  
-   `@context` duck-typing eliminates field name conflicts between skills. `@id` enables zero-cost cross-agent entity merging. `@graph` named graphs allow conflict-free parallel writes. Turns interoperability hell into plug-and-play.
-
-4. **Self-Evolving Skill Graph — Cognitive Network**  
-   7,500+ LOC dynamic network with 6 semantic link types (Prerequisite, Composition, Related, etc.). AA creates knowledge fragments and new links after each task. `/learn` and `/reduce` mechanisms enable autonomous skill acquisition.
-
-5. **Universal Knowledge Graph — Unified Cognitive Backbone**  
-   All subsystems (skills, memories, tasks, code knowledge) share a single Oxigraph RDF store via named graphs, enabling cross-subsystem SPARQL joins. Code ASTs parsed by tree-sitter are automatically converted to RDF triples and linked into the same graph. A single `@id` ensures consistent entity identity across all contexts — no silos, no duplication.
-
-6. **5W2H Dimension-Level Audit — Precision Rollback**  
-   CA audits each of the 7 dimensions independently. What/Why fail → re-analyze. How/Where fail → re-plan. When/HowMuch fail → conditional pass. No more black-box "PASS/FAIL" — you know exactly what went wrong.
-
-7. **Proactive Perception Engine — Catch Failures Before They Happen**  
-   10 execution triggers with 60-second anomaly deduplication. Monitors deadline violations, budget overruns (>80% tokens), role mismatches, environment conflicts. Auto-escalates to human when needed.
-
-8. **Micro-Tool System — Tame Large Outputs**  
-   Results >8KB auto-generate conversational micro-tools (e.g., "search_in_results"). Transforms unwieldy 50KB+ outputs into interactive, queryable artifacts within the LLM context.
-
-9. **MCP Integration — One Protocol to Connect Them All**  
-   Standard Model Context Protocol connects GitHub, Slack, Jira, and any MCP-compatible server. Dynamic tool discovery at runtime. No more custom integrations for every external service.
-
-10. **Checkpoint & Recovery — Crash-Proof Long-Running Tasks**  
-    Session state snapshots at critical points. Full restoration on crash without context loss. Enables hour/day-long agent tasks and post-mortem replay debugging.
-
-11. **Center + Edge Federation — Local Autonomy, Global Orchestration**  
-    Go Center handles workflow orchestration (Temporal), project management, agent registry. Rust Edge runs local LLM execution with Docker sandbox. VS Code Plugin provides real-time developer awareness. No single point of failure.
 
 ---
 
 ## 🗺️ Roadmap
 
-**Core OS** (ongoing):
-- Enhanced MCP tool ecosystem and dynamic discovery
-- Multi-model routing optimization with cost-aware scheduling
-- Knowledge graph query performance and scale improvements
-- Template engine with versioned prompt inheritance
-- Rich event system with fine-grained subscription filters
+**v0.1.x Release Series** (stabilization):
+- Binary distribution for Linux/macOS/Windows via GitHub Releases
+- Pre-built musl static builds for Linux (zero-dependency)
+- MCP tool ecosystem expansion and documentation
+- Checkpoint/resume polish and testing
 
-**Application Layer** (upcoming):
-- **Q3 2026**: Native web dashboard for agent monitoring and task management; Python/TypeScript SDK for easier integration
-- **Q4 2026**: Kubernetes deployment operator; Multi-turn conversation memory compression; Skill marketplace prototype
-- **2027**: Distributed agent mesh across Edge nodes; Multi-modal agent support (vision, audio); Community plugin registry
+**v0.2.x Release Series** (planned):
+- Native web dashboard for agent monitoring and task management
+- Python/TypeScript SDK for easier integration
+- Skill marketplace prototype with community plugin registry
+- Multi-model routing with cost-aware scheduling
+
+**v0.3.x+ Release Series** (future):
+- Kubernetes deployment operator for production scaling
+- Distributed agent mesh across Edge nodes
+- Multi-modal agent support (vision, audio)
+- Multi-turn conversation memory compression
 
 ---
 
-## 📊 Performance Goals
+## 📊 Performance Targets
 
 | Operation | Latency | Throughput |
 |-----------|---------|-----------|
 | L2 Node Write (Oxigraph) | ~2ms | 500 ops/sec |
 | L3 SPARQL Projection | ~15ms | 66 ops/sec |
 | L0 Sled KV Read | ~1ms | 1000 ops/sec |
+| Hyperspace HNSW Search (10K vectors) | ~1ms | 1000 qps |
+| Poincaré Embedding (4D) | ~50µs | — |
 | Agent ReAct Turn | 1-5s | 0.2-1 turns/sec |
-| **Idle Memory** | ~200MB | scales with tasks |
+| Idle Memory | ~200MB | scales with tasks |
 
 ---
 

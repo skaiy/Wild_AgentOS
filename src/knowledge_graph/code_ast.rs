@@ -144,19 +144,19 @@ impl CodeAstExtractor {
 
         if lang == CodeLanguage::Unknown {
             return Err(format!(
-                "不支持的文件类型: {}",
+                "unsupported file type: {}",
                 file_path.extension().and_then(|e| e.to_str()).unwrap_or("?")
             ));
         }
 
         let source = std::fs::read_to_string(path)
-            .map_err(|e| format!("读取文件失败 {}: {}", path, e))?;
+            .map_err(|e| format!("failed to read file {}: {}", path, e))?;
 
         let current_hash = compute_sha256(&source);
         let cached_hash = get_cached_hash(store, path, graph);
 
         if cached_hash.as_ref() == Some(&current_hash) {
-            debug!(file = path, hash = %current_hash, "文件内容未变化，跳过 AST 提取");
+            debug!(file = path, hash = %current_hash, "file content unchanged, skipping AST extraction");
             return Ok(IncrementalResult::Unchanged);
         }
 
@@ -180,7 +180,7 @@ impl CodeAstExtractor {
             quads = result.quads.len(),
             deleted = deleted_quads,
             is_update = is_update,
-            "代码 AST 增量更新完成"
+            "incremental AST update complete"
         );
 
         if is_update {
@@ -204,13 +204,13 @@ impl CodeAstExtractor {
 
         if lang == CodeLanguage::Unknown {
             return Err(format!(
-                "不支持的文件类型: {}",
+                "unsupported file type: {}",
                 file_path.extension().and_then(|e| e.to_str()).unwrap_or("?")
             ));
         }
 
         let source = std::fs::read_to_string(path)
-            .map_err(|e| format!("读取文件失败 {}: {}", path, e))?;
+            .map_err(|e| format!("failed to read file {}: {}", path, e))?;
 
         let hash = compute_sha256(&source);
         Self::extract_from_source_with_hash(&source, &lang, path, graph, &hash)
@@ -234,14 +234,14 @@ impl CodeAstExtractor {
         content_hash: &str,
     ) -> Result<RdfMappingResult, String> {
         let language = lang.to_language()
-            .ok_or_else(|| format!("语言 {} 不支持 AST 提取", lang.name()))?;
+            .ok_or_else(|| format!("language {} does not support AST extraction", lang.name()))?;
 
         let mut parser = Parser::new();
         parser.set_language(&language)
-            .map_err(|e| format!("设置 tree-sitter 语言失败: {}", e))?;
+            .map_err(|e| format!("failed to set tree-sitter language: {}", e))?;
 
         let tree = parser.parse(source, None)
-            .ok_or_else(|| "解析源代码失败".to_string())?;
+            .ok_or_else(|| "failed to parse source code".to_string())?;
 
         let extraction = match lang {
             CodeLanguage::Rust => Self::extract_rust(&tree, source, file_path),
@@ -263,7 +263,7 @@ impl CodeAstExtractor {
             id: file_entity_id.clone(),
             label: file_path.to_string(),
             entity_type: "https://agentos.ontology/code/SourceFile".to_string(),
-            description: Some(format!("{} 源文件", lang.name())),
+            description: Some(format!("{} source file", lang.name())),
             properties: {
                 let mut props = HashMap::new();
                 props.insert("language".to_string(), serde_json::Value::String(lang.name().to_string()));
@@ -308,7 +308,7 @@ impl CodeAstExtractor {
             entities = result.entity_count,
             relations = result.relation_count,
             quads = result.quads.len(),
-            "代码 AST 提取完成"
+            "AST extraction complete"
         );
 
         Ok(result)
@@ -1150,8 +1150,8 @@ fn main() {
             source, &CodeLanguage::Rust, "test.rs", "graph:test"
         ).unwrap();
 
-        assert!(result.entity_count >= 3, "应至少提取 3 个实体 (use/struct/fn)，实际: {}", result.entity_count);
-        assert!(result.quads.len() > 0, "应生成 RDF Quads");
+        assert!(result.entity_count >= 3, "should extract at least 3 entities (use/struct/fn), actual: {}", result.entity_count);
+        assert!(result.quads.len() > 0, "should generate RDF quads");
     }
 
     #[test]
@@ -1175,8 +1175,8 @@ def helper():
             source, &CodeLanguage::Python, "test.py", "graph:test"
         ).unwrap();
 
-        assert!(result.entity_count >= 3, "应至少提取 3 个实体 (import/class/def)，实际: {}", result.entity_count);
-        assert!(result.quads.len() > 0, "应生成 RDF Quads");
+        assert!(result.entity_count >= 3, "should extract at least 3 entities (import/class/def), actual: {}", result.entity_count);
+        assert!(result.quads.len() > 0, "should generate RDF quads");
     }
 
     #[test]
@@ -1202,7 +1202,7 @@ const App = () => {
             source, &CodeLanguage::JavaScript, "test.js", "graph:test"
         ).unwrap();
 
-        assert!(result.entity_count >= 2, "应至少提取 2 个实体，实际: {}", result.entity_count);
+        assert!(result.entity_count >= 2, "should extract at least 2 entities, actual: {}", result.entity_count);
     }
 
     #[test]
@@ -1229,7 +1229,7 @@ func main() {
             source, &CodeLanguage::Go, "test.go", "graph:test"
         ).unwrap();
 
-        assert!(result.entity_count >= 3, "应至少提取 3 个实体 (import/type/func)，实际: {}", result.entity_count);
+        assert!(result.entity_count >= 3, "should extract at least 3 entities (import/type/func), actual: {}", result.entity_count);
     }
 
     #[test]
@@ -1252,7 +1252,7 @@ public class Main extends Base implements Runnable {
             source, &CodeLanguage::Java, "Main.java", "graph:test"
         ).unwrap();
 
-        assert!(result.entity_count >= 3, "应至少提取 3 个实体 (import/class/method)，实际: {}", result.entity_count);
+        assert!(result.entity_count >= 3, "should extract at least 3 entities (import/class/method), actual: {}", result.entity_count);
     }
 
     #[test]
@@ -1273,7 +1273,7 @@ int main() {
             source, &CodeLanguage::C, "test.c", "graph:test"
         ).unwrap();
 
-        assert!(result.entity_count >= 2, "应至少提取 2 个实体 (include/function)，实际: {}", result.entity_count);
+        assert!(result.entity_count >= 2, "should extract at least 2 entities (include/function), actual: {}", result.entity_count);
     }
 
     #[test]
@@ -1304,7 +1304,7 @@ impl Draw for Circle {
         let has_implements = result.quads.iter().any(|q| {
             q.predicate.contains("implements")
         });
-        assert!(has_implements, "应提取 implements 关系");
+        assert!(has_implements, "should extract implements relation");
     }
 
     #[test]
@@ -1323,7 +1323,7 @@ class Child(Base):
         let has_inherits = result.quads.iter().any(|q| {
             q.predicate.contains("inherits")
         });
-        assert!(has_inherits, "应提取 inherits 关系");
+        assert!(has_inherits, "should extract inherits relation");
     }
 
     #[test]
@@ -1331,15 +1331,15 @@ class Child(Base):
         let source = "fn main() {}";
         let hash1 = compute_sha256(source);
         let hash2 = compute_sha256(source);
-        assert_eq!(hash1, hash2, "相同内容的哈希应相同");
-        assert_eq!(hash1.len(), 64, "SHA256 哈希应为 64 字符十六进制");
+        assert_eq!(hash1, hash2, "hashes of same content should be equal");
+        assert_eq!(hash1.len(), 64, "SHA256 hash should be 64 hex characters");
     }
 
     #[test]
     fn test_sha256_hash_different_content() {
         let hash1 = compute_sha256("fn main() {}");
         let hash2 = compute_sha256("fn other() {}");
-        assert_ne!(hash1, hash2, "不同内容的哈希应不同");
+        assert_ne!(hash1, hash2, "hashes of different content should differ");
     }
 
     #[test]
@@ -1352,12 +1352,12 @@ class Child(Base):
         let has_hash = result.quads.iter().any(|q| {
             q.predicate.contains("contentHash")
         });
-        assert!(has_hash, "提取结果应包含 contentHash 属性");
+        assert!(has_hash, "extraction result should include contentHash property");
 
         let has_source_file = result.quads.iter().any(|q| {
             q.predicate.contains("sourceFile")
         });
-        assert!(has_source_file, "提取结果应包含 sourceFile 属性");
+        assert!(has_source_file, "extraction result should include sourceFile property");
     }
 
     #[test]
@@ -1374,14 +1374,14 @@ class Child(Base):
         let result1 = CodeAstExtractor::extract_incremental(path_str, graph, &store).unwrap();
         match result1 {
             IncrementalResult::Created { entity_count, quad_count, .. } => {
-                assert!(entity_count > 0, "首次提取应有实体");
-                assert!(quad_count > 0, "首次提取应有 Quads");
+                assert!(entity_count > 0, "first extraction should have entities");
+                assert!(quad_count > 0, "first extraction should have quads");
             }
-            _ => panic!("首次提取应为 Created，实际: {:?}", result1),
+            _ => panic!("first extraction should be Created, actual: {:?}", result1),
         }
 
         let result2 = CodeAstExtractor::extract_incremental(path_str, graph, &store).unwrap();
-        assert_eq!(result2, IncrementalResult::Unchanged, "文件未变化应为 Unchanged");
+        assert_eq!(result2, IncrementalResult::Unchanged, "unchanged file should be Unchanged");
     }
 
     #[test]
@@ -1399,7 +1399,7 @@ class Child(Base):
         let result1 = CodeAstExtractor::extract_incremental(path_str, graph, &store).unwrap();
         match result1 {
             IncrementalResult::Created { .. } => {}
-            _ => panic!("首次应为 Created"),
+            _ => panic!("first should be Created"),
         }
 
         std::fs::write(&file_path, source_v2).unwrap();
@@ -1407,14 +1407,14 @@ class Child(Base):
         let result2 = CodeAstExtractor::extract_incremental(path_str, graph, &store).unwrap();
         match result2 {
             IncrementalResult::Updated { entity_count, deleted_quads, .. } => {
-                assert!(entity_count > 0, "更新后应有实体");
-                assert!(deleted_quads > 0, "更新应删除旧 Quads");
+                assert!(entity_count > 0, "updated result should have entities");
+                assert!(deleted_quads > 0, "update should delete old quads");
             }
-            _ => panic!("文件变化后应为 Updated，实际: {:?}", result2),
+            _ => panic!("changed file should be Updated, actual: {:?}", result2),
         }
 
         let result3 = CodeAstExtractor::extract_incremental(path_str, graph, &store).unwrap();
-        assert_eq!(result3, IncrementalResult::Unchanged, "更新后未变化应为 Unchanged");
+        assert_eq!(result3, IncrementalResult::Unchanged, "unchanged after update should be Unchanged");
     }
 
     #[test]
@@ -1443,6 +1443,6 @@ class Child(Base):
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(0);
 
-        assert_eq!(count, 1, "多次增量提取不应产生重复实体，实际: {}", count);
+        assert_eq!(count, 1, "repeated incremental extraction should not produce duplicate entities, actual: {}", count);
     }
 }

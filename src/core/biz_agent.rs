@@ -9,16 +9,16 @@ use crate::core::agent_runner::{AgentRunner, TaskContext, TaskResult};
 use crate::memory::l1_session::L1Session;
 use crate::CoreError;
 
-/// Agent 配置
+/// Agent configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
-    /// 最大子 Agent 数量
+    /// Maximum sub-agent count
     pub max_sub_agents: usize,
-    /// 最大 LLM 调用迭代次数
+    /// Maximum LLM call iterations
     pub max_iterations: u32,
-    /// 是否使用编排模式（分解 + 子 Agent）
+    /// Whether to use orchestrator mode (decomposition + sub-agents)
     pub orchestrator_mode: bool,
-    /// 子 Agent 是否并行执行
+    /// Whether sub-agents execute in parallel
     pub parallel_sub_agents: bool,
 }
 
@@ -33,15 +33,15 @@ impl Default for AgentConfig {
     }
 }
 
-/// 统一 BizAgent — PA/DA/CA/AA 共用同一 Agent 类
+/// Unified BizAgent — PA/DA/CA/AA share the same Agent class
 ///
-/// 架构:
-/// - SA 创建 agent.md (提示词) 并启动一个 BizAgent
-/// - BizAgent.execute() 以两种模式之一运行:
-///   - MONO: 直接 LLM 调用 + 工具
-///   - ORCHESTRATOR: 分解 → 生成子 BizAgent (同角色) → 聚合
-/// - 每个角色有不同的分解/聚合逻辑
-/// - 子 Agent 数量受 AgentConfig.max_sub_agents 限制
+/// Architecture:
+/// - SA creates agent.md (prompt) and starts a BizAgent
+/// - BizAgent.execute() runs in one of two modes:
+///   - MONO: direct LLM call + tools
+///   - ORCHESTRATOR: decompose → spawn sub BizAgents (same role) → aggregate
+/// - Each role has different decompose/aggregate logic
+/// - Sub-agent count is limited by AgentConfig.max_sub_agents
 pub struct BizAgent {
     pub instance: AgentInstance,
     pub agent_md: String,
@@ -75,8 +75,8 @@ impl BizAgent {
     pub fn role(&self) -> AgentRole { self.instance.role }
     pub fn status(&self) -> &AgentStatus { &self.instance.status }
 
-    /// 主入口：执行任务。
-    /// 编排模式下委托给 分解→子 Agent→聚合。
+    /// Main entry: execute task.
+    /// In orchestrator mode, delegates to decompose→sub-agents→aggregate.
     pub async fn execute(&mut self, context: TaskContext) -> TaskResult {
         self.instance.status = AgentStatus::Running;
         info!(agent = %self.agent_id(), role = %self.role(), "BizAgent start");
@@ -108,10 +108,10 @@ impl BizAgent {
         result
     }
 
-    // ========== MONO 模式 ==========
+    // ========== MONO mode ==========
 
-    /// 单 Agent 直接执行，委托给 AgentRunner.execute()。
-    /// AgentRunner.execute() 内部会创建并管理 L1 session。
+    /// Single Agent direct execution, delegates to AgentRunner.execute().
+    /// AgentRunner.execute() internally creates and manages an L1 session.
     async fn execute_mono(&self, context: TaskContext) -> TaskResult {
         let result: Result<TaskResult, CoreError> = self.runner.execute(
             &mut self.instance.clone(),
@@ -137,7 +137,7 @@ impl BizAgent {
         }
     }
 
-    // ========== ORCHESTRATOR 模式 ==========
+    // ========== ORCHESTRATOR mode ==========
 
     fn should_decompose(&self, _context: &TaskContext) -> bool {
         if self.config.max_sub_agents == 0 {
@@ -161,7 +161,7 @@ impl BizAgent {
             return self.execute_mono(context).await;
         }
 
-        info!(agent = %self.agent_id(), sub_count = sub_count, "分解任务");
+        info!(agent = %self.agent_id(), sub_count = sub_count, "Decomposing task");
 
         let sub_contexts: Vec<TaskContext> = sub_tasks
             .into_iter()
@@ -202,15 +202,15 @@ impl BizAgent {
             for handle in handles {
                 match handle.await {
                     Ok(result) => {
-                        session.add_summary("assistant", &format!("[子任务] {}", result.summary), None);
+                        session.add_summary("assistant", &format!("[Subtask] {}", result.summary), None);
                         self.sub_results.push(result);
                     }
                     Err(e) => {
-                        warn!("子 Agent 执行失败: {}", e);
+                        warn!("Sub-agent execution failed: {}", e);
                         self.sub_results.push(TaskResult {
                             task_iri: String::new(),
                             status: "failed".to_string(),
-                            summary: format!("子 Agent 执行失败: {}", e),
+                            summary: format!("Sub-agent execution failed: {}", e),
                             output: None,
                             jsonld_output: None,
                             artifacts: Vec::new(),
@@ -235,7 +235,7 @@ impl BizAgent {
                     AgentConfig { orchestrator_mode: false, ..self.config.clone() },
                 );
                 let result = sub.execute_mono(sub_ctx).await;
-                session.add_summary("assistant", &format!("[子任务{}] {}", i, result.summary), None);
+                session.add_summary("assistant", &format!("[Subtask{}] {}", i, result.summary), None);
                 self.sub_results.push(result);
             }
         }
@@ -245,7 +245,7 @@ impl BizAgent {
         final_result
     }
 
-    // ========== 角色分解 ==========
+    // ========== Role decomposition ==========
 
     async fn decompose(&self, context: &TaskContext) -> Vec<TaskContext> {
         match self.role() {
@@ -258,51 +258,51 @@ impl BizAgent {
 
     async fn decompose_plan_with_llm(&self, context: &TaskContext) -> Vec<TaskContext> {
         self.decompose_with_llm(context, "planning", 
-            "将任务分解为多个独立的计划子任务，每个子任务应该有明确的目标和边界").await
+            "Decompose the task into multiple independent planning sub-tasks, each with clear goals and boundaries").await
     }
 
     async fn decompose_do_with_llm(&self, context: &TaskContext) -> Vec<TaskContext> {
         self.decompose_with_llm(context, "execution",
-            "将执行任务分解为多个独立的实现单元，每个单元应该可以独立完成").await
+            "Decompose the execution task into multiple independent implementation units, each completable independently").await
     }
 
     async fn decompose_check_with_llm(&self, context: &TaskContext) -> Vec<TaskContext> {
         self.decompose_with_llm(context, "verification",
-            "将检查任务分解为多个独立的验证维度，如功能验证、性能验证、安全验证等").await
+            "Decompose the check task into multiple independent verification dimensions (e.g., functional, performance, security)").await
     }
 
     async fn decompose_act_with_llm(&self, context: &TaskContext) -> Vec<TaskContext> {
         self.decompose_with_llm(context, "decision",
-            "将决策任务分解为多个独立的决策点，每个决策点应该有明确的选项和评估标准").await
+            "Decompose the decision task into multiple independent decision points, each with clear options and evaluation criteria").await
     }
 
-    /// 通用的 LLM 分解方法
+    /// Generic LLM decomposition method
     async fn decompose_with_llm(&self, context: &TaskContext, phase: &str, instruction: &str) -> Vec<TaskContext> {
         let prompt = format!(
-            r#"你是一个任务分解专家。请将以下{}任务分解为多个独立的子任务。
+            r#"You are a task decomposition expert. Please decompose the following {} task into multiple independent sub-tasks.
 
-## 原始任务
+## Original Task
 {}
 
-## 分解指导
+## Decomposition Guidance
 {}
 
-## 输出要求
-请以 JSON 数组格式输出分解后的子任务列表，每个子任务包含：
-- "description": 子任务描述（简洁明确）
-- "priority": 优先级（high/medium/low）
-- "dependencies": 依赖的其他子任务编号（数组，从0开始）
+## Output Requirements
+Output the decomposed sub-task list as a JSON array, each sub-task includes:
+- "description": sub-task description (concise and clear)
+- "priority": priority (high/medium/low)
+- "dependencies": indices of other sub-tasks this depends on (array, 0-based)
 
-示例格式：
+Example format:
 [
-  {{"description": "子任务1描述", "priority": "high", "dependencies": []}},
-  {{"description": "子任务2描述", "priority": "medium", "dependencies": [0]}}
+  {{"description": "Sub-task 1 description", "priority": "high", "dependencies": []}},
+  {{"description": "Sub-task 2 description", "priority": "medium", "dependencies": [0]}}
 ]
 
-如果任务不需要分解（已经是原子任务），返回：
-[{{"description": "原始任务", "priority": "high", "dependencies": []}}]
+If the task does not need decomposition (already atomic), return:
+[{{"description": "Original task", "priority": "high", "dependencies": []}}]
 
-请直接输出 JSON 数组，不要有其他内容。"#,
+Output only the JSON array, no other content."#,
             phase, context.objective, instruction
         );
 
@@ -328,7 +328,7 @@ impl BizAgent {
                 }
             }
             Err(e) => {
-                warn!("LLM 分解失败: {}, 使用原始任务", e);
+                warn!("LLM decomposition failed: {}, using original task", e);
             }
         }
 
@@ -371,18 +371,18 @@ impl BizAgent {
                 if sub_tasks.is_empty() {
                     vec![context.clone()]
                 } else {
-                    info!("LLM 分解成功: {} 个子任务", sub_tasks.len());
+                    info!("LLM decomposition succeeded: {} sub-tasks", sub_tasks.len());
                     sub_tasks
                 }
             }
             _ => {
-                warn!("无法解析 LLM 分解结果，使用原始任务");
+                warn!("Cannot parse LLM decomposition result, using original task");
                 vec![context.clone()]
             }
         }
     }
 
-    // ========== 角色聚合 ==========
+    // ========== Role aggregation ==========
 
     async fn aggregate(&self, context: &TaskContext) -> TaskResult {
         match self.role() {
@@ -403,28 +403,28 @@ impl BizAgent {
         let sub_summaries: Vec<String> = self.sub_results
             .iter()
             .enumerate()
-            .map(|(i, r)| format!("子任务{} [{}]: {}", i + 1, r.status, r.summary))
+            .map(|(i, r)| format!("Sub-task{} [{}]: {}", i + 1, r.status, r.summary))
             .collect();
         
         let prompt = format!(
-            r#"你是一个结果聚合专家。请总结以下{}阶段的多个子任务结果。
+            r#"You are a result aggregation expert. Please summarize the results of multiple sub-tasks from the following {} phase.
 
-## 原始任务
+## Original Task
 {}
 
-## 子任务结果
+## Sub-task Results
 {}
 
-## 输出要求
-请以 JSON 格式输出聚合结果：
+## Output Requirements
+Output the aggregation result as JSON:
 {{
-  "summary": "整体结果摘要（不超过300字）",
-  "key_findings": ["关键发现1", "关键发现2"],
-  "recommendations": ["建议1", "建议2"],
+  "summary": "Overall result summary (no more than 300 characters)",
+  "key_findings": ["Key finding 1", "Key finding 2"],
+  "recommendations": ["Recommendation 1", "Recommendation 2"],
   "overall_status": "success/partial/failed"
 }}
 
-请直接输出 JSON，不要有其他内容。"#,
+Output only the JSON, no other content."#,
             phase, context.objective, sub_summaries.join("\n")
         );
 
@@ -450,7 +450,7 @@ impl BizAgent {
                 }
             }
             Err(e) => {
-                warn!("LLM 聚合失败: {}, 使用简单聚合", e);
+                warn!("LLM aggregation failed: {}, using simple aggregation", e);
             }
         }
 
@@ -492,7 +492,7 @@ impl BizAgent {
                     artifacts.push(json!({"type": "recommendations", "items": recommendations}));
                 }
 
-                info!("LLM 聚合成功");
+                info!("LLM aggregation succeeded");
                 TaskResult {
                     task_iri: fallback.task_iri.clone(),
                     status,
@@ -509,7 +509,7 @@ impl BizAgent {
                 }
             }
             _ => {
-                warn!("无法解析 LLM 聚合结果，使用简单聚合");
+                warn!("Cannot parse LLM aggregation result, using simple aggregation");
                 fallback.clone()
             }
         }
@@ -527,7 +527,7 @@ impl BizAgent {
         }
 
         let summary = format!(
-            "聚合 {} 个子任务: {}/{} 成功\n{}",
+            "Aggregated {} sub-tasks: {}/{} succeeded\n{}",
             total,
             successes,
             total,

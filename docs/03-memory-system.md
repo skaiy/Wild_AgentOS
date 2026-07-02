@@ -7,7 +7,7 @@
 ```mermaid
 graph TB
     subgraph 记忆层次
-        L0["L0 Store<br/>sled 永久图记忆<br/>标签二级索引"]
+        L0["L0 Store<br/>redb 永久图记忆<br/>标签二级索引"]
         L1["L1 Session<br/>Agent 短期会话<br/>Vec&lt;L1Turn&gt;"]
         L2["L2 Blackboard<br/>Oxigraph Store + DashMap<br/>共享黑板缓存"]
         L3["L3 Projection<br/>SPARQL CONSTRUCT<br/>按需投影引擎<br/>物化视图缓存"]
@@ -19,7 +19,7 @@ graph TB
         CE["ConsistencyEngine<br/>MESI 一致性"]
         SCHED["MemoryScheduler<br/>缓存调度"]
         PF["PrefetchEngine<br/>预取引擎"]
-        VS["VectorStore<br/>向量检索"]
+        HE["HyperspaceEngine<br/>向量检索"]
     end
 
     subgraph 统一存储
@@ -34,7 +34,7 @@ graph TB
     CE --> L0 & L1 & L2
     SCHED --> L1
     PF --> L0
-    L3 --> VS
+    L3 --> HE
     L2 --> UGS
 ```
 
@@ -44,7 +44,7 @@ graph TB
 
 **文件**: `src/memory/l0_store.rs`  
 **实现状态**: ✅ 完整  
-**存储引擎**: sled (Rust 原生键值库，带标签二级索引和命名图索引)
+**存储引擎**: redb (Rust 原生嵌入式键值库，带标签二级索引和命名图索引)
 
 L0 是系统的永久存储层，存储完整的 JSON-LD 图数据，支持实体对齐和 MESI 一致性状态。
 
@@ -63,7 +63,6 @@ pub struct L0Entry {
     pub mesi_state: MesiState,
     pub content_hash: String,
     pub named_graph: Option<String>,
-    pub qdrant_point_id: Option<String>,
     pub jsonld_context: Option<String>,    // JSON-LD @context
     pub jsonld_types: Vec<String>,         // 多类型列表
 }
@@ -356,7 +355,7 @@ pub struct ProjectionEngine {
     max_size: usize,
     frames: HashMap<String, ProjectionFrame>,
     materialized_cache: RwLock<HashMap<String, MaterializedView>>,
-    vector_store: Option<Arc<VectorStore>>,
+    hyperspace_store: Option<Arc<HyperspaceStore>>,
 }
 ```
 
@@ -392,13 +391,13 @@ sequenceDiagram
     participant L3 as L3 Projection
     participant L2 as L2 Blackboard
     participant L0 as L0 Store
-    participant VS as VectorStore
+    participant HE as HyperspaceEngine
 
     SA->>L3: project_with_frame(task_iri, frame)
     L3->>L2: SPARQL CONSTRUCT 查询
     L2-->>L3: 原始图数据
-    L3->>VS: 向量检索（语义增强）
-    VS-->>L3: 相关 IRI 列表
+    L3->>HE: 向量检索（语义增强）
+    HE-->>L3: 相关 IRI 列表
     L3->>L3: apply_frame() 裁剪
     L3-->>SA: 投影结果
 ```
@@ -473,10 +472,19 @@ stateDiagram-v2
     Modified --> Invalid: Invalidate
 ```
 
-### 3.4.3 VectorStore — 向量检索
+### 3.4.3 HyperspaceEngine — 超空间向量引擎
 
-**文件**: `src/memory/vector_store.rs`  
+**文件**: `src/memory/hyperspace_store.rs`, `src/memory/embedding_service.rs`  
 **实现状态**: ✅ 完整
+
+HyperspaceEngine 是自包含的向量嵌入引擎，零外部向量数据库依赖。核心特性：
+
+- **HNSW 近似最近邻搜索**：基于 Hierarchical Navigable Small World 图索引，10K 向量 ~1ms 延迟
+- **运行时可切换度量**：Poincaré、Cosine、Euclidean、Lorentz，无需重启
+- **Write-Ahead Log (WAL)**：CRC32 校验，支持 3 种同步模式（None/Sync/Full），崩溃安全
+- **切线空间剪枝**：Poincaré 球搜索时自动剪枝，提升超双曲空间检索精度
+- **JSON-LD 元数据索引**：基于 RoaringBitmap 过滤器的元数据索引
+- **混合搜索**：文本向量 × 结构嵌入双空间检索
 
 支持多种 Embedding 服务提供商：
 
@@ -545,7 +553,7 @@ flowchart TB
     subgraph 记忆读取
         L3_R["L3 投影"] -->|上下文| AR
         L3_R --> L2_R["L2 查询"]
-        L3_R --> VS_R["向量检索"]
+        L3_R --> HE_R["HyperspaceEngine 向量检索"]
         L2_R --> L0_R["L0 回退"]
     end
 

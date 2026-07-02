@@ -1,92 +1,92 @@
-//! JSON-LD 工作流定义类型
+//! JSON-LD workflow definition types
 //!
-//! 定义了可在 Web UI 中编辑、以 JSON-LD 格式持久化的 DAG 工作流结构。
-//! 与 petgraph DiGraph 不同，这些是反序列化的"蓝图"类型。
+//! Defines DAG workflow structures editable in the Web UI and persisted in JSON-LD format.
+//! Unlike petgraph DiGraph, these are deserialized "blueprint" types.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// 条件分支
+/// Conditional branch
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BranchCondition {
-    /// 条件表达式，如 "$.result.status == 'failed'"
+    /// Condition expression, e.g., "$.result.status == 'failed'"
     pub condition: String,
-    /// 条件满足时跳转的目标节点 ID
+    /// Target node ID to jump to when condition is met
     pub target: String,
 }
 
-/// 输入映射：JSONPath 表达式 → 上下文键
+/// Input mapping: JSONPath expression → context key
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputMapping {
-    /// JSONPath 映射表，如 { "prev_summary": "$.nodes.step_1.summary" }
+    /// JSONPath mapping table, e.g., { "prev_summary": "$.nodes.step_1.summary" }
     #[serde(default)]
     pub mappings: HashMap<String, String>,
-    /// context 模板，引用 mappings 中的键
+    /// Context template, referencing keys from mappings
     #[serde(default)]
     pub context_template: String,
 }
 
-/// 工作流中的单个 Agent 节点（JSON-LD 可序列化）
+/// Single Agent node in a workflow (JSON-LD serializable)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowNodeDef {
-    /// 节点唯一 ID，对应 json-ld @id
+    /// Unique node ID, corresponding to json-ld @id
     #[serde(rename = "@id")]
     pub id: String,
-    /// 节点类型
+    /// Node type
     #[serde(rename = "@type", default = "default_node_type")]
     pub node_type: String,
-    /// Agent 角色
+    /// Agent role
     pub agent_role: String,
-    /// 节点目标描述
+    /// Node objective description
     #[serde(default)]
     pub objective: String,
-    /// 后续节点 ID（单下一步）
+    /// Next node ID (single step)
     #[serde(default)]
     pub next: Option<String>,
-    /// 分叉：多个后续节点 ID（并行）
+    /// Fork: multiple next node IDs (parallel)
     #[serde(default)]
     pub next_nodes: Vec<String>,
-    /// 依赖节点 ID（前置条件）
+    /// Dependency node IDs (prerequisites)
     #[serde(default)]
     pub dependencies: Vec<String>,
-    /// 允许的工具列表
+    /// Allowed tools list
     #[serde(default)]
     pub tools: Vec<String>,
-    /// 预期输出（对应 PlanStep.expected_output）
+    /// Expected output (corresponds to PlanStep.expected_output)
     #[serde(default)]
     pub expected_output: String,
-    /// 成功标准
+    /// Success criteria
     #[serde(default)]
     pub success_criteria: String,
-    /// 输入映射
+    /// Input mapping
     #[serde(default)]
     pub input_mapping: Option<InputMapping>,
-    /// 条件分支（失败时跳转）
+    /// Branch condition (jump on failure)
     #[serde(default)]
     pub branch_on_failure: Option<BranchCondition>,
-    /// 重试配置
+    /// Retry count
     #[serde(default)]
     pub retry_count: u32,
-    /// 重试间隔秒数
+    /// Retry delay in seconds
     #[serde(default)]
     pub retry_delay_secs: u64,
-    /// 节点超时秒数（0 = 不限制）
+    /// Node timeout in seconds (0 = unlimited)
     #[serde(default)]
     pub timeout_secs: u64,
-    /// 是否为最终节点
+    /// Whether this is a final node
     #[serde(default)]
     pub final_node: bool,
-    /// 人工审批提示信息（用于 HumanApprovalNode）
+    /// Human approval prompt (for HumanApprovalNode)
     #[serde(default)]
     pub approval_prompt: String,
-    /// 审批通过后跳转到的节点 ID（可选，默认走 next/next_nodes）
+    /// Node ID to jump to after approval (optional, defaults to next/next_nodes)
     #[serde(default)]
     pub approval_next_on_approve: Option<String>,
-    /// 审批拒绝后跳转到的节点 ID（可选，默认终止后续执行）
+    /// Node ID to jump to after rejection (optional, defaults to stopping subsequent execution)
     #[serde(default)]
     pub approval_next_on_reject: Option<String>,
-    /// 自定义属性
+    /// Custom attributes
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
 }
@@ -95,28 +95,28 @@ fn default_node_type() -> String {
     "AgentNode".to_string()
 }
 
-/// 完整的工作流定义（JSON-LD @graph 格式）
+/// Full workflow definition (JSON-LD @graph format)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDefinition {
-    /// 工作流 IRI
+    /// Workflow IRI
     #[serde(rename = "@id")]
     pub id: String,
-    /// 工作流名称
+    /// Workflow name
     #[serde(default)]
     pub name: String,
-    /// 描述
+    /// Description
     #[serde(default)]
     pub description: String,
-    /// 版本号
+    /// Version
     #[serde(default)]
     pub version: String,
-    /// 入口节点 ID
+    /// Entry node ID
     pub entry_node: String,
-    /// 所有节点的定义
+    /// All node definitions
     pub nodes: Vec<WorkflowNodeDef>,
 }
 
-/// JSON-LD 容器（解析 @graph 数组）
+/// JSON-LD container (parsing @graph array)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowContainer {
     #[serde(rename = "@context", default)]
@@ -125,7 +125,7 @@ pub struct WorkflowContainer {
     pub graph: Vec<Value>,
 }
 
-/// 节点执行结果（内存中）
+/// Node execution result (in-memory)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeResult {
     pub node_id: String,

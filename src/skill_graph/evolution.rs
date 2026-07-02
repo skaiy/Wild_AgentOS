@@ -1,7 +1,14 @@
+#![allow(deprecated)]
+
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
+use chrono::Utc;
+use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
+use crate::causal::engine::CausalEngine;
+use crate::causal::types::CausalObservation;
 use crate::skill_graph::graph_store::SkillGraphStore;
 use crate::skill_graph::types::*;
 use crate::CoreError;
@@ -75,6 +82,14 @@ pub struct SkillEvolutionEngine {
     graph_store: Arc<SkillGraphStore>,
     usage_history: Vec<UsageRecord>,
     pending_suggestions: Vec<EvolutionSuggestion>,
+    // P1-3: Causal failure analysis (legacy)
+    causal_model: SkillCausalModel,
+    event_history: VecDeque<CausalEvent>,
+    max_events: usize,
+    /// Optional CausalEngine for graph-backend-based root cause inference.
+    /// When set, `analyze_failure()` delegates to `CausalEngine.infer_root_cause()`
+    /// instead of the inline prerequisite-link scan.
+    causal_engine: Option<CausalEngine>,
 }
 
 impl SkillEvolutionEngine {
@@ -83,12 +98,28 @@ impl SkillEvolutionEngine {
             graph_store,
             usage_history: Vec::new(),
             pending_suggestions: Vec::new(),
+            causal_model: SkillCausalModel::new(),
+            event_history: VecDeque::new(),
+            max_events: 10_000,
+            causal_engine: None,
         }
+    }
+
+    /// Enable causal analysis with configurable event history size.
+    pub fn with_causal_analysis(mut self, max_events: usize) -> Self {
+        self.max_events = max_events;
+        self
+    }
+
+    /// Attach a CausalEngine for graph-backend-based root cause inference.
+    pub fn with_causal_engine(mut self, engine: CausalEngine) -> Self {
+        self.causal_engine = Some(engine);
+        self
     }
 
     pub fn record_usage(&mut self, record: UsageRecord) -> Result<(), CoreError> {
         info!(
-            "记录技能使用: {} (success={}, tokens={})",
+            "Recording skill usage: {} (success={}, tokens={})",
             record.skill_iri, record.success, record.token_consumption
         );
 
@@ -114,32 +145,240 @@ impl SkillEvolutionEngine {
         Ok(())
     }
 
+    /// P1-3: Causal failure analysis.
+    ///
+    /// When a `CausalEngine` is attached (via `with_causal_engine()`), delegates
+    /// to its graph-backend-based traversal for root cause inference. Otherwise
+    /// falls back to the legacy inline prerequisite-link scan.
     fn analyze_failure(
         &mut self,
         skill_iri: &str,
         error: &str,
-        _task_iri: &str,
-        _agent_id: &str,
+        task_iri: &str,
+        agent_id: &str,
     ) {
-        debug!("分析技能失败: {} - {}", skill_iri, error);
+        debug!("Analyzing skill failure (causal): {} - {}", skill_iri, error);
 
-        if let Some(skill) = self.graph_store.get_skill(skill_iri) {
-            let similar_failures: Vec<_> = skill
-                .graph_meta
-                .known_failure_modes
-                .iter()
-                .filter(|fm| error.contains(&fm.mode))
-                .collect();
+        let error_hash = self.compute_error_signature(error);
+        let error_class = self.classify_error(error);
 
-            if similar_failures.is_empty() {
+        let event_id = format!("event:{}", uuid::Uuid::new_v4());
+
+        // ── Path A: CausalEngine delegate ──
+        if let Some(ref ce) = self.causal_engine {
+            let obs = CausalObservation::new(&event_id, skill_iri, &error_class, &error_hash)
+                .with_context("task_iri", task_iri)
+                .with_context("agent_id", agent_id);
+            ce.record_observation(obs.clone());
+
+            let root_cause = ce.infer_root_cause(&[obs], 1);
+            if let Some(inference) = root_cause.first() {
+                let propagation_from = inference
+                    .propagation_paths
+                    .first()
+                    .and_then(|path| path.hops.first())
+                    .filter(|hop| hop.skill_iri != skill_iri)
+                    .map(|hop| hop.skill_iri.clone());
+
+                let prop_ref = propagation_from.clone();
+
+                let event = CausalEvent {
+                    event_id,
+                    timestamp: Utc::now(),
+                    skill_iri: skill_iri.to_string(),
+                    error_class: error_class.clone(),
+                    error_signature: error_hash.clone(),
+                    context: {
+                        let mut ctx = HashMap::new();
+                        ctx.insert("task_iri".to_string(), task_iri.to_string());
+                        ctx.insert("agent_id".to_string(), agent_id.to_string());
+                        ctx
+                    },
+                    propagation_from: propagation_from,
+                };
+
+                if let Some(ref prop) = prop_ref {
+                    self.causal_model.record_propagation(prop, skill_iri);
+                } else {
+                    self.causal_model.record_failure(skill_iri, &error_hash);
+                }
+                self.push_event(event);
+
                 self.pending_suggestions.push(EvolutionSuggestion {
                     suggestion_type: EvolutionSuggestionType::CreateFragment,
                     skill_iri: skill_iri.to_string(),
-                    description: format!("新失败模式: {}", error),
-                    confidence: 0.7,
+                    description: format!(
+                        "Causal failure in {}: {} (class={}, conf={:.2})",
+                        skill_iri, error, error_class, inference.confidence
+                    ),
+                    confidence: inference.confidence,
                 });
+                return;
             }
         }
+
+        // ── Path B: Legacy inline analysis (fallback) ──
+        let event = CausalEvent {
+            event_id,
+            timestamp: Utc::now(),
+            skill_iri: skill_iri.to_string(),
+            error_class: error_class.clone(),
+            error_signature: error_hash.clone(),
+            context: {
+                let mut ctx = HashMap::new();
+                ctx.insert("task_iri".to_string(), task_iri.to_string());
+                ctx.insert("agent_id".to_string(), agent_id.to_string());
+                ctx
+            },
+            propagation_from: None,
+        };
+
+        // Check if any dependency failed recently (within 60 seconds)
+        if let Some(skill) = self.graph_store.get_skill(skill_iri) {
+            for link in &skill.links {
+                if link.link_type == SkillLinkType::Prerequisite {
+                    for past_event in self.event_history.iter().rev() {
+                        if past_event.skill_iri == link.target_iri
+                            && (Utc::now() - past_event.timestamp).num_seconds() < 60
+                        {
+                            self.causal_model
+                                .record_propagation(&link.target_iri, skill_iri);
+                            let mut propagated = event.clone();
+                            propagated.propagation_from =
+                                Some(past_event.event_id.clone());
+                            self.push_event(propagated);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        // No propagation found — treat as potential root cause
+        self.causal_model.record_failure(skill_iri, &error_hash);
+        self.push_event(event);
+
+        self.pending_suggestions.push(EvolutionSuggestion {
+            suggestion_type: EvolutionSuggestionType::CreateFragment,
+            skill_iri: skill_iri.to_string(),
+            description: format!("Causal failure in {}: {} (class={})", skill_iri, error, error_class),
+            confidence: 0.7,
+        });
+    }
+
+    fn compute_error_signature(&self, error: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(error.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    fn classify_error(&self, error: &str) -> String {
+        let lower = error.to_lowercase();
+        if lower.contains("timeout") || lower.contains("timed out") {
+            "timeout".to_string()
+        } else if lower.contains("permission") || lower.contains("denied") || lower.contains("forbidden") {
+            "permission".to_string()
+        } else if lower.contains("not found") || lower.contains("404") {
+            "not_found".to_string()
+        } else if lower.contains("network") || lower.contains("connection") {
+            "network".to_string()
+        } else if lower.contains("parse") || lower.contains("syntax") || lower.contains("invalid") {
+            "validation".to_string()
+        } else if lower.contains("rate") || lower.contains("limit") || lower.contains("quota") {
+            "rate_limit".to_string()
+        } else {
+            "unknown".to_string()
+        }
+    }
+
+    fn push_event(&mut self, event: CausalEvent) {
+        if self.event_history.len() >= self.max_events {
+            self.event_history.pop_front();
+        }
+        self.event_history.push_back(event);
+    }
+
+    /// Trace back from an event to find the root cause chain.
+    pub fn find_root_cause(&self, event_id: &str) -> Option<CausalChain> {
+        let event = self.event_history.iter().find(|e| e.event_id == event_id)?;
+
+        let mut path = vec![event.clone()];
+        let mut current = event;
+
+        while let Some(ref from_id) = current.propagation_from {
+            if let Some(parent) = self.event_history.iter().find(|e| e.event_id == *from_id) {
+                path.push(parent.clone());
+                current = parent;
+            } else {
+                break;
+            }
+        }
+
+        path.reverse();
+        let root = path.remove(0);
+        let confidence = if path.len() <= 2 {
+            0.9
+        } else {
+            0.9 - ((path.len() as f32 - 2.0) * 0.1).max(0.0)
+        };
+
+        Some(CausalChain {
+            root_cause: root,
+            propagation_path: path,
+            confidence,
+        })
+    }
+
+    /// Recommend preventive actions for a skill based on its causal history.
+    pub fn suggest_preventive_action(&self, skill_iri: &str) -> Vec<String> {
+        let mut actions = Vec::new();
+
+        // Check error profiles
+        if let Some(profiles) = self.causal_model.error_profiles.get(skill_iri) {
+            let total: u32 = profiles.values().sum();
+            if total > 5 {
+                actions.push(format!(
+                    "Skill {} has {} recorded failures — consider adding knowledge fragments",
+                    skill_iri, total
+                ));
+            }
+
+            for (error_sig, count) in profiles.iter() {
+                if *count > 3 {
+                    let display = &error_sig[..error_sig.len().min(16)];
+                    actions.push(format!(
+                        "Frequent error pattern {} ({}) detected — investigate root cause",
+                        display, count
+                    ));
+                }
+            }
+        }
+
+        // Check propagation patterns
+        let propagated_to: Vec<String> = self
+            .event_history
+            .iter()
+            .filter(|e| {
+                e.propagation_from
+                    .as_ref()
+                    .and_then(|from| {
+                        self.event_history
+                            .iter()
+                            .find(|pe| pe.event_id == *from)
+                    })
+                    .map_or(false, |pe| pe.skill_iri == skill_iri)
+            })
+            .map(|e| e.skill_iri.clone())
+            .collect();
+
+        if !propagated_to.is_empty() {
+            actions.push(format!(
+                "Failures in {} propagate to {:?} — add guards before depending skills",
+                skill_iri, propagated_to
+            ));
+        }
+
+        actions
     }
 
     pub fn create_fragment(
@@ -149,7 +388,7 @@ impl SkillEvolutionEngine {
         recommendation: &str,
         discoverer: &str,
     ) -> Result<KnowledgeFragment, CoreError> {
-        info!("创建知识碎片: {} -> {}", skill_iri, problem);
+        info!("Creating knowledge fragment: {} -> {}", skill_iri, problem);
 
         let fragment_count = self.graph_store.get_fragments_for_skill(skill_iri).len();
         let fragment_iri = format!("{}#fragment_{}", skill_iri, fragment_count + 1);
@@ -170,7 +409,7 @@ impl SkillEvolutionEngine {
         link_type: SkillLinkType,
         description: &str,
     ) -> Result<(), CoreError> {
-        info!("建议链接: {} -> {} ({:?})", source_iri, target_iri, link_type);
+        info!("Suggested link: {} -> {} ({:?})", source_iri, target_iri, link_type);
 
         if self.graph_store.get_skill(source_iri).is_none() {
             return Err(CoreError::SkillNotFound {
@@ -195,7 +434,7 @@ impl SkillEvolutionEngine {
     }
 
     pub fn apply_suggestion(&mut self, suggestion: &EvolutionSuggestion) -> Result<(), CoreError> {
-        info!("应用演化建议: {:?}", suggestion.suggestion_type);
+        info!("Applying evolution suggestion: {:?}", suggestion.suggestion_type);
 
         match suggestion.suggestion_type {
             EvolutionSuggestionType::AddLink => {
@@ -216,16 +455,16 @@ impl SkillEvolutionEngine {
                 }
             }
             EvolutionSuggestionType::UpdateSuccessRate => {
-                debug!("成功率更新建议已自动处理");
+                debug!("Success rate update suggestion auto-processed");
             }
             EvolutionSuggestionType::CreateFragment => {
-                debug!("知识碎片创建建议需要人工确认");
+                debug!("Knowledge fragment creation suggestion requires manual confirmation");
             }
             EvolutionSuggestionType::Deprecate => {
-                warn!("技能弃用建议需要人工确认: {}", suggestion.skill_iri);
+                warn!("Skill deprecation suggestion requires manual confirmation: {}", suggestion.skill_iri);
             }
             EvolutionSuggestionType::Merge | EvolutionSuggestionType::Split => {
-                warn!("技能合并/拆分建议需要人工确认: {}", suggestion.skill_iri);
+                warn!("Skill merge/split suggestion requires manual confirmation: {}", suggestion.skill_iri);
             }
         }
 
@@ -285,7 +524,7 @@ impl SkillEvolutionEngine {
                 success_rate: 0.0,
                 failure_modes: 0,
                 fragment_count: 0,
-                recommendations: vec!["技能未找到".to_string()],
+                recommendations: vec!["Skill not found".to_string()],
             }
         }
     }
@@ -294,19 +533,19 @@ impl SkillEvolutionEngine {
         let mut recommendations = Vec::new();
 
         if skill.graph_meta.usage_count == 0 {
-            recommendations.push("技能尚未被使用，考虑在合适场景中测试".to_string());
+            recommendations.push("Skill has not been used yet, consider testing it in a suitable scenario".to_string());
         }
 
         if skill.graph_meta.success_rate < 0.7 && skill.graph_meta.usage_count > 5 {
-            recommendations.push("成功率较低，建议审查技能实现或添加知识碎片".to_string());
+            recommendations.push("Success rate is low, consider reviewing skill implementation or adding knowledge fragments".to_string());
         }
 
         if skill.links.is_empty() {
-            recommendations.push("技能没有链接，考虑添加相关技能或前置依赖".to_string());
+            recommendations.push("Skill has no links, consider adding related skills or prerequisite dependencies".to_string());
         }
 
         if skill.graph_meta.known_failure_modes.len() > 3 {
-            recommendations.push("已知失败模式较多，考虑拆分技能或更新实现".to_string());
+            recommendations.push("Many known failure modes, consider splitting the skill or updating the implementation".to_string());
         }
 
         recommendations
@@ -348,7 +587,7 @@ impl SkillEvolutionEngine {
         }
     }
 
-    pub fn suggest_improvements(&mut self) -> Vec<EvolutionSuggestion> {
+    pub async fn suggest_improvements(&mut self) -> Vec<EvolutionSuggestion> {
         let mut suggestions = Vec::new();
 
         for skill in self.graph_store.list_all_skills() {
@@ -358,18 +597,18 @@ impl SkillEvolutionEngine {
                 suggestions.push(EvolutionSuggestion {
                     suggestion_type: EvolutionSuggestionType::Deprecate,
                     skill_iri: skill.skill_iri.clone(),
-                    description: format!("技能健康度低 ({:.2})，考虑弃用或重构", health.health_score),
+                    description: format!("Low skill health ({:.2}), consider deprecating or refactoring", health.health_score),
                     confidence: 0.6,
                 });
             }
 
-            let link_suggestions = self.graph_store.suggest_links(&skill.skill_iri);
+            let link_suggestions = self.graph_store.suggest_links(&skill.skill_iri, None).await;
             for (target, link_type, confidence) in link_suggestions {
                 if confidence > 0.5 {
                     suggestions.push(EvolutionSuggestion {
                         suggestion_type: EvolutionSuggestionType::AddLink,
                         skill_iri: skill.skill_iri.clone(),
-                        description: format!("建议添加链接到 {} ({:?})", target, link_type),
+                        description: format!("Consider adding a link to {} ({:?})", target, link_type),
                         confidence,
                     });
                 }
@@ -527,8 +766,8 @@ mod tests {
         assert!(!engine.pending_suggestions.is_empty());
     }
 
-    #[test]
-    fn test_suggest_improvements() {
+    #[tokio::test]
+    async fn test_suggest_improvements() {
         let store = setup_test_store();
         let mut engine = SkillEvolutionEngine::new(store);
         
@@ -542,7 +781,7 @@ mod tests {
             engine.record_usage(record).unwrap();
         }
         
-        let suggestions = engine.suggest_improvements();
+        let suggestions = engine.suggest_improvements().await;
         
         assert!(!suggestions.is_empty());
     }

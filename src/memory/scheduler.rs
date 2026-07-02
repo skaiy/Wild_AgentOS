@@ -199,18 +199,18 @@ impl MemoryScheduler {
         Ok(iri)
     }
 
-    /// 插入已存在的 session（由 MemoryManager 调用，用于同步）
+    /// Insert an existing session (called by MemoryManager for synchronization)
     pub fn insert_session(&self, session: L1Session) {
         let id = session.session_id().to_string();
         self.sessions.write().insert(id, session);
     }
 
-    /// 移除并返回指定 session（由 MemoryManager 调用，用于同步关闭）
+    /// Remove and return the specified session (called by MemoryManager for synchronous shutdown)
     pub fn remove_session(&self, session_id: &str) -> Option<L1Session> {
         self.sessions.write().remove(session_id)
     }
 
-    /// 返回当前 session 数量
+    /// Return the current session count
     pub fn session_count(&self) -> usize {
         self.sessions.read().len()
     }

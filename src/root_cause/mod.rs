@@ -16,6 +16,7 @@ pub use types::*;
 
 use std::sync::Arc;
 
+use crate::causal::fused::{FusedRootCause, FusedRootCauseEngine};
 use crate::tools::hooks::{
     FunctionHook, HookManager, HookPoint, HookResult,
 };
@@ -40,6 +41,8 @@ pub struct RootCauseEngine {
     evidence: evidence::EvidenceChainManager,
     defense: defense::DefenseInDepthManager,
     config: types::RootCauseConfig,
+    /// Optional three-dimensional fusion engine for enriched root cause analysis.
+    fused_engine: Option<FusedRootCauseEngine>,
 }
 
 impl RootCauseEngine {
@@ -49,7 +52,13 @@ impl RootCauseEngine {
             evidence: evidence::EvidenceChainManager::new(config.clone()),
             defense: defense::DefenseInDepthManager::new(config.clone()),
             config,
+            fused_engine: None,
         }
+    }
+
+    pub fn with_fused_engine(mut self, engine: FusedRootCauseEngine) -> Self {
+        self.fused_engine = Some(engine);
+        self
     }
 
     /// Create with default configuration
@@ -92,6 +101,12 @@ impl RootCauseEngine {
             Vec::new()
         };
 
+        // Step 4 (optional): Three-dimensional fusion enrichment
+        let fused = self.fused_engine.as_ref().map(|fe| {
+            let error_iri = extract_iri_from_error(error_message);
+            fe.fuse(&chain, &error_iri)
+        });
+
         // Store for later retrieval
         self.tracer.save_trace(chain.clone());
 
@@ -100,6 +115,7 @@ impl RootCauseEngine {
             evidence_report,
             defenses,
             confidence,
+            fused_root_cause: fused,
         })
     }
 
@@ -196,7 +212,7 @@ impl RootCauseEngine {
                     if let Some(task_id) = &ctx.task_id {
                         if engine.has_unresolved_trace(task_id) {
                             ctx.error = Some(
-                                "行为准则违反: 根因分析未完成就进行修复。在修复前必须先完成根因追溯。".to_string()
+                                "Conduct violation: Root cause analysis incomplete before fix. Complete root cause tracing before fixing.".to_string()
                             );
                             tracing::warn!(
                                 "RootCause principle violation: unresolved trace for task {}",
@@ -211,11 +227,14 @@ impl RootCauseEngine {
         )));
     }
 
-    /// Wrap self into a thread-safe clone for hook callbacks
     fn clone_inner(&self) -> Self {
-        // Since BackwardTracer uses RwLock internally, we create a fresh instance.
-        // In production, use Arc<RwLock<RootCauseEngine>> for shared state.
-        Self::new(self.config.clone())
+        Self {
+            tracer: tracer::BackwardTracer::new(self.config.clone()),
+            evidence: evidence::EvidenceChainManager::new(self.config.clone()),
+            defense: defense::DefenseInDepthManager::new(self.config.clone()),
+            config: self.config.clone(),
+            fused_engine: self.fused_engine.clone(),
+        }
     }
 }
 
@@ -226,6 +245,21 @@ pub struct TracedResult {
     pub evidence_report: String,
     pub defenses: Vec<types::DefenseRecommendation>,
     pub confidence: f64,
+    /// Optional three-dimensional fused root cause analysis.
+    pub fused_root_cause: Option<FusedRootCause>,
+}
+
+/// Extract an IRI from an error message for three-dimensional fusion.
+/// Falls back to a placeholder IRI if no recognizable IRI is found.
+fn extract_iri_from_error(error: &str) -> String {
+    // Simple heuristic: find the first `iri:` or `http` substring
+    for token in error.split_whitespace() {
+        let cleaned = token.trim_matches(|c: char| c.is_ascii_punctuation());
+        if cleaned.starts_with("iri:") || cleaned.starts_with("http://") || cleaned.starts_with("https://") {
+            return cleaned.to_string();
+        }
+    }
+    format!("error:{}", uuid_or_fallback())
 }
 
 fn uuid_or_fallback() -> String {
@@ -296,7 +330,7 @@ mod tests {
             "src/auth.rs:10",
             &context,
         ).unwrap();
-        assert!(result.evidence_report.contains("证据链报告"));
+        assert!(result.evidence_report.contains("Evidence Chain Report"));
         assert!(result.chain.trace_id.starts_with("trace_") || result.chain.trace_id.starts_with("rc"));
     }
 }

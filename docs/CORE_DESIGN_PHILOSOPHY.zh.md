@@ -182,7 +182,7 @@ flowchart TB
     end
     
     subgraph "存储层"
-        L0_STORE["L0 持久存储<br/>━━━━━━━━<br/>Sled KV + Qdrant 向量<br/>全保真归档"]
+        L0_STORE["L0 持久存储<br/>━━━━━━━━<br/>redb KV + HyperspaceEngine<br/>全保真归档"]
         L2_MEM["L2 Oxigraph 内存<br/>━━━━━━━━<br/>内存 RDF<br/>快速查询 ~2ms"]
     end
     
@@ -235,7 +235,7 @@ flowchart TB
 | 工作集 | RAM（快速、有限） | L2 Oxigraph（快速，~2ms）|
 | 页表 | 虚拟→物理映射 | IRI 引用 |
 | 缺页故障 | 磁盘 → RAM 加载 | L0 → L2 加载 |
-| 交换空间 | 磁盘存储 | L0 Sled + Qdrant |
+| 交换空间 | 磁盘存储 | L0 redb + HyperspaceEngine |
 
 此设计实现了：
 - ✅ **性能**：L2 内存查询延迟 ~2ms
@@ -265,7 +265,7 @@ let jsonld_node = json!({
     "mem:think": llm_output.think,
     "mem:contents": llm_output.contents,
     "mem:summary": llm_output.summary,
-    "mem:embeddingPointId": qdrant_client.index(&llm_output.contents).await?
+    "mem:embedding": embedding_service.index(&llm_output.contents).await?
 });
 
 // 步骤 3：写入 L0 持久存储（全保真归档）
@@ -291,7 +291,7 @@ Gliding Horse Agent OS 实现了**统一知识图谱**，通过 JSON-LD 和 Oxig
 ```mermaid
 graph TB
     subgraph "核心子系统"
-        SG["技能图谱<br/>━━━━━━━━<br/>7.5k LOC 子系统<br/>动态进化"]
+        SG["技能图谱<br/>━━━━━━━━<br/>15 个模块<br/>动态进化"]
         MEM["L0-L3 记忆系统<br/>━━━━━━━━<br/>受 CPU 缓存启发<br/>MESI 一致性"]
         KG["知识图谱<br/>━━━━━━━━<br/>代码 AST + RDF 三元组<br/>SPARQL 查询"]
         TSK["5W2H 任务本体<br/>━━━━━━━━<br/>结构化意图建模<br/>维度级审计"]
@@ -316,7 +316,7 @@ graph TB
 **关键创新**：不为技能、记忆、任务和代码知识维护独立的数据库，所有数据通过命名图隔离，存在于**同一个 Oxigraph 存储**中。这使得：
 
 1. **跨子系统查询**：SPARQL 可以联合查询技能定义、任务历史和代码产物
-2. **统一索引**：向量嵌入（Qdrant）通过 `mem:embeddingPointId` 链接到 RDF 节点
+2. **统一索引**：向量嵌入（HyperspaceEngine）通过 `mem:embedding` 链接到 RDF 节点
 3. **一致的标识**：`@id` 确保同一实体在所有上下文中被一致识别
 
 ### 3.2 实际示例：端到端工作流
@@ -437,7 +437,7 @@ WHERE {
 |-----------|---------|-----------|
 | L2 节点插入 | ~2ms | Oxigraph 内存 INSERT |
 | L3 SPARQL 查询 | ~15ms | CONSTRUCT + Frame 投影 |
-| L0 向量搜索 | ~50ms | Qdrant HNSW 索引 |
+| L0 向量搜索 | ~1ms | HyperspaceEngine HNSW 索引 |
 | 技能发现 | ~20ms | SPARQL + 向量相似度 |
 | 代码 AST 解析 | ~100ms | Tree-sitter 增量解析 |
 | Harness 验证 | ~5ms | JSON Schema + SHACL 检查 |
@@ -490,7 +490,7 @@ graph TB
         IRI_BUS["JSON-LD IRI 地址总线<br/>所有实体和文档都有唯一 IRI"]
     end
     subgraph "双通道检索引擎"
-        VECTOR["Qdrant 向量检索引擎<br/>语义近似匹配<br/>返回相似文档/实体的 IRI 列表"]
+        VECTOR["HyperspaceEngine<br/>语义近似匹配<br/>返回相似文档/实体的 IRI 列表"]
         GRAPH["Oxigraph 图数据库<br/>精确关系遍历<br/>SPARQL 查询实体间关系"]
     end
     subgraph "融合调度"
@@ -510,11 +510,11 @@ graph TB
 
 **三个关键创新：**
 
-1. **IRI 作为统一标识符：** Qdrant 中每个向量点都对应一个 IRI（`qdrant:pointId → urn:memory:session-042/block-017`），向量检索返回的是一组 IRI，而非孤立的文本块。
+1. **IRI 作为统一标识符：** HyperspaceEngine 中每个嵌入向量都对应一个 IRI（`hyperspace:embedding → urn:memory:session-042/block-017`），向量检索返回的是一组 IRI，而非孤立的文本块。
 
 2. **IRI 作为桥梁：** 拿到 IRI 后，L3 投影引擎立即在 Oxigraph 中执行 SPARQL 查询，获取该实体的所有关联属性、上下游关系、历史版本，实现向量语义与图结构的无缝衔接。
 
-3. **双向互检索：** 用户也可先在图谱中精确定位某个实体，再通过该实体的嵌入向量在 Qdrant 中找到"语义相近"的其他实体，形成从精确到模糊的完整检索闭环。
+3. **双向互检索：** 用户也可先在图谱中精确定位某个实体，再通过该实体的嵌入向量在 HyperspaceEngine 中找到"语义相近"的其他实体，形成从精确到模糊的完整检索闭环。
 
 ---
 

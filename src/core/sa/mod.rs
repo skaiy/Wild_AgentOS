@@ -23,33 +23,33 @@ use crate::tools::sharing::{SharingProtocol, ShareType, Permission};
 use crate::tools::skill_registry::SkillRegistry;
 use crate::CoreError;
 
-/// 5 类 16 个预定义干预动作
+/// 5 categories, 16 predefined intervention actions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InterventionAction {
-    // === 1. 正常继续 (Normal Continuation) ===
+    // === 1. Normal Continuation ===
     Continue,
     ContinueWithMonitor,
 
-    // === 2. 参数调整 (Parameter Tuning) ===
+    // === 2. Parameter Tuning ===
     IncreaseRetry { additional_retries: u32 },
     IncreaseTimeout { additional_seconds: u64 },
     ReduceComplexity,
     RestrictTools { allowed_tools: Vec<String> },
 
-    // === 3. 执行流调整 (Execution Flow Adjustment) ===
+    // === 3. Execution Flow Adjustment ===
     SkipStep { step_id: String },
     RetryStep { step_id: String },
     Parallelize,
     SplitStep { step_id: String, sub_steps: Vec<String> },
     InsertExtraStep { description: String },
 
-    // === 4. 资源与模式切换 (Resource & Mode Switch) ===
+    // === 4. Resource & Mode Switch ===
     FallbackToShallow,
     EmergencyMode,
     IncreaseBudget { additional_tokens: u64, additional_time_secs: u64 },
     FreezeAndReport,
 
-    // === 5. 终止与升级 (Termination & Escalation) ===
+    // === 5. Termination & Escalation ===
     AbortTask { reason: String },
     NotifyHuman { message: String },
 }
@@ -103,7 +103,7 @@ impl InterventionAction {
     }
 }
 
-/// 动作参数（LLM 输出的结构化参数）
+/// Action parameters (structured parameters from LLM output)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ActionParams {
     pub additional_retries: Option<u32>,
@@ -118,7 +118,7 @@ pub struct ActionParams {
     pub message: Option<String>,
 }
 
-/// LLM 分类决策的中间结构
+/// Intermediate structure for LLM classification decisions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LlmActionDecision {
     action: String,
@@ -127,25 +127,25 @@ struct LlmActionDecision {
     reasoning: Option<String>,
 }
 
-/// 4 类 12 个预定义用户补充输入动作
+/// 4 categories, 12 predefined supplementary input actions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SupplementaryInputAction {
-    // === 1. 信息补充 (Information Supplement) ===
+    // === 1. Information Supplement ===
     AddContext,
     RefineObjective,
     ProvideConstraint,
 
-    // === 2. 方向引导 (Direction Guidance) ===
+    // === 2. Direction Guidance ===
     GuideDirection,
     PrioritizeStep,
     SuggestApproach,
 
-    // === 3. 执行控制 (Execution Control) ===
+    // === 3. Execution Control ===
     PauseExecution,
     ResumeExecution,
     SkipCurrentStep,
 
-    // === 4. 反馈纠正 (Feedback & Correction) ===
+    // === 4. Feedback & Correction ===
     ConfirmDirection,
     CorrectApproach,
     AbortCurrentStep,
@@ -173,7 +173,7 @@ impl SupplementaryInputAction {
     }
 }
 
-/// LLM 分类决策的中间结构（补充输入专用）
+/// Intermediate structure for LLM classification decisions (supplementary input)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SupplementaryLlmDecision {
     action: String,
@@ -225,7 +225,7 @@ pub struct PlanStep {
     pub success_criteria: String,
 }
 
-/// 人工审批节点的执行结果
+/// Execution result of a human approval node
 #[derive(Debug, Clone)]
 pub struct HumanApprovalNodeResult {
     pub node_id: String,
@@ -245,8 +245,8 @@ pub struct ExecutionPlan {
     pub success_metrics: Vec<String>,
     pub max_recursion_depth: u32,
     pub sub_tasks: Vec<SubTask>,
-    /// 原始 JSON-LD DAG 定义（从 --workflow 文件加载时设置）
-    /// 用于在 execute_plan() 中保留 DAG 特性（条件分支、重试、并行）
+    /// Original JSON-LD DAG definition (set when loading from --workflow file)
+    /// Used in execute_plan() to preserve DAG features (conditional branching, retry, parallelism)
     pub dag_jsonld: Option<String>,
 }
 
@@ -281,7 +281,7 @@ pub struct SupervisorAgent {
     event_receiver: Option<broadcast::Receiver<Event>>,
     active_cycles: HashMap<String, CycleState>,
     max_iterations: u32,
-    /// 最大 PDCA 循环重入次数（Recursive 任务专用，默认 7）
+    /// Maximum PDCA cycle re-entry count (for Recursive tasks, default 7)
     max_pdca_cycles: u32,
     perception: ProactiveEngine,
     sharing: Arc<SharingProtocol>,
@@ -291,11 +291,11 @@ pub struct SupervisorAgent {
     type_router: TypeRouter,
     pending_approvals: Arc<tokio::sync::Mutex<HashMap<String, bool>>>,
     supplementary_inputs: HashMap<String, Vec<(String, String)>>,
-    /// 补充输入共享存储，SA 写入后由 AgentRunner 在 CycleStart 消费
+    /// Supplementary input shared store, written by SA and consumed by AgentRunner at CycleStart
     supplement_store: SupplementaryInputStore,
-    /// 嵌入服务（可选，用于计算补充输入的 embedding 和 relevance_score）
+    /// Embedding service (optional, for computing supplementary input embeddings and relevance scores)
     embedder: Option<Arc<dyn EmbeddingService>>,
-    /// 相关性跟踪器
+    /// Relevance tracker
     relevance_tracker: RelevanceTracker,
 }
 
@@ -325,7 +325,7 @@ impl SupervisorAgent {
         }
 
         let event_bus_for_perception = event_bus.clone();
-        // 创建补充输入共享存储，同时注入 AgentRunner（确保 SA 和 Runner 共享同一实例）
+        // Create supplementary input shared store and inject into AgentRunner (ensure SA and Runner share the same instance)
         let supplement_store = SupplementaryInputStore::new();
         if let Some(r) = Arc::get_mut(&mut runner) {
             r.supplement_store = supplement_store.clone();
@@ -365,24 +365,24 @@ impl SupervisorAgent {
         self
     }
 
-    /// 设置嵌入服务（用于计算补充输入的 embedding 和 relevance_score）
-    /// 同时传播到 AgentRunner，使其在 ReAct 循环中也能计算 turn embedding
+    /// Set embedding service (for computing supplementary input embeddings and relevance scores)
+    /// Also propagates to AgentRunner so it can compute turn embeddings in the ReAct loop
     pub fn with_embedder(mut self, embedder: Arc<dyn EmbeddingService>) -> Self {
         self.embedder = Some(embedder.clone());
-        // 传播到 AgentRunner
+        // Propagate to AgentRunner
         if let Some(runner) = Arc::get_mut(&mut self.runner) {
             *runner = runner.clone().with_embedder(embedder);
         }
         self
     }
 
-    /// 获取补充输入共享存储（AgentRunner 注入用）
+    /// Get supplementary input shared store (for AgentRunner injection)
     pub fn supplement_store(&self) -> SupplementaryInputStore {
         self.supplement_store.clone()
     }
 
-    /// 更新 gateway 中的默认模型（使用 RwLock 内部可变性，无需 &mut self）
-    /// 这避免了重建整个 Engine/L0Store 导致的 redb 文件锁冲突
+    /// Update default model in gateway (uses RwLock interior mutability, no &mut self needed)
+    /// This avoids redb file lock conflicts from rebuilding the entire Engine/L0Store
     pub fn set_model(&self, model: &str) {
         self.runner.gateway.set_default_model(model.to_string());
         for task_type in &["planning", "execution", "analysis", "default"] {
@@ -415,7 +415,7 @@ impl SupervisorAgent {
             task_iri = %task_iri,
             complexity = %perception_result.complexity,
             risks = ?perception_result.risks,
-            "感知分析完成"
+            "Perception analysis complete"
         );
 
         let cycle = CycleState {
@@ -479,9 +479,9 @@ impl SupervisorAgent {
                 "Emergency: DA → CA → AA (skip PA)".to_string(),
             ),
             TaskComplexity::Recursive => {
-                // Recursive: 只执行 1 轮 SA 级 PDCA。
-                // DA 内部通过 execute_recursive_sub_cycle 进行微观递归
-                // 分解子任务，无需 SA 级多轮重放。
+                // Recursive: only 1 round of SA-level PDCA.
+                // DA internally executes micro-recursion via execute_recursive_sub_cycle
+                // Sub-task decomposition, no SA-level multi-round replay needed.
                 let seq = vec![AgentRole::Plan, AgentRole::Do, AgentRole::Check, AgentRole::Act];
                 (seq, vec![], "Recursive: 1 PDCA with DA-internal sub-cycles".to_string())
             },
@@ -503,7 +503,7 @@ impl SupervisorAgent {
             description,
             steps,
             context_requirements: HashMap::new(),
-            success_metrics: vec!["任务完成".to_string()],
+            success_metrics: vec!["Task completed".to_string()],
             max_recursion_depth,
             sub_tasks: vec![],
             dag_jsonld: None,
@@ -543,9 +543,9 @@ impl SupervisorAgent {
                 "Emergency: DA → CA → AA (skip PA)".to_string(),
             ),
             TaskComplexity::Recursive => {
-                // Recursive: 只执行 1 轮 SA 级 PDCA（同 Standard）。
-                // DA 内部通过 execute_recursive_sub_cycle 进行微观递归
-                // 分解子任务，无需 SA 级多轮重放。
+                // Recursive: only 1 round of SA-level PDCA (same as Standard).
+                // DA internally executes micro-recursion via execute_recursive_sub_cycle
+                // Sub-task decomposition, no SA-level multi-round replay needed.
                 let seq = vec![AgentRole::Plan, AgentRole::Do, AgentRole::Check, AgentRole::Act];
                 (seq, vec![], "Recursive: 1 PDCA with DA-internal sub-cycles".to_string())
             },
@@ -567,15 +567,15 @@ impl SupervisorAgent {
             description,
             steps,
             context_requirements: HashMap::new(),
-            success_metrics: vec!["任务完成".to_string()],
+            success_metrics: vec!["Task completed".to_string()],
             max_recursion_depth,
             sub_tasks: vec![],
             dag_jsonld: None,
         }
     }
 
-    /// 构建 resume 模式的执行计划：标准 PDCA 序列
-    /// execute_plan 会根据 resumed_messages 跳过已完成的阶段
+    /// Build resume mode execution plan: standard PDCA sequence
+    /// execute_plan will skip completed phases based on resumed_messages
     fn build_resume_plan(&self) -> ExecutionPlan {
         let agent_sequence = vec![AgentRole::Plan, AgentRole::Do, AgentRole::Check, AgentRole::Act];
         let steps = self.generate_default_steps(&agent_sequence);
@@ -587,7 +587,7 @@ impl SupervisorAgent {
             description: "Resume: continue from checkpoint".to_string(),
             steps,
             context_requirements: HashMap::new(),
-            success_metrics: vec!["任务完成".to_string()],
+            success_metrics: vec!["Task completed".to_string()],
             max_recursion_depth: 0,
             sub_tasks: vec![],
             dag_jsonld: None,
@@ -601,24 +601,24 @@ impl SupervisorAgent {
             .map(|(i, role)| {
                 let (objective, expected_output, success_criteria) = match role {
                     AgentRole::Plan => (
-                        "分析任务需求，制定详细执行计划".to_string(),
-                        "JSON格式的计划，包含步骤、依赖关系、资源需求".to_string(),
-                        "计划清晰、步骤完整、依赖关系明确".to_string(),
+                        "Analyze task requirements, create detailed execution plan".to_string(),
+                        "JSON-formatted plan with steps, dependencies, resource requirements".to_string(),
+                        "Plan is clear, steps complete, dependencies explicit".to_string(),
                     ),
                     AgentRole::Do => (
-                        "按照计划执行具体任务".to_string(),
-                        "执行结果、生成的文件或数据".to_string(),
-                        "任务按计划完成，输出符合预期".to_string(),
+                        "Execute the task according to the plan".to_string(),
+                        "Execution results, generated files or data".to_string(),
+                        "Task completed per plan, output matches expectations".to_string(),
                     ),
                     AgentRole::Check => (
-                        "验证执行结果的质量和正确性".to_string(),
-                        "检查报告，包含问题列表和建议".to_string(),
-                        "验证通过或问题已识别".to_string(),
+                        "Verify the quality and correctness of execution results".to_string(),
+                        "Inspection report with issue list and recommendations".to_string(),
+                        "Verification passed or issues identified".to_string(),
                     ),
                     AgentRole::Act => (
-                        "汇总结果，做出最终决策".to_string(),
-                        "最终决策和总结报告".to_string(),
-                        "决策明确，总结完整".to_string(),
+                        "Summarize results and make final decision".to_string(),
+                        "Final decision and summary report".to_string(),
+                        "Decision clear, summary complete".to_string(),
                     ),
                 };
 
@@ -639,27 +639,27 @@ impl SupervisorAgent {
         use crate::core::five_w2h::*;
 
         if user_input.len() < 20 && !user_input.contains(' ') {
-            let mut w2h = Task5W2H::new(user_input, "用户任务");
+            let mut w2h = Task5W2H::new(user_input, "User task");
             w2h.why.priority = Priority::Low;
             return w2h;
         }
 
         let prompt = format!(
-            r#"分析以下用户任务，提取 5W2H 元数据的最小集（What + Why）。
+            r#"Analyze the user task below and extract the minimal 5W2H metadata set (What + Why).
 
-用户任务: {}
+User task: {}
 
-请以 JSON 格式输出：
+Output in JSON format:
 {{
-  "what": "任务目标的核心描述（一句话）",
-  "why_description": "任务意图/价值描述",
-  "success_criteria": ["可验证条件1", "条件2"],
+  "what": "Core description of the task goal (one sentence)",
+  "why_description": "Task intent/value description",
+  "success_criteria": ["verifiable condition 1", "condition 2"],
   "priority": "high|medium|low",
-  "deadline": "ISO8601格式截止时间（可选）",
-  "required_role": "Plan|Do|Check|Act（可选）"
+  "deadline": "ISO8601 deadline (optional)",
+  "required_role": "Plan|Do|Check|Act (optional)"
 }}
 
-只输出 JSON，不要其他内容。"#,
+Output only JSON, no other content."#,
             user_input
         );
 
@@ -678,7 +678,7 @@ impl SupervisorAgent {
                 if let Some(content) = response.choices.first().and_then(|c| c.message.content.clone()) {
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
                         let what = parsed.get("what").and_then(|v| v.as_str()).unwrap_or(user_input).to_string();
-                        let why_desc = parsed.get("why_description").and_then(|v| v.as_str()).unwrap_or("用户任务").to_string();
+                        let why_desc = parsed.get("why_description").and_then(|v| v.as_str()).unwrap_or("User task").to_string();
                         let success_criteria = parsed.get("success_criteria")
                             .and_then(|v| v.as_array())
                             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
@@ -720,25 +720,25 @@ impl SupervisorAgent {
                 }
             }
             Err(e) => {
-                tracing::warn!("5W2H 提取失败: {}, 使用默认值", e);
+                tracing::warn!("5W2H extraction failed: {}, using defaults", e);
             }
         }
 
-        Task5W2H::new(user_input, "用户任务")
+        Task5W2H::new(user_input, "User task")
     }
 
     pub async fn analyze_task_with_llm(&self, user_input: &str, five_w2h: &crate::core::five_w2h::Task5W2H, experience_hints: &[String]) -> ExecutionPlan {
-        // 先通过关键词分类器检测递归/复杂任务（关键词路径比 LLM 更可靠地捕获 Recursive）
+        // First detect recursive/complex tasks via keyword classifier (keyword path captures Recursive more reliably than LLM)
         let keyword_complexity = self.classify_complexity(user_input);
         if keyword_complexity == TaskComplexity::Recursive {
-            info!("关键词分类为 Recursive，跳过 LLM 计划生成，直接使用关键词路径构建循环计划");
+            info!("Keyword classification: Recursive, skipping LLM plan generation, using keyword path for cyclic plan");
             return self.build_plan_from_complexity(TaskComplexity::Recursive);
         }
 
         let enhanced_input = if experience_hints.is_empty() {
             user_input.to_string()
         } else {
-            format!("## 历史经验参考\n{}\n\n## 当前任务\n{}",
+            format!("## Historical Experience Reference\n{}\n\n## Current Task\n{}",
                 experience_hints.iter().map(|h| format!("- {}", h)).collect::<Vec<_>>().join("\n"),
                 user_input
             )
@@ -746,7 +746,7 @@ impl SupervisorAgent {
 
         let complexity = match five_w2h.why.priority {
             crate::core::five_w2h::Priority::High => {
-                // 关键词分类为 Complex 则直接使用，否则 High→Complex
+                // Use Complex if keyword classifier says Complex, otherwise High→Complex
                 if keyword_complexity == TaskComplexity::Complex {
                     TaskComplexity::Complex
                 } else {
@@ -759,8 +759,8 @@ impl SupervisorAgent {
 
         match self.generate_detailed_plan_with_llm(&enhanced_input, five_w2h).await {
             Ok(mut plan) => {
-                info!(plan_id = %plan.plan_id, steps = plan.steps.len(), "LLM 生成详细计划成功");
-                // 如果关键词分类为 Complex，但 LLM 返回的复杂度不对，纠正它
+                info!(plan_id = %plan.plan_id, steps = plan.steps.len(), "LLM generated detailed plan successfully");
+                // If keyword classifier says Complex but LLM returned wrong complexity, fix it
                 if keyword_complexity == TaskComplexity::Complex && plan.task_complexity != TaskComplexity::Complex {
                     plan.task_complexity = TaskComplexity::Complex;
                     plan.max_recursion_depth = 2;
@@ -768,7 +768,7 @@ impl SupervisorAgent {
                 return plan;
             }
             Err(e) => {
-                warn!("LLM 生成详细计划失败: {}, 使用默认计划", e);
+                warn!("LLM failed to generate detailed plan: {}, using default plan", e);
             }
         }
 
@@ -779,88 +779,88 @@ impl SupervisorAgent {
         let mut w2h_section = String::new();
         if let Some(ref when) = five_w2h.when {
             if let Some(ref deadline) = when.deadline {
-                w2h_section.push_str(&format!("\n- 截止时间: {}", deadline.to_rfc3339()));
+                w2h_section.push_str(&format!("\n- Deadline: {}", deadline.to_rfc3339()));
             }
         }
         if let Some(ref how_much) = five_w2h.how_much {
             if let Some(budget) = how_much.token_budget {
-                w2h_section.push_str(&format!("\n- Token 预算: {}", budget));
+                w2h_section.push_str(&format!("\n- Token Budget: {}", budget));
             }
             if let Some(cycles) = how_much.max_pdca_cycles {
-                w2h_section.push_str(&format!("\n- 最大 PDCA 循环数: {}", cycles));
+                w2h_section.push_str(&format!("\n- Max PDCA Cycles: {}", cycles));
             }
         }
         if !five_w2h.why.success_criteria.is_empty() {
-            w2h_section.push_str(&format!("\n- 成功标准: {}", five_w2h.why.success_criteria.join(", ")));
+            w2h_section.push_str(&format!("\n- Success Criteria: {}", five_w2h.why.success_criteria.join(", ")));
         }
 
         let w2h_block = if w2h_section.is_empty() {
             String::new()
         } else {
-            format!("\n## 5W2H 约束信息{}", w2h_section)
+            format!("\n## 5W2H Constraint Info{}", w2h_section)
         };
 
         let sa_constitution_prompt = {
             use crate::core::constitution::{ConstitutionRegistry, ConstitutionRole};
             let registry = ConstitutionRegistry::new();
             let constitution_text = registry.build_prompt_for_role_exact(ConstitutionRole::Supervisor);
-            // 注入方法论层纪律（包含自动触发协议、始终激活方法论）
+            // Inject methodology layer discipline (includes auto-trigger protocol, always-active methodology)
             let methodology_text = crate::methodology::integration::MethodologyPromptInjector::build_for_sa();
             format!("{}\n{}", constitution_text, methodology_text)
         };
 
         let prompt = format!(
-            r#"你是一个任务规划专家。请分析以下任务并生成精简高效的执行计划。
+            r#"You are a task planning expert. Analyze the following task and generate a concise and efficient execution plan.
 
-## 任务描述
+## Task Description
 {}{}
-## 输出要求
-请以 JSON 格式输出计划，包含以下字段：
+## Output Requirements
+Output the plan in JSON format with the following fields:
 
 ```json
 {{
   "complexity": "simple|standard|complex|exploratory|emergency",
-  "description": "任务描述",
+  "description": "Task description",
   "steps": [
     {{
       "step_id": "step_1",
       "role": "Plan|Do|Check|Act",
-      "objective": "该步骤的具体目标",
-      "expected_output": "预期输出",
+      "objective": "Specific goal of this step",
+      "expected_output": "Expected output",
       "dependencies": [],
       "tools_allowed": ["file_read", "file_write", "grep_search", "glob_search", "web_search", "web_fetch", "bash"],
-      "success_criteria": "成功标准"
+      "success_criteria": "Success criteria"
     }}
   ],
-  "success_metrics": ["成功指标1", "成功指标2"]
+  "success_metrics": ["Success metric 1", "Success metric 2"]
 }}
 ```
 
-## 角色说明
-- **Plan (PA)**: 分析任务、制定计划、分解子任务
-- **Do (DA)**: 执行具体任务、创建产物（一个DA步骤应完成多个相关操作）
-- **Check (CA)**: 验证结果、检查质量
-- **Act (AA)**: 汇总决策、最终总结
+## Role Descriptions
+- **Plan (PA)**: Analyze tasks, create plans, decompose sub-tasks
+- **Do (DA)**: Execute specific tasks, create artifacts (one DA step should complete multiple related operations)
+- **Check (CA)**: Verify results, check quality
+- **Act (AA)**: Summarize decisions, final summary
 
-## 复杂度定义
-- **simple**: 简单查询，单步可完成（仅 DA）
-- **standard**: 标准任务，需要 PA→DA→CA→AA 流程
-- **complex**: 复杂任务，需要 PA→DA→CA→AA 完整验证，DA 完成后内部会触发子循环优化
-- **exploratory**: 探索性任务，需要多个并行 DA
-- **emergency**: 紧急修复，跳过 PA，DA→CA→AA
+## Complexity Definitions
+- **simple**: Simple query, single step (DA only)
+- **standard**: Standard task, requires PA→DA→CA→AA flow
+- **complex**: Complex task, requires full PA→DA→CA→AA validation, DA internally triggers sub-cycle optimization
+- **exploratory**: Exploratory task, requires multiple parallel DAs
+- **emergency**: Emergency fix, skip PA, DA→CA→AA
 
-## 重要约束
-1. **步骤数量限制**: 总步骤数不超过 6 个（含 PA 和 CA/AA）
-2. **DA 步骤合并**: 将多个相关操作合并到一个 DA 步骤中。例如创建多个文件应在一个 DA 步骤中完成，而非每个文件一个步骤
-3. **推荐模式**: PA(1步) → DA(1-3步) → CA(1步) → AA(1步)
-4. 每个 DA 步骤的 objective 应描述要完成的一组相关操作，而非单个原子操作
+## Important Constraints
+1. **Step count limit**: Total steps not to exceed 6 (including PA and CA/AA)
+2. **DA step merging**: Merge multiple related operations into one DA step. For example, creating multiple files should be done in one DA step, not one step per file
+3. **Recommended pattern**: PA(1step) → DA(1-3steps) → CA(1step) → AA(1step)
+4. Each DA step's objective should describe a group of related operations to complete, not a single atomic operation
 
-## 行为准则
-作为 Supervisor Agent，你必须遵守以下准则：
+## Code of Conduct
+As the Supervisor Agent, you must follow these guidelines:
 
 {}
 
-请直接输出 JSON，不要有其他内容。"#,
+Output only JSON, no other content."#,
             user_input, w2h_block, sa_constitution_prompt
         );
 
@@ -956,7 +956,7 @@ impl SupervisorAgent {
 
         let max_plan_steps = 8;
         let steps = if steps.len() > max_plan_steps {
-            warn!("计划步骤数 {} 超过限制 {}, 截断保留前 {} 步", steps.len(), max_plan_steps, max_plan_steps);
+            warn!("Plan step count {} exceeds limit {}, truncating to first {} steps", steps.len(), max_plan_steps, max_plan_steps);
             steps.into_iter().take(max_plan_steps).collect()
         } else {
             steps
@@ -987,25 +987,25 @@ impl SupervisorAgent {
 
     async fn classify_with_llm(&self, user_input: &str) -> Result<TaskComplexity, CoreError> {
         let prompt = format!(
-            r#"分析以下任务的复杂度，返回 JSON 格式结果。
+            r#"Analyze the complexity of the following task, return JSON format result.
 
-任务: {}
+Task: {}
 
-请分析任务的：
-1. 是否需要多步骤执行？
-2. 是否需要规划阶段？
-3. 是否需要验证阶段？
-4. 是否需要多个并行探索？
+Analyze the task:
+1. Does it require multi-step execution?
+2. Does it require a planning phase?
+3. Does it require a verification phase?
+4. Does it require multiple parallel explorations?
 
-返回 JSON:
-{{"complexity": "simple|standard|complex|exploratory|emergency", "reason": "简短原因"}}
+Return JSON:
+{{"complexity": "simple|standard|complex|exploratory|emergency", "reason": "Brief reason"}}
 
-复杂度定义：
-- simple: 简单查询，单步可完成
-- standard: 标准任务，需要计划→执行→检查→决策流程
-- complex: 复杂任务，需要多步执行和验证
-- exploratory: 探索性任务，需要多个并行探索
-- emergency: 紧急修复任务，跳过计划直接执行"#,
+Complexity definitions:
+- simple: Simple query, single step
+- standard: Standard task, requires plan→execute→check→decide flow
+- complex: Complex task, requires multi-step execution and verification
+- exploratory: Exploratory task, requires multiple parallel explorations
+- emergency: Emergency fix task, skip planning and execute directly"#,
             user_input
         );
 
@@ -1032,7 +1032,7 @@ impl SupervisorAgent {
             .and_then(|c| c.message.content.clone())
             .unwrap_or_default();
 
-        // 解析 LLM 响应
+        // Parse LLM response
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(complexity_str) = parsed.get("complexity").and_then(|c| c.as_str()) {
                 let complexity = match complexity_str {
@@ -1042,12 +1042,12 @@ impl SupervisorAgent {
                     "emergency" => TaskComplexity::Emergency,
                     _ => TaskComplexity::Standard,
                 };
-                info!(complexity = ?complexity, reason = ?parsed.get("reason"), "LLM 分类结果");
+                info!(complexity = ?complexity, reason = ?parsed.get("reason"), "LLM classification result");
                 return Ok(complexity);
             }
         }
 
-        // 尝试从文本中提取
+        // Try to extract from text
         let lower = content.to_lowercase();
         if lower.contains("simple") {
             return Ok(TaskComplexity::Simple);
@@ -1063,93 +1063,79 @@ impl SupervisorAgent {
     fn classify_complexity(&self, user_input: &str) -> TaskComplexity {
         let lower = user_input.to_lowercase();
 
-        // Instant: 非常简短的输入（如问候语）
+        // Instant: very short input (e.g., greetings)
         if user_input.len() < 15 && !user_input.contains(' ') {
             return TaskComplexity::Instant;
         }
 
-        // Emergency: 紧急修复类
+        // Emergency: emergency fix category
         let emergency_keywords = ["fix", "bug", "error", "crash", "urgent", "broken", "repair",
-            "修复", "紧急", "崩溃", "故障"];
+            "repair", "urgent", "crash", "fault"];
         if emergency_keywords.iter().any(|k| lower.contains(k)) {
             return TaskComplexity::Emergency;
         }
 
-        // 递归分解：复杂多步骤任务，需要 DA 内部微观 PDCA 子循环
+        // Recursive decomposition: complex multi-step tasks, requires DA internal micro PDCA sub-cycles
         let recursive_keywords = [
-            "重构", "refactor", "重写", "rewrite", "迁移", "migrate",
-            "拆分", "split into", "分解", "decompose",
-            "逐步实现", "分步实现", "多阶段", "multi-phase",
-            "端到端", "end-to-end", "全栈", "full-stack",
-            "从头搭建", "从零搭建", "搭建完整",
-            // 项目构建类
-            "写一个", "写一", "开发", "develop", "创建", "create",
-            "实现", "implement", "构建", "building", "build",
-            "程序", "program", "项目", "project", "应用", "app",
-            "网站", "website", "系统", "system", "平台", "platform",
-            "生成", "generate", "制作",
+            "refactor", "rewrite", "migrate",
+            "split into", "decompose",
+            "multi-phase",
+            "end-to-end", "full-stack",
+            // Project building category
+            "develop", "create",
+            "implement", "building", "build",
+            "program", "project", "app",
+            "website", "system", "platform",
+            "generate",
         ];
         if recursive_keywords.iter().any(|k| lower.contains(k)) {
             return TaskComplexity::Recursive;
         }
 
-        // 探索性任务 → Exploratory（优先于 research_patterns）
+        // Exploratory task → Exploratory (prioritized over research_patterns)
         let exploratory_keywords = [
             "research", "explore", "investigate",
-            "多个方案", "多种方法", "探索", "对比分析",
         ];
         if exploratory_keywords.iter().any(|k| lower.contains(k)) {
             return TaskComplexity::Exploratory;
         }
 
         let compare_keywords = [
-            "compare", "对比", "比较",
+            "compare",
         ];
         if compare_keywords.iter().any(|k| lower.contains(k)) {
-            let multi_patterns = ["different", "various", "multiple", "several", "多个", "各种"];
+            let multi_patterns = ["different", "various", "multiple", "several"];
             if multi_patterns.iter().any(|p| lower.contains(p)) {
                 return TaskComplexity::Exploratory;
             }
             return TaskComplexity::Complex;
         }
 
-        // 调研分析类问题 → Standard 或 Complex
-        let research_patterns = [
-            "有哪些应用", "有哪些场景", "有哪些案例", "有哪些方法",
-            "应用场景", "应用案例", "应用方向",
-            "如何实现", "如何设计", "如何解决",
-            "分析", "研究", "调研", "对比", "比较", "评估",
-            "介绍", "概述", "综述", "总结",
-            "优缺点", "利弊", "最佳实践",
-            "发展趋势", "前景", "现状",
-        ];
+        // Research/analysis questions → Standard or Complex
+        let research_patterns: [&str; 0] = [];
         if research_patterns.iter().any(|p| lower.contains(p)) {
-            let deep_patterns = ["深入", "详细", "全面", "系统", "综合", "多角度"];
+            let deep_patterns = ["deep", "thorough", "comprehensive", "systematic", "in-depth"];
             if deep_patterns.iter().any(|p| lower.contains(p)) {
                 return TaskComplexity::Complex;
             }
             return TaskComplexity::Standard;
         }
 
-        // Simple: 简单事实查询，一句话能回答
-        let simple_query_patterns = [
-            "什么是", "是什么", "是谁", "在哪里", "什么时候",
-            "定义", "含义", "意思",
-            "吗？", "吗?", "能否", "可以",
-        ];
+        // Simple: simple fact query, answerable in one sentence
+        let simple_query_patterns: [&str; 0] = [];
         let is_simple_query = user_input.len() < 50 
             && simple_query_patterns.iter().any(|p| lower.contains(p))
-            && !lower.contains("应用") 
-            && !lower.contains("场景")
-            && !lower.contains("分析")
-            && !lower.contains("实现")
-            && !lower.contains("设计");
+            && !lower.contains("application")
+            && !lower.contains("scenario")
+            && !lower.contains("analysis")
+            && !lower.contains("implementation")
+            && !lower.contains("design");
         
         if is_simple_query {
             return TaskComplexity::Simple;
         }
 
-        // 英文简单查询
+        // English simple query
         if user_input.len() < 50
             && (lower.starts_with("what is") 
                 || lower.starts_with("who is")
@@ -1159,7 +1145,7 @@ impl SupervisorAgent {
             return TaskComplexity::Simple;
         }
 
-        // 默认：Standard
+        // Default: Standard
         TaskComplexity::Standard
     }
 
@@ -1177,8 +1163,8 @@ impl SupervisorAgent {
     ) -> Result<TaskResult, CoreError> {
         let agent = self.create_agent(role, cycle_id);
 
-        // 从 L2 黑板查询上下文（替代 prev_summary）
-        // 改进：优先使用节点 content（完整输出），回退到 summary（短摘要）
+        // Query context from L2 blackboard (replaces prev_summary)
+        // Improvement: prefer node content (full output), fallback to summary (short excerpt)
         let prev_agent_summary = context.prev_agent_summary.clone();
         let prev_summary = if let Some(blackboard) = &self.blackboard {
             let nodes = blackboard.query_nodes(&context.task_iri).unwrap_or_default();
@@ -1189,7 +1175,7 @@ impl SupervisorAgent {
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&n.json_ld) {
                         let role = parsed.get("role").and_then(|v| v.as_str()).unwrap_or("");
                         let prefix = if !role.is_empty() { format!("[{}] ", role) } else { String::new() };
-                        // 优先 content 字段（完整 LLM 输出）
+                        // Prefer content field (full LLM output)
                         if let Some(content) = parsed.get("content").and_then(|s| s.as_str()) {
                             let trimmed = content.trim();
                             if !trimmed.is_empty() && trimmed.len() > 20 {
@@ -1197,7 +1183,7 @@ impl SupervisorAgent {
                                 continue;
                             }
                         }
-                        // 回退到 summary 字段
+                        // Fallback to summary field
                         if let Some(summary) = parsed.get("summary").and_then(|s| s.as_str()) {
                             let trimmed = summary.trim();
                             if !trimmed.is_empty() {
@@ -1206,7 +1192,7 @@ impl SupervisorAgent {
                         }
                     }
                 }
-                // 优先使用有实质内容的 content
+                // Prefer content with substance
                 if !contents.is_empty() {
                     Some(contents.join("\n\n---\n\n"))
                 } else if !summaries.is_empty() {
@@ -1234,7 +1220,7 @@ impl SupervisorAgent {
                 &serde_json::json!({"cycle_id": cycle_id}).to_string())
             .await;
 
-        // 使用独立的 BizAgent 实例执行（Agent 隔离）
+        // Execute with independent BizAgent instance (agent isolation)
         let result = self.runner.execute_with_biz_agent(&agent, context, plan_step).await?;
 
         match result.status.as_str() {
@@ -1361,8 +1347,8 @@ impl SupervisorAgent {
         let mut last_result: Option<TaskResult> = None;
         let mut prev_summary: Option<String> = None;
 
-        // Resume 模式：确定从哪个阶段开始
-        // 从 L0 加载最新的 checkpoint 来解析 phase 标签
+        // Resume mode: determine which phase to start from
+        // Load latest checkpoint from L0 to resolve phase tags
         let resume_skip_phases: Vec<AgentRole> = if resumed_messages.is_some() {
             let cm = crate::core::checkpoint::CheckpointManager::with_persistence(self.runner.l0_store.clone());
             let skip_roles = cm.restore_latest_with_skip_roles(task_iri)
@@ -1384,17 +1370,17 @@ impl SupervisorAgent {
         };
         info!("[resume] skip phases: {:?}", resume_skip_phases);
 
-        // Resume 模式：优先从 checkpoint 的 prev_summary 字段恢复
-        // 如果 checkpoint 中没有 prev_summary，则从历史消息中提取 PA 输出
+        // Resume mode: prefer restoring from checkpoint's prev_summary field
+        // If no prev_summary in checkpoint, extract PA output from history messages
         let resume_prev_summary: Option<String> = if resumed_messages.is_some() {
-            // 尝试从 L0 的 checkpoint 中读取保存的 prev_summary
+            // Try to read saved prev_summary from L0 checkpoint
             let cm = crate::core::checkpoint::CheckpointManager::with_persistence(self.runner.l0_store.clone());
             let from_cp: Option<String> = cm.restore_latest(task_iri).ok().flatten()
                 .and_then(|cp| cp.prev_summary);
             if from_cp.is_some() {
                 from_cp
             } else {
-                // fallback：从历史消息中提取 PA 阶段的输出作为 prev_summary
+                // Fallback: extract PA phase output from history messages as prev_summary
                 resumed_messages.as_ref().and_then(|msgs| {
                     let mut found_first_user = false;
                     for msg in msgs.iter() {
@@ -1425,45 +1411,45 @@ impl SupervisorAgent {
             TaskComplexity::Recursive => "Recursive",
         };
 
-        // --- 统一 DAG 执行路径 ---
-        // 将 ExecutionPlan 转换为 DAG（LLM 路径适配）或直接使用外部 JSON-LD DAG（--workflow 路径）
+        // --- Unified DAG execution path ---
+        // Convert ExecutionPlan to DAG (LLM path adapter) or use external JSON-LD DAG directly (--workflow path)
         let dag = if let Some(ref dag_jsonld) = plan.dag_jsonld {
             let def = crate::core::workflow::loader::load_workflow_jsonld(dag_jsonld)
-                .map_err(|e| CoreError::Internal { message: format!("工作流解析失败: {}", e) })?;
+                .map_err(|e| CoreError::Internal { message: format!("Workflow parsing failed: {}", e) })?;
             crate::core::workflow::loader::build_dag(&def)
-                .map_err(|e| CoreError::Internal { message: format!("DAG 构建失败: {}", e) })?
+                .map_err(|e| CoreError::Internal { message: format!("DAG build failed: {}", e) })?
         } else {
             let wf = crate::core::workflow::adapter::plan_to_workflow(&plan, task_iri);
             crate::core::workflow::loader::build_dag(&wf)
-                .map_err(|e| CoreError::Internal { message: format!("DAG 构建失败: {}", e) })?
+                .map_err(|e| CoreError::Internal { message: format!("DAG build failed: {}", e) })?
         };
         let order = crate::core::workflow::loader::topological_order(&dag)
-            .map_err(|e| CoreError::Internal { message: format!("拓扑排序失败: {}", e) })?;
+            .map_err(|e| CoreError::Internal { message: format!("Topological sort failed: {}", e) })?;
 
         let mut completed_node_results: std::collections::HashMap<String, crate::core::workflow::NodeResult> = std::collections::HashMap::new();
         let mut skip_nodes: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        // 按 DAG 拓扑序执行
+        // Execute in DAG topological order
         for (i, &node_idx) in order.iter().enumerate() {
             let node_def = &dag.graph[node_idx].def;
             let step = crate::core::workflow::adapter::node_to_planstep(node_def);
 
-            // 检查是否在跨节点跳过的集合中（来自 HumanApprovalNode 的分支跳转）
+            // Check if in cross-node skip set (branch jump from HumanApprovalNode)
             if skip_nodes.contains(&node_def.id) {
-                info!(node_id = %node_def.id, "HumanApprovalNode 分支跳转: 跳过此节点");
+                info!(node_id = %node_def.id, "HumanApprovalNode branch jump: skipping this node");
                 continue;
             }
 
-            // Resume 模式：跳过已完成的阶段
+            // Resume mode: skip completed phases
             if resume_skip_phases.contains(&step.role) {
-                info!(role = ?step.role, "[resume] 跳过已完成的阶段");
+                info!(role = ?step.role, "[resume] skipping completed phase");
                 if prev_summary.is_none() {
-                    prev_summary = resume_prev_summary.clone().or_else(|| Some("从 checkpoint 恢复，前序阶段已完成。".to_string()));
+                    prev_summary = resume_prev_summary.clone().or_else(|| Some("Restored from checkpoint, preceding phase completed.".to_string()));
                 }
                 continue;
             }
 
-            // HumanApprovalNode：人工审批节点，不派遣 Agent
+            // HumanApprovalNode: human approval node, does not dispatch agent
             if node_def.node_type == "HumanApprovalNode" {
                 let approval = self.request_human_approval_general(
                     &node_def.approval_prompt, &node_def.id, task_iri
@@ -1471,7 +1457,7 @@ impl SupervisorAgent {
 
                 let status = if approval.approved { "approved" } else { "rejected" };
                 let summary = format!("[HumanApproval] {}: {}",
-                    if approval.approved { "批准" } else { "拒绝" },
+                    if approval.approved { "Approved" } else { "Rejected" },
                     approval.comment.as_deref().unwrap_or(""));
 
                 completed_node_results.insert(node_def.id.clone(), crate::core::workflow::NodeResult {
@@ -1481,12 +1467,12 @@ impl SupervisorAgent {
                     archive_iri: None,
                     turn_count: 0,
                     tool_call_count: 0,
-                    error: if approval.approved { None } else { Some("用户拒绝".to_string()) },
+                    error: if approval.approved { None } else { Some("User rejected".to_string()) },
                     output: None,
                     artifacts: vec![],
                 });
 
-                prev_summary = Some(format!("## 人工审批结果\n{}", summary));
+                prev_summary = Some(format!("## Human Approval Result\n{}", summary));
                 last_result = Some(TaskResult {
                     task_iri: task_iri.to_string(),
                     status: status.to_string(),
@@ -1502,7 +1488,7 @@ impl SupervisorAgent {
                     archive_iri: None,
                 });
 
-                // 审批拒绝且设定了拒绝跳转 → 跳过中间节点直达目标
+                // Rejected and rejection jump set → skip intermediate nodes to target
                 if !approval.approved {
                     if let Some(ref reject_target) = node_def.approval_next_on_reject {
                         let mut found = false;
@@ -1515,7 +1501,7 @@ impl SupervisorAgent {
                             skip_nodes.insert(skip_id);
                         }
                         if !found {
-                            // 找不到目标节点则跳过所有剩余节点
+                            // Target node not found, skip all remaining nodes
                             for skip_idx in (i + 1)..order.len() {
                                 skip_nodes.insert(dag.graph[order[skip_idx]].def.id.clone());
                             }
@@ -1523,7 +1509,7 @@ impl SupervisorAgent {
                     }
                 }
 
-                // 审批通过且设定了通过跳转 → 跳过中间节点
+                // Approved and approval jump set → skip intermediate nodes
                 if approval.approved {
                     if let Some(ref approve_target) = node_def.approval_next_on_approve {
                         let mut found = false;
@@ -1543,7 +1529,7 @@ impl SupervisorAgent {
                     }
                 }
 
-                info!(node_id = %node_def.id, status = %status, "HumanApprovalNode 处理完成");
+                info!(node_id = %node_def.id, status = %status, "HumanApprovalNode processing complete");
                 continue;
             }
 
@@ -1555,23 +1541,23 @@ impl SupervisorAgent {
             let hints_block = if cycle_hints.is_empty() {
                 String::new()
             } else {
-                format!("\n\n## 历史经验\n{}", cycle_hints.iter().map(|h| format!("- {}", h)).collect::<Vec<_>>().join("\n"))
+                format!("\n\n## Historical Experience\n{}", cycle_hints.iter().map(|h| format!("- {}", h)).collect::<Vec<_>>().join("\n"))
             };
             let objective = match (&prev_summary, step.role) {
                 (Some(_summary), AgentRole::Plan) => {
-                    format!("{}\n\n## 用户任务\n{}{}\n\n请为上述用户任务制定详细的执行计划。", step.objective, user_input, hints_block)
+                    format!("{}\n\n## User Task\n{}{}\n\nPlease create a detailed execution plan for the above user task.", step.objective, user_input, hints_block)
                 }
                 (Some(summary), AgentRole::Do) => {
-                    format!("{}\n\n上级PA的计划:\n{}{}\n\n请按照计划执行任务。", step.objective, summary, hints_block)
+                    format!("{}\n\nUpper PA's Plan:\n{}{}\n\nPlease execute the task according to the plan.", step.objective, summary, hints_block)
                 }
                 (Some(summary), AgentRole::Check) => {
-                    format!("{}\n\n执行结果:\n{}{}\n\n请验证执行结果是否正确和完整。", step.objective, summary, hints_block)
+                    format!("{}\n\nExecution Results:\n{}{}\n\nPlease verify whether the execution results are correct and complete.", step.objective, summary, hints_block)
                 }
                 (Some(summary), AgentRole::Act) => {
-                    format!("{}\n\n检查结论:\n{}{}\n\n请做出最终决策和总结。", step.objective, summary, hints_block)
+                    format!("{}\n\nCheck Conclusions:\n{}{}\n\nPlease make final decisions and summarize.", step.objective, summary, hints_block)
                 }
                 (None, AgentRole::Plan) => {
-                    format!("{}\n\n## 用户任务\n{}{}\n\n请为上述用户任务制定详细的执行计划。", step.objective, user_input, hints_block)
+                    format!("{}\n\n## User Task\n{}{}\n\nPlease create a detailed execution plan for the above user task.", step.objective, user_input, hints_block)
                 }
                 _ => step.objective.clone(),
             };
@@ -1579,7 +1565,7 @@ impl SupervisorAgent {
             if step.role == AgentRole::Check {
                 let missing = five_w2h.check_completeness(task_level);
                 if !missing.is_empty() {
-                    info!(missing_dims = ?missing, "5W2H 完形校验：缺失维度，补充默认值");
+                    info!(missing_dims = ?missing, "5W2H completeness check: missing dimensions, filling defaults");
                     for dim in &missing {
                         match dim.as_str() {
                             "who" => {
@@ -1613,18 +1599,18 @@ impl SupervisorAgent {
 
             context = context.with_five_w2h(five_w2h_iri, five_w2h.clone());
 
-            // Resume 模式：在第一个实际执行的 step 恢复历史消息
-            // 注意：resume 模式下 PA (i=0) 被跳过，第一个执行的是 DA (i=1)
+            // Resume mode: restore history messages on the first actually executed step
+            // Note: in resume mode PA (i=0) is skipped, first executed is DA (i=1)
             let is_first_executed_step = if resume_skip_phases.is_empty() {
                 i == 0
             } else {
-                // 跳过阶段之后的第一个 step
+                // First step after the skipped phases
                 !resume_skip_phases.contains(&step.role) 
                     && plan.steps[..i].iter().all(|s| resume_skip_phases.contains(&s.role))
             };
             if is_first_executed_step {
                 if let Some(ref msgs) = resumed_messages {
-                    // 从 resumed_messages 推算 turn/tool 计数
+                    // Calculate turn/tool count from resumed_messages
                     let turn_count = msgs.iter().filter(|m| m.role == "assistant").count() as u32;
                     let tool_count = msgs.iter().filter(|m| m.role == "tool" || m.tool_call_id.is_some()).count() as u32;
                     context = context.with_resumed_messages(msgs.clone(), turn_count, tool_count);
@@ -1646,7 +1632,7 @@ impl SupervisorAgent {
                     if elapsed.num_seconds() > self.perception.cycle_timeout_secs() {
                         let intervention = self.perception.on_cycle_timeout(&cycle_id, task_iri, elapsed.num_seconds() as f64);
                         if intervention.should_interrupt {
-                            // 使用超时防止干预处理阻塞步骤调度
+                            // Use timeout to prevent intervention processing from blocking step scheduling
                             let _ = tokio::time::timeout(
                                 std::time::Duration::from_secs(30),
                                 self.execute_intervention(intervention, task_iri),
@@ -1656,13 +1642,13 @@ impl SupervisorAgent {
                 }
             }
 
-            // 检查执行是否被暂停（通过补充输入动作 PauseExecution）
+            // Check if execution is paused (via supplementary input action PauseExecution)
             let paused = self.active_cycles.get(&cycle_id)
                 .map(|c| c.phase == CyclePhase::Idle)
                 .unwrap_or(false);
             if paused {
-                info!(step_id = %step.step_id, role = ?step.role, "执行已暂停，等待恢复");
-                // 循环等待恢复，同时检查补充输入
+                info!(step_id = %step.step_id, role = ?step.role, "Execution paused, waiting for resume");
+                // Loop waiting for resume, checking supplementary inputs simultaneously
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     let mut payloads = Vec::new();
@@ -1732,7 +1718,7 @@ impl SupervisorAgent {
                 let combined_summary: String = results.iter()
                     .map(|r| {
                         let iri_part = r.archive_iri.as_ref()
-                            .map(|iri| format!(" | read_agent_output 查询: {}", iri))
+                            .map(|iri| format!(" | read_agent_output query: {}", iri))
                             .unwrap_or_default();
                         format!("[{}] {}{}", r.task_iri, r.summary, iri_part)
                     })
@@ -1785,7 +1771,7 @@ impl SupervisorAgent {
                                 let cfg = crate::CoreConfig::default();
                                 if let Some(ref bb) = self.blackboard {
                                     if bb.write_node(&five_w2h_iri, &updated_json_ld.to_string(), &cfg).is_ok() {
-                                        tracing::debug!(five_w2h_iri = %five_w2h_iri, "5W2H 更新同步到黑板");
+                                        tracing::debug!(five_w2h_iri = %five_w2h_iri, "5W2H update synced to blackboard");
                                     }
                                 }
                             }
@@ -1794,7 +1780,7 @@ impl SupervisorAgent {
                 }
 
                 if step.role == AgentRole::Act && result.status == "success" {
-                    // 只在最后一个 AA 步骤冻结 5W2H（多轮 PDCA 的中间 AA 不冻结）
+                    // Only freeze 5W2H on the last AA step (intermediate AA in multi-cycle PDCA does not freeze)
                     let is_last_aa = plan.steps.iter().rposition(|s| s.role == AgentRole::Act)
                         .map(|last_act| plan.steps.iter().position(|s| s.step_id == step.step_id)
                             .map(|idx| idx >= last_act)
@@ -1811,10 +1797,10 @@ impl SupervisorAgent {
                                 let _ = bb.write_node(&snapshot_iri, &frozen_json_ld.to_string(), &cfg);
                                 let _ = bb.write_node(&five_w2h_iri, &frozen_json_ld.to_string(), &cfg);
                             }
-                            info!(task_iri = %task_iri, "5W2H 已冻结归档");
+                            info!(task_iri = %task_iri, "5W2H frozen and archived");
                         }
                     } else {
-                        info!(task_iri = %task_iri, step_id = %step.step_id, "中间 AA 步骤：5W2H 暂不冻结");
+                        info!(task_iri = %task_iri, step_id = %step.step_id, "Intermediate AA step: 5W2H not frozen yet");
                     }
                 }
 
@@ -1835,7 +1821,7 @@ impl SupervisorAgent {
                     });
                     let advisories = self.perception.on_plan_completed(&plan_data, task_iri);
                     if !advisories.is_empty() {
-                        info!(count = advisories.len(), "PA 感知建议已生成");
+                        info!(count = advisories.len(), "PA perception advisories generated");
                     }
                 }
 
@@ -1845,21 +1831,21 @@ impl SupervisorAgent {
                         "objective": &step.objective,
                     });
                     if let Some(advisory) = self.perception.on_check_completed(&check_data, task_iri) {
-                        info!(advisory = ?advisory, "CA 感知建议已生成");
+                        info!(advisory = ?advisory, "CA perception advisories generated");
                     }
                 }
 
-                // 多轮 PDCA 提前退出检查：AA 评估是 PDCA 循环的终审，
-                // 无论通过还是失败，都应该终止后续循环，避免重复执行。
+                // Multi-cycle PDCA early exit check: AA evaluation is the final review of a PDCA cycle,
+                // whether pass or fail, terminate subsequent cycles to avoid duplicate execution.
                 if step.role == AgentRole::Act {
                     let has_remaining = (i + 1) < order.len();
                     if has_remaining {
                         let reason = match result.status.as_str() {
-                            "success" => "AA 通过，任务已完成",
-                            "failed" | "partial_success" => "AA 未通过",
-                            _ => "AA 已评估",
+                            "success" => "AA passed, task completed",
+                            "failed" | "partial_success" => "AA did not pass",
+                            _ => "AA evaluated",
                         };
-                        info!(step_id = %step.step_id, status = %result.status, "{}，跳过剩余 PDCA 循环", reason);
+                        info!(step_id = %step.step_id, status = %result.status, "{}, skipping remaining PDCA cycles", reason);
                         for skip_idx in (i + 1)..order.len() {
                             skip_nodes.insert(dag.graph[order[skip_idx]].def.id.clone());
                         }
@@ -1885,15 +1871,15 @@ impl SupervisorAgent {
                     match sub_results {
                         Ok(sub_summary) => {
                             let combined = format!(
-                                "{}\n\n## 子任务执行结果\n{}",
+                                "{}\n\n## Sub-task Execution Results\n{}",
                                 result.summary, sub_summary
                             );
                             prev_summary = Some(combined);
                         }
                         Err(e) => {
-                            warn!(error = %e, "递归子循环执行失败，继续使用 DA 原始结果");
+                            warn!(error = %e, "Recursive sub-cycle execution failed, using DA original result");
                             let prev = match result.archive_iri {
-                                Some(ref iri) => format!("{}\n\n如需查看完整报告，可使用 read_agent_output 工具查询: {}", result.summary, iri),
+                                Some(ref iri) => format!("{}\n\nFor the full report, use read_agent_output tool to query: {}", result.summary, iri),
                                 None => result.summary.clone(),
                             };
                             prev_summary = Some(prev);
@@ -1901,7 +1887,7 @@ impl SupervisorAgent {
                     }
                 } else {
                     let prev = match result.archive_iri {
-                        Some(ref iri) => format!("{}\n\n如需查看完整报告，可使用 read_agent_output 工具查询: {}", result.summary, iri),
+                        Some(ref iri) => format!("{}\n\nFor the full report, use read_agent_output tool to query: {}", result.summary, iri),
                         None => result.summary.clone(),
                     };
                     prev_summary = Some(prev);
@@ -1911,13 +1897,13 @@ impl SupervisorAgent {
             }
 
             if let Some(alert) = self.perception.check_5w2h_constraints(five_w2h_iri) {
-                tracing::warn!(alert = %alert, "5W2H 约束告警");
+                tracing::warn!(alert = %alert, "5W2H constraint alert");
                 self.event_bus.emit(task_iri, &alert, "SA", &serde_json::json!({"task_iri": task_iri}).to_string()).await;
             }
 
             info!(step_id = %step.step_id, role = ?step.role, status = ?last_result.as_ref().map(|r| &r.status), "Step completed");
 
-            // ── 步骤级 checkpoint：保存完整执行上下文 ──
+            // ── Step-level checkpoint: save full execution context ──
             {
                 let cm = crate::core::checkpoint::CheckpointManager::with_persistence(self.runner.l0_store.clone());
                 let role_name = format!("{:?}", step.role);
@@ -1976,7 +1962,7 @@ impl SupervisorAgent {
                     &state_json,
                     &tags,
                     Some(&role_name),
-                    None, // five_w2h_json — 5W2H 已通过 L0 持久化
+                    None, // five_w2h_json — 5W2H already persisted via L0
                     prev_summary.as_deref(),
                     cycle_state.as_deref(),
                     completed_nodes.as_deref(),
@@ -1986,9 +1972,9 @@ impl SupervisorAgent {
                     None,
                     None,
                 ) {
-                    warn!("[checkpoint] step_complete 保存失败: {}", e);
+                    warn!("[checkpoint] step_complete save failed: {}", e);
                 } else {
-                    info!("[checkpoint] step_complete_{} 已保存", role_name);
+                    info!("[checkpoint] step_complete_{} saved", role_name);
                 }
             }
         }
@@ -2033,16 +2019,16 @@ impl SupervisorAgent {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, CoreError>> + Send + 'a>> {
         Box::pin(async move {
         if current_depth > max_depth {
-            info!(depth = current_depth, max_depth, "递归深度已达上限，停止子循环");
-            return Ok("递归深度已达上限".to_string());
+            info!(depth = current_depth, max_depth, "Recursive depth limit reached, stopping sub-cycle");
+            return Ok("Recursive depth limit reached".to_string());
         }
 
         self.emit_sa_thought(task_iri,
-            &format!("▶ 递归子循环 (depth {}/{})", current_depth, max_depth),
+            &format!("▶ Recursive sub-cycle (depth {}/{})", current_depth, max_depth),
             "recursive_sub_cycle_start").await;
 
         let sub_task = SubTask::new(
-            &format!("从 DA 结果中分解子任务 (depth={})", current_depth),
+            &format!("Decomposing sub-tasks from DA result (depth={})", current_depth),
             parent_step_id,
             current_depth,
         );
@@ -2051,46 +2037,46 @@ impl SupervisorAgent {
             sub_task_id = %sub_task.sub_task_id,
             depth = current_depth,
             max_depth,
-            "开始递归子循环"
+            "Starting recursive sub-cycle"
         );
 
         self.emit_sa_thought(task_iri,
-            &format!("正在分解 DA 结果，识别子任务... (depth {}/{})", current_depth, max_depth),
+            &format!("Decomposing DA result, identifying sub-tasks... (depth {}/{})", current_depth, max_depth),
             "recursive_decompose").await;
 
         let decompose_prompt = format!(
-            r#"你是一个任务分解专家。以下是一个 DA (Do Agent) 的执行结果摘要，请分析其中是否有需要进一步执行的子任务。
+            r#"You are a task decomposition expert. Below is an execution result summary of a DA (Do Agent). Analyze whether there are sub-tasks that need further execution.
 
-## DA 执行结果
+## DA Execution Result
 {}
 
-## 任务上下文
-- 原始目标: {}
-- 当前递归深度: {}/{}
+## Task Context
+- Original goal: {}
+- Current recursion depth: {}/{}
 
-## 输出要求
-请以 JSON 格式输出需要进一步执行的子任务列表。如果没有需要进一步执行的子任务，返回空数组。
+## Output Requirements
+Output the list of sub-tasks that need further execution in JSON format. If no further sub-tasks are needed, return an empty array.
 
 ```json
 {{
   "has_sub_tasks": true/false,
   "sub_tasks": [
     {{
-      "objective": "子任务目标描述",
+      "objective": "Sub-task objective description",
       "role": "Do",
-      "success_criteria": "成功标准"
+      "success_criteria": "Success criteria"
     }}
   ]
 }}
 ```
 
-## 判断标准
-1. 如果 DA 结果中明确提到"还需要..."、"下一步需要..."等，则存在子任务
-2. 如果 DA 结果已经完整完成目标，没有遗留工作，则无子任务
-3. 子任务应该是具体可执行的，而非抽象的
-4. 最多分解 3 个子任务
+## Evaluation Criteria
+1. If the DA result explicitly mentions "still needs...", "next step needs...", etc., there are sub-tasks
+2. If the DA result has fully completed the goal with no remaining work, there are no sub-tasks
+3. Sub-tasks should be concrete and executable, not abstract
+4. Maximum of 3 sub-tasks
 
-请直接输出 JSON。"#,
+Output only JSON."#,
             da_summary,
             five_w2h.what,
             current_depth,
@@ -2114,7 +2100,7 @@ impl SupervisorAgent {
             Some(1000),
             None,
             None,
-        ).await.map_err(|e| CoreError::Internal { message: format!("递归分解 LLM 调用失败: {}", e) })?;
+        ).await.map_err(|e| CoreError::Internal { message: format!("Recursive decomposition LLM call failed: {}", e) })?;
 
         let content = response.choices.first()
             .and_then(|c| c.message.content.clone())
@@ -2129,7 +2115,7 @@ impl SupervisorAgent {
                 content.clone()
             }
         } else {
-            return Ok("LLM 未返回有效分解结果".to_string());
+            return Ok("LLM did not return valid decomposition result".to_string());
         };
 
         #[derive(Deserialize)]
@@ -2149,25 +2135,25 @@ impl SupervisorAgent {
         fn default_role() -> String { "Do".to_string() }
 
         let parsed: DecomposeResult = serde_json::from_str(&json_str)
-            .map_err(|e| CoreError::Internal { message: format!("递归分解 JSON 解析失败: {}", e) })?;
+            .map_err(|e| CoreError::Internal { message: format!("Recursive decomposition JSON parse failed: {}", e) })?;
 
         if !parsed.has_sub_tasks || parsed.sub_tasks.is_empty() {
-            info!(depth = current_depth, "DA 结果无需进一步分解");
+            info!(depth = current_depth, "No further decomposition needed for DA result");
             self.emit_sa_thought(task_iri,
-                &format!("子任务分解完成：无需进一步分解 (depth {}/{})", current_depth, max_depth),
+                &format!("Sub-task decomposition complete: no further decomposition needed (depth {}/{})", current_depth, max_depth),
                 "recursive_no_tasks").await;
-            return Ok("无需进一步分解".to_string());
+            return Ok("No further decomposition needed".to_string());
         }
 
         self.emit_sa_thought(task_iri,
-            &format!("识别到 {} 个子任务 (depth {}/{})", parsed.sub_tasks.len(), current_depth, max_depth),
+            &format!("Identified {} sub-tasks (depth {}/{})", parsed.sub_tasks.len(), current_depth, max_depth),
             "recursive_tasks_found").await;
 
         let mut sub_summaries = Vec::new();
 
         for (idx, sub_def) in parsed.sub_tasks.iter().enumerate() {
-            let sub_objective = format!("[递归depth={}] {}", current_depth, sub_def.objective);
-            info!(sub_idx = idx, objective = %sub_def.objective, "执行递归子任务");
+            let sub_objective = format!("[recursive depth={}] {}", current_depth, sub_def.objective);
+            info!(sub_idx = idx, objective = %sub_def.objective, "Executing recursive sub-task");
 
             let mut sub_ctx = TaskContext::new(
                 task_iri,
@@ -2204,24 +2190,24 @@ impl SupervisorAgent {
 
             let total = parsed.sub_tasks.len();
             self.emit_sa_thought(task_iri,
-                &format!("▶ 执行子任务 {}/{}: {} (depth {})", idx + 1, total, sub_def.objective, current_depth),
+                &format!("▶ Executing sub-task {}/{}: {} (depth {})", idx + 1, total, sub_def.objective, current_depth),
                 "recursive_sub_task_start").await;
 
             let sub_result = self.dispatch_agent(AgentRole::Do, sub_ctx, cycle_id, Some(sub_step)).await?;
 
             self.emit_sa_thought(task_iri,
-                &format!("{}/{} 子任务完成 [{}]: {}", idx + 1, total,
+                &format!("{}/{} sub-task complete [{}]: {}", idx + 1, total,
                     sub_result.status, sub_def.objective),
                 "recursive_sub_task_end").await;
 
             if sub_result.status == "success" || sub_result.status == "partial_success" {
                 let icon = if sub_result.status == "success" { "✅" } else { "⚠️" };
-                sub_summaries.push(format!("### 子任务 {} {}\n{}", idx + 1, icon, sub_result.summary));
+                sub_summaries.push(format!("### Sub-task {} {}\n{}", idx + 1, icon, sub_result.summary));
 
                 if current_depth < max_depth && sub_result.status == "success" {
-                    // 只有完全成功的子任务才继续深层递归；partial_success 在上层递归中继续
+                    // Only fully successful sub-tasks continue deeper recursion; partial_success continues in upper recursion
                     self.emit_sa_thought(task_iri,
-                        &format!("进入深层递归 (depth {}/{})", current_depth + 1, max_depth),
+                        &format!("Entering deeper recursion (depth {}/{})", current_depth + 1, max_depth),
                         "recursive_deeper").await;
                     match self.execute_recursive_sub_cycle(
                         &sub_result.summary,
@@ -2234,20 +2220,20 @@ impl SupervisorAgent {
                         five_w2h_iri,
                     ).await {
                         Ok(deeper_summary) => {
-                            sub_summaries.push(format!("#### 深层子任务 (depth={})\n{}", current_depth + 1, deeper_summary));
+                            sub_summaries.push(format!("#### Deep sub-task (depth={})\n{}", current_depth + 1, deeper_summary));
                         }
                         Err(e) => {
-                            warn!(error = %e, "深层递归子循环失败");
+                            warn!(error = %e, "Deep recursive sub-cycle failed");
                         }
                     }
                 }
             } else {
-                sub_summaries.push(format!("### 子任务 {} ❌\n执行失败: {}", idx + 1, sub_result.summary));
+                sub_summaries.push(format!("### Sub-task {} ❌\nExecution failed: {}", idx + 1, sub_result.summary));
             }
         }
 
         self.emit_sa_thought(task_iri,
-            &format!("递归子循环完成 (depth {}/{})", current_depth, max_depth),
+            &format!("Recursive sub-cycle complete (depth {}/{})", current_depth, max_depth),
             "recursive_sub_cycle_end").await;
         Ok(sub_summaries.join("\n\n"))
         })
@@ -2259,27 +2245,27 @@ impl SupervisorAgent {
         task_iri: &str,
     ) -> Result<(), CoreError> {
         if !plan.should_interrupt {
-            warn!(actions = ?plan.actions, "非中断性干预建议，仅记录");
+            warn!(actions = ?plan.actions, "Non-interruptive intervention advice, logging only");
             return Ok(());
         }
 
-        warn!(actions = ?plan.actions, "执行干预计划");
+        warn!(actions = ?plan.actions, "Executing intervention plan");
 
-        // 1. LLM 分类决策：将事件映射到预定义动作
+        // 1. LLM classification: map event to predefined action
         let (action, params) = self.analyze_anomaly_with_llm(&plan, task_iri).await
             .unwrap_or_else(|e| {
-                warn!(error = %e, "LLM 分类决策失败，使用默认 ContinueWithMonitor");
+                warn!(error = %e, "LLM classification failed, falling back to ContinueWithMonitor");
                 (InterventionAction::ContinueWithMonitor, ActionParams::default())
             });
 
-        info!(action = ?action, "LLM 分类决策结果");
+        info!(action = ?action, "LLM classification result");
 
-        // 2. IncreaseBudget 特殊处理：需要人工确认
+        // 2. IncreaseBudget special handling: needs human confirmation
         if matches!(action, InterventionAction::IncreaseBudget { .. }) {
-            info!("IncreaseBudget 需要人工确认");
+            info!("IncreaseBudget needs human confirmation");
             let approved = self.request_human_approval(&action, task_iri).await?;
             if !approved {
-                info!("IncreaseBudget 未获人工确认，降级为 FreezeAndReport");
+                info!("IncreaseBudget not confirmed by human, downgraded to FreezeAndReport");
                 let fallback_action = InterventionAction::FreezeAndReport;
                 if let Some(handler) = get_action_handler(&fallback_action) {
                     return handler(self, ActionParams::default(), task_iri).await;
@@ -2288,21 +2274,21 @@ impl SupervisorAgent {
             }
         }
 
-        // 3. 注册表分发：查找并执行动作 handler
+        // 3. Registry dispatch: find and execute action handler
         let handler = get_action_handler(&action)
             .ok_or_else(|| CoreError::Internal {
                 message: format!("Unknown action handler for: {:?}", action),
             })?;
         handler(self, params, task_iri).await?;
 
-        // 4. 发射干预执行事件
+        // 4. Emit intervention execution event
         self.event_bus.emit(task_iri, "INTERVENTION_EXECUTED", "SA",
             &serde_json::json!({"action": format!("{:?}", action)}).to_string()).await;
 
         Ok(())
     }
 
-    /// LLM 分类决策：将干预计划映射到预定义动作
+    /// LLM classification: map intervention plan to predefined action
     async fn analyze_anomaly_with_llm(
         &self,
         plan: &crate::perception::proactive_engine::InterventionPlan,
@@ -2311,55 +2297,55 @@ impl SupervisorAgent {
         use crate::gateway::unified_gateway::ChatMessage;
 
         let prompt = format!(
-            r#"你是一个异常诊断专家。根据以下干预计划，从预定义动作中选择最合适的动作。
+            r#"You are an anomaly diagnosis expert. Based on the following intervention plan, select the most appropriate action from the predefined actions.
 
-## 当前干预计划
-- 诊断: {}
-- 建议动作: {}
-- 优先级: {}
-- 是否中断: {}
+## Current Intervention Plan
+- Diagnosis: {}
+- Suggested action: {}
+- Priority: {}
+- Is interrupt: {}
 
-## 预定义动作列表（请严格从以下选择 ONE 个最合适的动作）
+## Predefined Action List (strictly select ONE most appropriate action)
 
-### 1. 正常继续（无需中断）
-- Continue: 不做干预，继续执行
-- ContinueWithMonitor: 继续执行但加强监控
+### 1. Normal Continuation (no interrupt needed)
+- Continue: Do nothing, continue execution
+- ContinueWithMonitor: Continue execution but with enhanced monitoring
 
-### 2. 参数调整（无需中断）
-- IncreaseRetry: 增加重试次数
-- IncreaseTimeout: 增加超时时间
-- ReduceComplexity: 降低复杂度预期
-- RestrictTools: 限制可用工具集
+### 2. Parameter Tuning (no interrupt needed)
+- IncreaseRetry: Increase retry count
+- IncreaseTimeout: Increase timeout
+- ReduceComplexity: Reduce complexity expectation
+- RestrictTools: Restrict available tool set
 
-### 3. 执行流调整（需要中断）
-- SkipStep: 跳过当前步骤
-- RetryStep: 重试当前步骤
-- Parallelize: 并行化执行
-- SplitStep: 拆分为多个子步骤
-- InsertExtraStep: 插入额外的验证/修复步骤
+### 3. Execution Flow Adjustment (interrupt needed)
+- SkipStep: Skip current step
+- RetryStep: Retry current step
+- Parallelize: Parallelize execution
+- SplitStep: Split into multiple sub-steps
+- InsertExtraStep: Insert additional verification/fix steps
 
-### 4. 资源与模式切换（需要中断）
-- FallbackToShallow: 回退到浅层模式
-- EmergencyMode: 进入紧急模式
-- FreezeAndReport: 冻结状态并生成报告
+### 4. Resource & Mode Switch (interrupt needed)
+- FallbackToShallow: Fallback to shallow mode
+- EmergencyMode: Enter emergency mode
+- FreezeAndReport: Freeze state and generate report
 
-### 5. 终止与升级（需要中断）
-- AbortTask: 终止当前任务
-- NotifyHuman: 通知人工介入
+### 5. Termination & Escalation (interrupt needed)
+- AbortTask: Abort current task
+- NotifyHuman: Notify human intervention
 
-## 输出要求
-请以 JSON 格式输出，仅包含以下字段：
+## Output Requirements
+Output only JSON with the following fields:
 {{
-  "action": "选中的动作名",
-  "params": {{ /* 动作参数 */ }},
-  "reasoning": "选择该动作的原因"
+  "action": "Selected action name",
+  "params": {{ /* Action parameters */ }},
+  "reasoning": "Reason for selecting this action"
 }}
 
-注意：
-1. 只输出 JSON，不要额外内容
-2. action 必须从以上列表中严格选择
-3. IncreaseBudget 需要人工确认，只有确认资源预算不足时才选择
-4. AbortTask 是最后手段，仅在无法恢复时使用"#,
+Notes:
+1. Output only JSON, no extra content
+2. action must be strictly selected from the above list
+3. IncreaseBudget requires human confirmation, only select when resource budget is truly insufficient
+4. AbortTask is the last resort, only use when unrecoverable"#,
             plan.diagnosis,
             plan.actions.join(", "),
             plan.priority,
@@ -2417,7 +2403,7 @@ impl SupervisorAgent {
         Ok((action, parsed.params))
     }
 
-    /// IncreaseBudget 人工确认流程
+    /// IncreaseBudget human confirmation flow
     async fn request_human_approval(
         &self,
         action: &InterventionAction,
@@ -2433,7 +2419,7 @@ impl SupervisorAgent {
                     "additional_time_secs": additional_time_secs,
                     "task_iri": task_iri,
                     "message": format!(
-                        "需要人工确认: 是否增加 Token 预算 {} tokens, 额外时间 {} 秒?",
+                        "Human confirmation needed: Increase Token budget by {} tokens, additional time {} seconds?",
                         additional_tokens, additional_time_secs
                     ),
                     "status": "pending",
@@ -2450,17 +2436,17 @@ impl SupervisorAgent {
             EventPriority::High,
         ).await;
 
-        info!(request_id = %request_id, "等待人工确认");
+        info!(request_id = %request_id, "Waiting for human confirmation");
 
         let iri = format!("iri://approval/{}", request_id);
         let _ = self.runner.l0_store.store(&iri, &details.to_string());
 
-        // 非阻塞等待：将待确认请求注册到 pending_approvals
-        // 外部系统通过 EventBus 的 HUMAN_APPROVAL_RESULT 事件返回确认结果
-        // SA 在 process_task 主循环中检查该事件并更新 pending_approvals
+        // Non-blocking wait: register pending approval request
+        // External systems return confirmation via EventBus HUMAN_APPROVAL_RESULT event
+        // SA checks the event and updates pending_approvals in the process_task main loop
         self.pending_approvals.lock().await.insert(request_id.clone(), false);
 
-        // 等待一小段时间检查是否有即时审批结果
+        // Wait briefly for any instant approval result
         let mut receiver = self.event_bus.subscribe();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         while tokio::time::Instant::now() < deadline {
@@ -2478,11 +2464,11 @@ impl SupervisorAgent {
             }
         }
 
-        info!(request_id = %request_id, "人工确认等待超时（5s），任务继续，等待异步确认");
+        info!(request_id = %request_id, "Human confirmation wait timed out (5s), task continuing, waiting for async confirmation");
         Ok(false)
     }
 
-    /// 通用人工审批请求（用于 HumanApprovalNode 工作流节点）
+    /// General human approval request (for HumanApprovalNode workflow nodes)
     async fn request_human_approval_general(
         &self,
         prompt: &str,
@@ -2507,14 +2493,14 @@ impl SupervisorAgent {
             EventPriority::High,
         ).await;
 
-        info!(request_id = %request_id, node_id = %node_id, "HumanApprovalNode: 等待人工确认");
+        info!(request_id = %request_id, node_id = %node_id, "HumanApprovalNode: waiting for human confirmation");
 
         let iri = format!("iri://approval/{}", request_id);
         let _ = self.runner.l0_store.store(&iri, &details.to_string());
 
         self.pending_approvals.lock().await.insert(request_id.clone(), false);
 
-        // 等待一小段时间检查是否有即时审批结果
+        // Wait briefly for any instant approval result
         let mut receiver = self.event_bus.subscribe();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         while tokio::time::Instant::now() < deadline {
@@ -2533,25 +2519,25 @@ impl SupervisorAgent {
             }
         }
 
-        info!(request_id = %request_id, "HumanApprovalNode: 等待超时（5s），任务继续，等待异步确认");
-        // 超时后默认不阻塞流程——标记为未审批，走拒绝逻辑
+        info!(request_id = %request_id, "HumanApprovalNode: wait timed out (5s), task continuing, waiting for async confirmation");
+        // After timeout, do not block by default — mark as unapproved, follow reject logic
         Ok(HumanApprovalNodeResult {
             node_id: node_id.to_string(),
             approved: false,
-            comment: Some("审批超时，默认拒绝".to_string()),
+            comment: Some("Approval timeout, default rejected".to_string()),
         })
     }
 
-    /// 将用户补充输入加入队列，等待 SA 处理
+    /// Enqueue user supplementary input, waiting for SA processing
     pub fn enqueue_supplementary_input(&mut self, task_iri: &str, content: &str) {
         self.supplementary_inputs
             .entry(task_iri.to_string())
             .or_default()
             .push((content.to_string(), "pending".to_string()));
-        info!(task_iri = %task_iri, "用户补充输入已入队");
+        info!(task_iri = %task_iri, "User supplementary input enqueued");
     }
 
-    /// 在 execute_plan 步骤间检查和执行补充输入
+    /// Check and execute supplementary inputs between execute_plan steps
     async fn check_and_process_supplementary_inputs(
         &mut self,
         task_iri: &str,
@@ -2602,7 +2588,7 @@ impl SupervisorAgent {
             self.enqueue_supplementary_input(task_iri, &payload);
         }
 
-        // 2. 收集待处理的补充输入（避免借用冲突）
+        // 2. Collect pending supplementary inputs (avoid borrow conflicts)
         let pending = {
             let inputs = self.supplementary_inputs.get_mut(task_iri);
             inputs.map(|list| {
@@ -2617,22 +2603,22 @@ impl SupervisorAgent {
             return Ok(());
         }
 
-        // 3. 逐个处理补充输入
+        // 3. Process supplementary inputs one by one
         for supplement in &pending {
-            let context = format!("当前步骤: {:?} - {}", step_role, step_objective);
+            let context = format!("Current step: {:?} - {}", step_role, step_objective);
             match self.classify_supplementary_input_with_llm(supplement, &context).await {
                 Ok((action, params)) => {
-                    info!(action = ?action, "补充输入分类结果");
+                    info!(action = ?action, "Supplementary input classification result");
                     self.execute_supplementary_action(action, params, task_iri, supplement).await?;
                 }
                 Err(e) => {
-                    warn!(error = %e, supplement = %supplement, "补充输入分类失败，默认注入上下文");
+                    warn!(error = %e, supplement = %supplement, "Supplementary input classification failed, defaulting to context injection");
                     self.inject_to_current_agent(task_iri, supplement).await;
                 }
             }
         }
 
-        // 4. 标记为已处理
+        // 4. Mark as processed
         if let Some(input_list) = self.supplementary_inputs.get_mut(task_iri) {
             for item in input_list.iter_mut() {
                 item.1 = "processed".to_string();
@@ -2642,7 +2628,7 @@ impl SupervisorAgent {
         Ok(())
     }
 
-    /// LLM 分类决策：将用户补充输入映射到预定义动作
+    /// LLM classification: map user supplementary input to predefined action
     async fn classify_supplementary_input_with_llm(
         &self,
         user_supplement: &str,
@@ -2651,49 +2637,49 @@ impl SupervisorAgent {
         use crate::gateway::unified_gateway::ChatMessage;
 
         let prompt = format!(
-            r#"你是一个任务引导专家。根据用户的补充输入，从以下预定义动作中选择最合适的动作。
+            r#"You are a task guidance expert. Based on the user's supplementary input, select the most appropriate action from the predefined actions.
 
-## 当前任务上下文
+## Current Task Context
 {}
 
-## 用户补充输入
+## User Supplementary Input
 {}
 
-## 预定义动作列表（请严格选择 ONE 个）
+## Predefined Action List (strictly select ONE)
 
-### 1. 信息补充
-- AddContext: 用户提供额外上下文/信息
-- RefineObjective: 用户细化或调整目标
-- ProvideConstraint: 用户提供新的约束条件，如时间限制
+### 1. Information Supplement
+- AddContext: User provides additional context/information
+- RefineObjective: User refines or adjusts goals
+- ProvideConstraint: User provides new constraints, e.g., time limits
 
-### 2. 方向引导
-- GuideDirection: 用户指示执行方向/重点
-- PrioritizeStep: 用户指定某步骤应优先处理
-- SuggestApproach: 用户建议具体方法或方案
+### 2. Direction Guidance
+- GuideDirection: User indicates execution direction/priority
+- PrioritizeStep: User specifies a step to prioritize
+- SuggestApproach: User suggests a specific method or approach
 
-### 3. 执行控制
-- PauseExecution: 用户请求暂停当前执行
-- ResumeExecution: 用户请求恢复执行
-- SkipCurrentStep: 用户要求跳过当前步骤
+### 3. Execution Control
+- PauseExecution: User requests to pause current execution
+- ResumeExecution: User requests to resume execution
+- SkipCurrentStep: User requests to skip the current step
 
-### 4. 反馈纠正
-- ConfirmDirection: 用户确认当前方向正确
-- CorrectApproach: 用户指出错误并纠正方向
-- AbortCurrentStep: 用户要求中止当前步骤
+### 4. Feedback & Correction
+- ConfirmDirection: User confirms the current direction is correct
+- CorrectApproach: User points out errors and corrects direction
+- AbortCurrentStep: User requests to abort the current step
 
-## 输出要求
-请以 JSON 格式输出，仅包含以下字段：
+## Output Requirements
+Output only JSON with the following fields:
 {{
-  "action": "选中的动作名",
-  "params": {{ /* 动作参数，不同动作不同 */ }},
-  "reasoning": "选择该动作的原因"
+  "action": "Selected action name",
+  "params": {{ /* Action parameters, varies per action */ }},
+  "reasoning": "Reason for selecting this action"
 }}
 
-注意：
-1. 只输出 JSON，不要额外内容
-2. action 必须从以上列表中严格选择
-3. 如果用户只是补充信息而非指示，选择 AddContext
-4. 只有用户明确要求中止或跳过时才选择 AbortCurrentStep 或 SkipCurrentStep"#,
+Notes:
+1. Output only JSON, no extra content
+2. action must be strictly selected from the above list
+3. If the user is supplementing information rather than giving instructions, select AddContext
+4. Only select AbortCurrentStep or SkipCurrentStep if the user explicitly requests abort or skip"#,
             task_context,
             user_supplement,
         );
@@ -2741,7 +2727,7 @@ impl SupervisorAgent {
         Ok((action, parsed.params))
     }
 
-    /// 执行补充输入动作
+    /// Execute supplementary input action
     async fn execute_supplementary_action(
         &mut self,
         action: SupplementaryInputAction,
@@ -2755,7 +2741,7 @@ impl SupervisorAgent {
             | SupplementaryInputAction::ConfirmDirection
             | SupplementaryInputAction::CorrectApproach
             | SupplementaryInputAction::SuggestApproach => {
-                // 1. 计算 embedding 和 relevance_score
+                // 1. Calculate embedding and relevance_score
                 let embedding = if let Some(ref embedder) = self.embedder {
                     embedder.embed(supplement).await.ok()
                 } else {
@@ -2765,34 +2751,34 @@ impl SupervisorAgent {
                     .map(|emb| self.relevance_tracker.on_new_input(emb))
                     .unwrap_or(0.5);
 
-                // 2. 存入 SupplementaryInputStore（AgentRunner 在 CycleStart 消费）
+                // 2. Store in SupplementaryInputStore (consumed by AgentRunner at CycleStart)
                 self.supplement_store.store(task_iri, supplement, embedding, relevance_score);
                 info!(
                     task_iri = %task_iri,
                     score = relevance_score,
-                    "补充输入已存入 SupplementaryInputStore"
+                    "Supplementary input stored in SupplementaryInputStore"
                 );
 
-                // 3. 保持向后兼容：emit SUPPLEMENTARY_CONTEXT 事件（TUI 渲染用）
+                // 3. Backward compatibility: emit SUPPLEMENTARY_CONTEXT event (for TUI rendering)
                 self.inject_to_current_agent(task_iri, supplement).await;
             }
             SupplementaryInputAction::RefineObjective => {
-                info!("补充输入: 细化目标");
+                info!("Supplementary input: refine objective");
                 self.event_bus.emit(task_iri, "OBJECTIVE_REFINED", "SA",
                     &serde_json::json!({"refinement": supplement}).to_string()).await;
             }
             SupplementaryInputAction::ProvideConstraint => {
-                info!("补充输入: 提供约束");
+                info!("Supplementary input: provide constraint");
                 self.event_bus.emit(task_iri, "CONSTRAINT_ADDED", "SA",
                     &serde_json::json!({"constraint": supplement}).to_string()).await;
             }
             SupplementaryInputAction::PrioritizeStep => {
-                info!("补充输入: 指定优先步骤");
+                info!("Supplementary input: prioritize step");
                 self.event_bus.emit(task_iri, "STEP_PRIORITIZED", "SA",
                     &serde_json::json!({"priority": supplement}).to_string()).await;
             }
             SupplementaryInputAction::PauseExecution => {
-                warn!("补充输入: 暂停执行");
+                warn!("Supplementary input: pause execution");
                 if let Some(cycle) = self.active_cycles.values_mut()
                     .find(|c| c.task_iri == task_iri)
                 {
@@ -2803,7 +2789,7 @@ impl SupervisorAgent {
                     &serde_json::json!({"reason": supplement}).to_string()).await;
             }
             SupplementaryInputAction::ResumeExecution => {
-                info!("补充输入: 恢复执行");
+                info!("Supplementary input: resume execution");
                 if let Some(cycle) = self.active_cycles.values_mut()
                     .find(|c| c.task_iri == task_iri)
                 {
@@ -2814,12 +2800,12 @@ impl SupervisorAgent {
                     &serde_json::json!({"reason": supplement}).to_string()).await;
             }
             SupplementaryInputAction::SkipCurrentStep => {
-                info!("补充输入: 跳过当前步骤");
+                info!("Supplementary input: skip current step");
                 self.event_bus.emit(task_iri, "STEP_SKIPPED", "SA",
                     &serde_json::json!({"reason": supplement}).to_string()).await;
             }
             SupplementaryInputAction::AbortCurrentStep => {
-                warn!("补充输入: 中止当前步骤");
+                warn!("Supplementary input: abort current step");
                 self.event_bus.emit(task_iri, "STEP_ABORTED", "SA",
                     &serde_json::json!({"reason": supplement}).to_string()).await;
             }
@@ -2827,9 +2813,9 @@ impl SupervisorAgent {
         Ok(())
     }
 
-    /// 将补充内容注入到当前 Agent 的上下文中
+    /// Inject supplementary content into current Agent context
     async fn inject_to_current_agent(&self, task_iri: &str, supplement: &str) {
-        info!(task_iri = %task_iri, "注入补充上下文到当前 Agent");
+        info!(task_iri = %task_iri, "Injecting supplementary context into current Agent");
         self.event_bus.emit(task_iri, "SUPPLEMENTARY_CONTEXT", "SA",
             &serde_json::json!({
                 "supplement": supplement,
@@ -2888,7 +2874,7 @@ impl SupervisorAgent {
         (user_id, tenant_id)
     }
 
-    /// 带自定义 TaskContext 的任务处理，支持 resume 模式
+    /// Process task with custom TaskContext, supports resume mode
     #[instrument(skip(self, user_input, ctx), fields(task_iri = %task_iri))]
     pub async fn process_task_with_context(
         &mut self,
@@ -2902,7 +2888,7 @@ impl SupervisorAgent {
         let task_id = task_iri.strip_prefix("iri://task/").unwrap_or_else(|| task_iri.strip_prefix("iri://").unwrap_or(task_iri));
         let five_w2h_iri = format!("iri://task/{}/5w2h", task_id);
 
-        // A3: 从 5W2H 计算 task_embedding → 设置到 relevance_tracker
+        // A3: Calculate task_embedding from 5W2H → set to relevance_tracker
         if let Some(ref embedder) = self.embedder {
             let task_text = format!("{}\n{}", five_w2h.what, five_w2h.why.description);
             if let Ok(task_emb) = embedder.embed(&task_text).await {
@@ -2910,7 +2896,7 @@ impl SupervisorAgent {
             }
         }
 
-        // 注入当前工作目录作为执行环境，使 LLM 知道在哪里创建文件
+        // Inject current working directory as execution environment, so LLM knows where to create files
         if five_w2h.where_.as_ref().and_then(|w| w.execution_environment.as_ref()).is_none() {
             if let Ok(cwd) = std::env::current_dir() {
                 let cwd_str = cwd.to_string_lossy().to_string();
@@ -2927,7 +2913,7 @@ impl SupervisorAgent {
             let cfg = crate::CoreConfig::default();
             if let Some(ref bb) = self.blackboard {
                 if bb.write_node(&five_w2h_iri, &json_ld.to_string(), &cfg).is_ok() {
-                    tracing::debug!(five_w2h_iri = %five_w2h_iri, "5W2H 写入黑板");
+                    tracing::debug!(five_w2h_iri = %five_w2h_iri, "5W2H written to blackboard");
                     let route = self.type_router.get_route("task:5W2H");
                     if let Some(route) = route {
                         for event in &route.events {
@@ -2936,26 +2922,26 @@ impl SupervisorAgent {
                     }
                 }
             }
-            tracing::info!(task_iri = %task_iri, what = %five_w2h.what, "5W2H 初始化完成");
+            tracing::info!(task_iri = %task_iri, what = %five_w2h.what, "5W2H initialization complete");
         }
 
         let perception_hints = self.perception.on_task_start(user_input, task_iri)
             .map(|a| a.relevant_experience_hints)
             .unwrap_or_default();
 
-        // 统一执行路径：从 JSON-LD 工作流或 LLM 构建 ExecutionPlan
+        // Unified execution path: build ExecutionPlan from JSON-LD workflow or LLM
         let plan = if let Some(ref wf_jsonld) = ctx.workflow_jsonld {
-            info!(task_iri = %task_iri, "使用 JSON-LD 工作流模式 — 通过 adapter 转换为 ExecutionPlan");
-            // 外部工作流：通过 DAG → ExecutionPlan 统一路径
+            info!(task_iri = %task_iri, "Using JSON-LD workflow mode — converting through adapter to ExecutionPlan");
+            // External workflow: unified path through DAG → ExecutionPlan
             let def = crate::core::workflow::loader::load_workflow_jsonld(wf_jsonld)
-                .map_err(|e| CoreError::Internal { message: format!("工作流解析失败: {}", e) })?;
+                .map_err(|e| CoreError::Internal { message: format!("Workflow parsing failed: {}", e) })?;
             let dag = crate::core::workflow::loader::build_dag(&def)
-                .map_err(|e| CoreError::Internal { message: format!("DAG 构建失败: {}", e) })?;
+                .map_err(|e| CoreError::Internal { message: format!("DAG build failed: {}", e) })?;
             let mut plan = crate::core::workflow::adapter::dag_to_execution_plan(&dag, &def, task_iri);
             plan.dag_jsonld = Some(wf_jsonld.clone());
             plan
         } else if ctx.resumed_messages.is_some() {
-            // Resume 模式：跳过完整分析，创建从中断阶段继续的计划
+            // Resume mode: skip full analysis, create plan continuing from interrupted phase
             self.build_resume_plan()
         } else {
             self.analyze_task_with_llm(user_input, &five_w2h, &perception_hints).await
@@ -2986,7 +2972,7 @@ impl SupervisorAgent {
                         }
                     }
                     "DEADLINE_APPROACHING" => {
-                        warn!("截止时间临近，标记任务紧急");
+                        warn!("Deadline approaching, marking task as urgent");
                     }
                     "HUMAN_APPROVAL_RESULT" => {
                         if let Ok(result) = serde_json::from_str::<serde_json::Value>(&event.payload) {
@@ -2994,7 +2980,7 @@ impl SupervisorAgent {
                             let approved = result.get("approved").and_then(|v| v.as_bool()).unwrap_or(false);
                             if !request_id.is_empty() {
                                 self.pending_approvals.lock().await.insert(request_id.to_string(), approved);
-                                info!(request_id = %request_id, approved = %approved, "收到人工确认结果");
+                                info!(request_id = %request_id, approved = %approved, "Received human approval result");
                             }
                         }
                     }
@@ -3152,12 +3138,12 @@ impl SupervisorAgent {
             return String::new();
         }
 
-        let mut experience_section = String::from("\n## 📚 历史经验参考（相似任务）\n");
-        experience_section.push_str("以下历史任务与当前任务相似，仅供参考：\n\n");
+        let mut experience_section = String::from("\n## Historical Experience Reference (Similar Tasks)\n");
+        experience_section.push_str("The following historical tasks are similar to the current task, for reference only:\n\n");
 
         for (i, (iri, w2h, score)) in similar.iter().enumerate() {
             experience_section.push_str(&format!(
-                "### 相似任务 {} (相似度: {:.0}%)\n",
+                "### Similar Task {} (Similarity: {:.0}%)\n",
                 i + 1,
                 score * 100.0
             ));
@@ -3165,13 +3151,13 @@ impl SupervisorAgent {
             experience_section.push_str(&format!("- **Why**: {}\n", w2h.why.description));
             if let Some(ref how) = w2h.how {
                 if let Some(ref steps) = how.required_steps {
-                    experience_section.push_str(&format!("- **执行步骤**: {}\n", steps));
+                    experience_section.push_str(&format!("- **Execution Steps**: {}\n", steps));
                 }
             }
-            experience_section.push_str(&format!("- **来源**: {}\n\n", iri));
+            experience_section.push_str(&format!("- **Source**: {}\n\n", iri));
         }
 
-        experience_section.push_str("**注意**: 历史经验仅供参考，请根据当前任务实际情况调整。\n");
+        experience_section.push_str("**Note**: Historical experience is for reference only. Please adjust based on the actual current task.\n");
         experience_section
     }
 

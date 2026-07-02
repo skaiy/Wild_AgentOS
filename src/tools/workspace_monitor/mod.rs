@@ -141,7 +141,7 @@ impl WorkspaceMonitor {
 
         let event_bus_for_struct = event_bus.clone();
 
-        // WatchEngine — 原生文件监听（inotify 线程，无需 tokio）
+        // WatchEngine — native file watching (inotify thread, no tokio needed)
         let watch_engine = if let Some(eb) = event_bus.clone() {
             let mut watch_config = WatchConfig {
                 debounce_ms: config.debounce_ms,
@@ -168,7 +168,7 @@ impl WorkspaceMonitor {
             None
         };
 
-        // 构建自身
+        // Build self
         let ws = Self {
             config,
             inventory,
@@ -179,8 +179,8 @@ impl WorkspaceMonitor {
             perception_store: RwLock::new(None),
         };
 
-        // 异步消费者需要 tokio runtime，若当前无 runtime 则跳过
-        // （glidingcode 场景：后续由 start_async_components 在 async 上下文中调用）
+        // Async consumer needs tokio runtime; skip if no runtime is available
+        // (glidingcode scenario: deferred to start_async_components in async context)
         if tokio::runtime::Handle::try_current().is_ok() {
             ws.register_event_consumers();
         } else {
@@ -267,33 +267,33 @@ impl WorkspaceMonitor {
                         match EventType::from_str(&event.event_type) {
                             EventType::WorkspaceFileCreated => {
                                 inventory.read().add_or_update(&event.payload);
-                                // 通知感知区域
+                                // Notify perception region
                                 if let Some(ref p) = perception {
                                     let entry = PerceptionEntry::new(
                                         PerceptionSource::WorkspaceMonitor,
-                                        format!("新文件创建: {}", event.payload),
+                                        format!("New file created: {}", event.payload),
                                     ).with_priority(6);
                                     p.store_global(entry);
                                 }
                             }
                             EventType::WorkspaceFileModified => {
                                 inventory.read().mark_stale(&event.payload);
-                                // 通知感知区域
+                                // Notify perception region
                                 if let Some(ref p) = perception {
                                     let entry = PerceptionEntry::new(
                                         PerceptionSource::WorkspaceMonitor,
-                                        format!("文件外部变更: {}", event.payload),
+                                        format!("File externally modified: {}", event.payload),
                                     ).with_priority(6);
                                     p.store_global(entry);
                                 }
                             }
                             EventType::WorkspaceFileRemoved => {
                                 inventory.read().remove(&event.payload);
-                                // 通知感知区域
+                                // Notify perception region
                                 if let Some(ref p) = perception {
                                     let entry = PerceptionEntry::new(
                                         PerceptionSource::WorkspaceMonitor,
-                                        format!("文件已删除: {}", event.payload),
+                                        format!("File deleted: {}", event.payload),
                                     ).with_priority(5);
                                     p.store_global(entry);
                                 }
@@ -357,7 +357,7 @@ impl WorkspaceMonitor {
                                 "stale_warning".to_string(),
                                 serde_json::Value::String(warning.clone()),
                             );
-                            // 同时写入 metadata 以便 ToolGuard pre-injection 将其注入 system prompt
+                            // Also write to metadata so ToolGuard pre-injection includes it in system prompt
                             let injections = ctx.metadata
                                 .entry("guard_pre_injections".to_string())
                                 .or_insert_with(|| serde_json::Value::Array(Vec::new()));
@@ -379,7 +379,7 @@ impl WorkspaceMonitor {
                                 "file_unchanged_hint".to_string(),
                                 serde_json::Value::String(hint.clone()),
                             );
-                            // 同时写入 metadata 以便 ToolGuard pre-injection
+                            // Also write to metadata so ToolGuard pre-injection
                             let injections = ctx.metadata
                                 .entry("guard_pre_injections".to_string())
                                 .or_insert_with(|| serde_json::Value::Array(Vec::new()));
@@ -443,18 +443,28 @@ impl WorkspaceMonitor {
         hook_manager.register(Box::new(write_after_hook));
     }
 
-    /// 设置主动感知存储，使 WorkspaceMonitor 能向 Agent 注入文件状态感知数据
+    /// Set the active perception store, allowing WorkspaceMonitor to inject file state awareness data
     pub fn with_perception_store(self, store: Arc<PerceptionStore>) -> Self {
         *self.perception_store.write() = Some(store);
         self
     }
 
-    /// 在 WorkspaceMonitor 已构造后设置感知存储（用于 Arc<WorkspaceMonitor> 场景）
+    /// Set the perception store after WorkspaceMonitor construction (for Arc<WorkspaceMonitor> scenarios)
     pub fn set_perception_store(&self, store: Arc<PerceptionStore>) {
         *self.perception_store.write() = Some(store);
     }
 
-    /// 生成工作区文件状态摘要文本，用于注入感知区域
+    /// Generate workspace file status summary text for injection into perception region
+    /// Reset the file inventory, clearing all tracked files.
+    /// Called on topic shift to prevent files from previous tasks leaking into new task perception.
+    pub fn reset_inventory(&self) {
+        self.inventory.write().clear_all();
+        let ps = self.perception_store.read();
+        if let Some(ref store) = *ps {
+            store.clear_global();
+        }
+    }
+
     pub fn generate_perception_text(&self) -> Option<String> {
         let inv = self.inventory.read();
         let all = inv.list_all();
@@ -468,12 +478,12 @@ impl WorkspaceMonitor {
         let discovered: Vec<_> = all.iter().filter(|e| e.state == crate::tools::workspace_monitor::FileState::Discovered).collect();
 
         let mut parts = Vec::new();
-        parts.push(format!("共 {} 个文件", total));
+        parts.push(format!("{} files total", total));
 
         if !stale.is_empty() {
             let names: Vec<&str> = stale.iter().take(5).map(|e| e.path.as_str()).collect();
             parts.push(format!(
-                "{} 个有外部变更{}",
+                "{} externally modified{}",
                 stale.len(),
                 if names.is_empty() { String::new() } else {
                     format!(": {}", names.join(", "))
@@ -484,7 +494,7 @@ impl WorkspaceMonitor {
         if !written_unread.is_empty() {
             let names: Vec<&str> = written_unread.iter().take(5).map(|e| e.path.as_str()).collect();
             parts.push(format!(
-                "{} 个已写入未重新读取{}",
+                "{} written but not re-read{}",
                 written_unread.len(),
                 if names.is_empty() { String::new() } else {
                     format!(": {}", names.join(", "))
@@ -493,18 +503,18 @@ impl WorkspaceMonitor {
         }
 
         if !discovered.is_empty() {
-            parts.push(format!("{} 个新发现未读取", discovered.len()));
+            parts.push(format!("{} new discovered files unread", discovered.len()));
         }
 
         let summary = format!("{} | {}", total, parts.join(" | "));
-        let guidance = "\n\n提示：只读取与你当前任务相关的文件，无关文件应直接忽略。\
-            \n\"已写入未重新读取\"的文件是其他Agent的输出物，仅在你需要参考其内容时才读取，不需要全部确认。\
-            \n\"有外部变更\"的文件是已读取过但被外部改写的文件，仅在必要时重新读取。\
-            \ncache_hit(from_cache=true)表示文件内容在本轮未变化且之前已提供过——跳过重读，用已有内容继续工作。".to_string();
+        let guidance = "\n\nHint: Only read files relevant to your current task; ignore unrelated files directly.\
+            \n\"Written but not re-read\" files are outputs from other agents — only read them when you need to reference their content; no need to confirm all of them.\
+            \n\"Externally modified\" files are those that have been read but rewritten externally — only re-read when necessary.\
+            \ncache_hit(from_cache=true) means file content hasn't changed this round and was already provided earlier — skip re-reading and continue with existing content.".to_string();
         Some(format!("{}{}", summary, guidance))
     }
 
-    /// 向 PerceptionStore 写入当前文件状态的感知摘要
+    /// Write current file status perception summary to PerceptionStore
     pub fn inject_file_perception(&self) {
         let ps = self.perception_store.read();
         if let Some(ref store) = *ps {
@@ -898,7 +908,7 @@ mod tests {
 
         assert!(ps.has_new("iri://test_task"), "PerceptionStore should have new entry after create event");
         let text = ps.take_perception_text("iri://test_task");
-        assert!(text.contains("新文件"), "Perception text should mention file creation: {}", text);
+        assert!(text.contains("New file"), "Perception text should mention file creation: {}", text);
     }
 
     #[tokio::test]
@@ -935,7 +945,7 @@ mod tests {
 
         assert!(ps.has_new("iri://test_task"), "PerceptionStore should have new entry after modify event");
         let text = ps.take_perception_text("iri://test_task");
-        assert!(text.contains("外部变更"), "Perception text should mention external change: {}", text);
+        assert!(text.contains("externally modified"), "Perception text should mention external change: {}", text);
     }
 
     #[tokio::test]
@@ -971,7 +981,7 @@ mod tests {
 
         assert!(ps.has_new("iri://test_task"), "PerceptionStore should have new entry after remove event");
         let text = ps.take_perception_text("iri://test_task");
-        assert!(text.contains("已删除"), "Perception text should mention file removal: {}", text);
+        assert!(text.contains("File deleted"), "Perception text should mention file removal: {}", text);
     }
 
     #[test]
@@ -1050,7 +1060,7 @@ mod tests {
         let text = ws.generate_perception_text();
         assert!(text.is_some(), "Should generate perception text");
         let t = text.unwrap();
-        assert!(t.contains("共"), "Should mention total file count: {}", t);
+        assert!(t.contains("files total"), "Should mention total file count: {}", t);
     }
 
     #[test]
@@ -1115,7 +1125,7 @@ mod tests {
         // take perception text
         let text1 = ps.take_perception_text("iri://task_full");
         assert!(!text1.is_empty(), "Perception should be available after create event");
-        assert!(text1.contains("新文件"), "Should mention new file: {}", text1);
+        assert!(text1.contains("New file"), "Should mention new file: {}", text1);
 
         // Second take should be empty (consumed)
         let text2 = ps.take_perception_text("iri://task_full");

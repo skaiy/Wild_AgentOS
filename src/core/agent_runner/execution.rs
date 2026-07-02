@@ -106,7 +106,7 @@ impl super::AgentRunner {
             ctx.tenant_id.as_deref(),
         );
 
-        // 计算任务 embedding，用于语义相关度淘汰
+        // Compute task embedding for semantic relevance pruning
         if let Some(ref embedder) = self.embedder {
             if let Ok(task_emb) = embedder.embed(&ctx.objective).await {
                 session.set_task_embedding(task_emb.clone());
@@ -199,7 +199,7 @@ impl super::AgentRunner {
         result
     }
 
-    /// 使用独立的 BizAgent 实例执行任务（Agent 隔离）
+    /// Execute task using an independent BizAgent instance (Agent isolation)
     pub async fn execute_with_biz_agent(
         &self,
         agent: &AgentInstance,
@@ -221,18 +221,18 @@ impl super::AgentRunner {
                 .await;
         }
 
-        // 构建独立的 agent.md
+        // Build independent agent.md
+        let context_data = self.gather_context_data_async(agent.role, &ctx).await;
         let agent_md = if let Some(ref step) = plan_step {
-            self.build_agent_md_from_step(agent.role, step)
+            self.build_agent_md_from_step(agent.role, step, &context_data)
         } else {
-            let context_data = self.gather_context_data_async(agent.role, &ctx).await;
             let model = self
                 .gateway
                 .get_model(&agent.role.to_string().to_lowercase());
             self.build_agent_md(agent.role, &ctx.objective, &context_data, &model)
         };
 
-        // 创建 BizAgent 配置
+        // Create BizAgent configuration
         let config = AgentConfig {
             orchestrator_mode: false,
             max_sub_agents: 5,
@@ -240,7 +240,7 @@ impl super::AgentRunner {
             parallel_sub_agents: true,
         };
 
-        // 创建独立的 BizAgent 实例
+        // Create independent BizAgent instance
         let mut biz_agent = BizAgent::new(
             agent.agent_id.clone(),
             agent.role,
@@ -307,7 +307,7 @@ impl super::AgentRunner {
             });
         }
 
-        // 执行 BizAgent（隔离环境）
+        // Execute BizAgent (isolated environment)
         let result = biz_agent.execute(ctx.clone()).await;
 
         // TaskEnd hook
@@ -347,15 +347,15 @@ impl super::AgentRunner {
         Ok(result)
     }
 
-    /// 在 force-finish 场景下，从 messages 中提取工具结果调用 LLM 做最终聚合摘要。
-    /// 返回 (summary, full_content)，若无可聚合工具结果或 LLM 失败则返回 None。
+    /// In force-finish scenarios, extract tool results from messages and call LLM for final aggregated summary.
+    /// Returns (summary, full_content), or None if no tool results are aggregatable or LLM fails.
     async fn aggregate_tool_results(
         &self,
         messages: &[ChatMessage],
         agent: &AgentInstance,
         ctx: &TaskContext,
     ) -> Option<(String, String)> {
-        // 提取工具调用的 assistant 消息（含 tool_calls）和对应的 tool 结果
+        // Extract assistant messages with tool_calls and corresponding tool results
         let tool_entries: Vec<(String, String)> = messages
             .windows(2)
             .filter_map(|w| {
@@ -380,30 +380,30 @@ impl super::AgentRunner {
             .iter()
             .map(|(name, result)| {
                 let truncated = if result.len() > 2000 {
-                    format!("{}...（已截断，原始{}字符）", &result[..2000], result.len())
+                    format!("{}...\n[truncated, original {} chars]", &result[..2000], result.len())
                 } else {
                     result.clone()
                 };
-                format!("## 工具: {}\n{}", name, truncated)
+                format!("## Tool: {}\n{}", name, truncated)
             })
             .collect();
 
         let prompt = format!(
-            r#"你是一个 AI 助手。以下是你执行任务过程中的全部工具调用结果，请基于这些结果生成一份完整的总结报告。
+            r#"You are an AI assistant. Below are all tool call results from your task execution. Please generate a complete summary report based on these results.
 
-## 原始任务目标
+## Original Task Objective
 {}
 
-## 工具调用记录与结果
+## Tool Call Records and Results
 {}
 
-## 输出要求
-1. 总结任务完成情况
-2. 列出关键发现和结果
-3. 给出最终结论
-4. 如果上述结果不足以完成完整报告，请基于已有信息做出最大程度的总结
+## Output Requirements
+1. Summarize task completion status
+2. List key findings and results
+3. Provide final conclusions
+4. If the above results are insufficient for a complete report, produce the best summary possible based on available information
 
-请直接输出总结报告内容，不要输出 JSON 格式。"#,
+Output the summary report directly, not in JSON format."#,
             ctx.objective,
             prompt_parts.join("\n\n"),
         );
@@ -429,11 +429,11 @@ impl super::AgentRunner {
                         }
                     }
                 }
-                warn!("[force-finish] LLM 聚合返回空内容");
+                warn!("[force-finish] LLM aggregation returned empty content");
                 None
             }
             Err(e) => {
-                warn!("[force-finish] LLM 聚合调用失败: {}", e);
+                warn!("[force-finish] LLM aggregation call failed: {}", e);
                 None
             }
         }
@@ -454,56 +454,56 @@ impl super::AgentRunner {
         let context_data = self.gather_context_data_async(agent.role, &ctx).await;
         let agent_md = self.build_agent_md(agent.role, &ctx.objective, &context_data, &model);
 
-        // 使用 SystemPromptBuilder 构建系统提示词
+        // Build system prompt using SystemPromptBuilder
         let mut prompt_builder = SystemPromptBuilder::new();
 
-        // Region 1: 角色定义区
+        // Region 1: Role definition area
         prompt_builder.set_region(SystemPromptRegion::RoleDefinition, agent_md.clone());
 
-        // Region 1.5: 工作区环境信息区（让 Agent 知道自己的工作区边界）
+        // Region 1.5: Workspace environment info area (let Agent know its workspace boundaries)
         if let Some(ref ws_root) = self.workspace_root {
             let env_info = format!(
-                "## 工作区\n\n- 工作区路径: {}\n\
-                 - 你的所有文件操作（读取、写入、搜索、命令执行）应限于工作区内\n\
-                 - 工作区外的文件与当前任务无关，不应访问\n\
-                 - 工作区根目录下可能存在与当前任务无关的其他目录和文件，请注意区分",
+                "## Workspace\n\n- Workspace path: {}\n\
+                 - All file operations (read, write, search, command execution) must stay within the workspace\n\
+                 - Files outside the workspace are unrelated to the current task and must not be accessed\n\
+                 - The workspace root may contain other directories and files unrelated to the current task — distinguish carefully",
                 ws_root.display()
             );
             prompt_builder.set_region(SystemPromptRegion::EnvironmentInfo, env_info);
         }
 
-        // Region 2: 行为准则区（宪法层 + 方法论层）
+        // Region 2: Behavioral policy area (constitution layer + methodology layer)
         {
             let mut policy_text = build_constitution_prompt(agent.role);
 
-            policy_text.push_str("\n\n### 🔴 任务专注原则（必须遵守）\n");
-            policy_text.push_str("- 你的唯一任务是当前指定的「当前任务」，工作区中的其他任何目录/文件都与你的任务无关\n");
-            policy_text.push_str("- 对于不相关的文件或目录（如其他项目、测试产出、无关代码库），必须直接忽略，禁止探索或处理\n");
-            policy_text.push_str("- 使用 glob_search、file_list 或类似工具时，如果结果中包含无关内容，必须自动过滤，禁止被其分散注意力\n");
-            policy_text.push_str("- 如果遇到任何不属于当前任务的文件/目录，必须跳过它们，继续执行当前任务，不得因无关内容改变任务方向\n");
-            policy_text.push_str("- 检查Agent(CA) 特别注意：你的审计报告只能包含与当前任务相关的内容，发现无关文件时必须忽略，不得写入报告\n");
-            policy_text.push_str("- 决策Agent(AA) 特别注意：禁止主动探索文件，你的决策必须仅基于 CA 审计结果，忽略审计结果中的任何无关内容\n");
-            policy_text.push_str("\n### 📖 文件读取效率原则（必须遵守）\n");
-            policy_text.push_str("- 只读取与当前任务相关的文件。已完成写入（已写入未重新读取）的文件是其他Agent的输出物，仅在你需要参考其内容时才读取\n");
-            policy_text.push_str("- 不要重复读取同一个文件。如果 file_read 返回 from_cache=true，说明文件内容未变化且之前已提供过——跳过重读，用已有内容继续\n");
-            policy_text.push_str("- 不要因为 file_read 返回 from_cache=true 就尝试 mode:force_refresh，这只会浪费 token 读取不变的内容\n");
-            policy_text.push_str("- 对于已读取过的文件，其内容在你上下文中已存在。不需要再次确认或重新验证\n");
+            policy_text.push_str("\n\n### 🔴 Task Focus Principles (Mandatory)\n");
+            policy_text.push_str("- Your only task is the designated 'Current Task'. All other directories/files in the workspace are unrelated to your task\n");
+            policy_text.push_str("- Irrelevant files or directories (e.g. other projects, test artifacts, unrelated codebases) must be directly ignored — do not explore or process them\n");
+            policy_text.push_str("- When using glob_search, file_list or similar tools, if results contain irrelevant content, automatically filter it out — do not get distracted\n");
+            policy_text.push_str("- If you encounter files/directories not belonging to the current task, skip them and continue executing the current task — do not change direction due to irrelevant content\n");
+            policy_text.push_str("- Check Agent (CA) special note: your audit report may only contain content related to the current task. Irrelevant files found must be ignored and not written into the report\n");
+            policy_text.push_str("- Decision Agent (AA) special note: do NOT proactively explore files. Your decisions must be based solely on CA audit results, ignoring any irrelevant content in the audit\n");
+            policy_text.push_str("\n### 📖 File Reading Efficiency Principles (Mandatory)\n");
+            policy_text.push_str("- Only read files relevant to the current task. Files that have been 'written but not re-read' are output from other agents — only read them when you need to reference their content\n");
+            policy_text.push_str("- Do not re-read the same file. If file_read returns from_cache=true, the content is unchanged and was already provided — skip re-reading and continue with what you have\n");
+            policy_text.push_str("- Do NOT try mode:force_refresh just because file_read returns from_cache=true — this only wastes tokens reading unchanged content\n");
+            policy_text.push_str("- For files already read, their content is already in your context. No need to re-confirm or re-verify\n");
 
-            // 注入方法论纪律（PA/CA/AA 专属）
+            // Inject methodology discipline (PA/CA/AA specific)
             if let Some(methodology_addendum) = MethodologyPromptInjector::build_for_role(agent.role) {
                 policy_text.push_str(&methodology_addendum);
             }
-            // 注入活跃方法论的劝导指令
+            // Inject active methodology persuasive directives
             if let Some(ref gate) = self.methodology_gate {
                 let directives = gate.inner().read().persuasive_directives();
                 if !directives.is_empty() {
-                    policy_text.push_str("\n\n### 方法论执行要求\n");
+                    policy_text.push_str("\n\n### Methodology Execution Requirements\n");
                     for d in &directives {
                         policy_text.push_str(&format!("- {}\n", d));
                     }
                 }
             }
-            // AA 专属：注入方法论进化简报
+            // AA specific: inject methodology evolution briefing
             if agent.role == AgentRole::Act {
                 if let Some(ref gate) = self.methodology_gate {
                     if let Some(ref evo) = gate.evolution_handle() {
@@ -518,7 +518,7 @@ impl super::AgentRunner {
             prompt_builder.set_region(SystemPromptRegion::BehavioralPolicy, policy_text);
         }
 
-        // Region 3: 强调约束区（从 L0 加载）
+        // Region 3: Emphasized constraints area (loaded from L0)
         let emphasis_items = self.load_emphasis_from_l0(&ctx.task_iri).await;
         if !emphasis_items.is_empty() {
             let emphasis_content = emphasis_items
@@ -529,7 +529,7 @@ impl super::AgentRunner {
             prompt_builder.set_region(SystemPromptRegion::EmphasizedConstraints, emphasis_content);
         }
 
-        // Region 3: 输出格式区
+        // Region 3: Output format area
         let format_constraint = if supports_reasoning {
             LLM_RESPONSE_FORMAT_NO_THOUGHT.to_string()
         } else {
@@ -537,19 +537,19 @@ impl super::AgentRunner {
         };
         prompt_builder.set_region(SystemPromptRegion::OutputFormat, format_constraint);
 
-        // Region 4: 输出管理区
+        // Region 4: Output management area
         prompt_builder.set_region(
             SystemPromptRegion::OutputManagement,
             crate::core::system_prompt::OUTPUT_MANAGEMENT.to_string(),
         );
 
-        // Region 5: 工具区（内置工具 + 动态工具）
+        // Region 5: Tools area (built-in tools + dynamic tools)
         let tool_menu = self.build_readable_tool_menu(&agent.role);
         if !tool_menu.is_empty() {
             prompt_builder.set_region(SystemPromptRegion::Tools, tool_menu);
         }
 
-        // Region 5: 提取提示区（从配置加载）
+        // Region 5: Extraction prompt area (loaded from config)
         if let Some(ref config) = self.emphasis_config {
             if config.enabled {
                 prompt_builder.set_region(
@@ -559,30 +559,30 @@ impl super::AgentRunner {
             }
         }
 
-        // 构建系统提示词（相对固定，放在 system role）
+        // Build system prompt (relatively static, placed in system role)
         let system_content = prompt_builder.build();
 
-        // 构建上下文消息（动态变化，放在最后的 user role）
+        // Build context message (dynamic, placed in the final user role)
         let summary_iris = sess.get_summary_chain_with_iris(20, 100);
         let summary_text = summary_iris.join("\n");
 
-        let mut task_parts = vec![format!("## 当前任务\n{}", ctx.objective)];
+        let mut task_parts = vec![format!("## Current Task\n{}", ctx.objective)];
         if !ctx.expected_output.is_empty() {
-            task_parts.push(format!("## 预期输出\n{}", ctx.expected_output));
+            task_parts.push(format!("## Expected Output\n{}", ctx.expected_output));
         }
         if !ctx.success_criteria.is_empty() {
-            task_parts.push(format!("## 成功标准\n{}", ctx.success_criteria));
+            task_parts.push(format!("## Success Criteria\n{}", ctx.success_criteria));
         }
         let task_section = task_parts.join("\n\n");
 
         let context_msg = if summary_text.is_empty() {
             format!(
-                "{}\n\n## 可用工具\n请根据需要使用工具完成任务。",
+                "{}\n\n## Available Tools\nUse tools as needed to complete the task.",
                 task_section,
             )
         } else {
             format!(
-                "{}\n\n## 历史摘要\n{}\n\n如果需要查看某轮次的完整报告，可使用 read_agent_output 工具查询对应的 IRI。\n\n## 可用工具\n请根据需要使用工具完成任务。",
+                "{}\n\n## History Summary\n{}\n\nTo view the full report of a specific turn, use the read_agent_output tool with the corresponding IRI.\n\n## Available Tools\nUse tools as needed to complete the task.",
                 task_section, summary_text
             )
             .to_string()
@@ -607,17 +607,17 @@ impl super::AgentRunner {
             }
         }
 
-        // Agent 主动感知区域：系统组件产生的环境级感知数据（文件变更、Batch分析、告警等）
-        // 放在 system 之后、历史消息之前，让 LLM 优先看到全局环境状态
+        // Agent active perception area: environment-level perception data from system components (file changes, batch analysis, alerts, etc.)
+        // Placed after system and before history messages so LLM sees global environment state first
         let perception_text = self.perception_store.take_perception_text(&ctx.task_iri);
         if !perception_text.is_empty() {
             info!(
-                "[perception] 注入 {} 字节感知内容",
+                "[perception] injecting {} bytes of perception content",
                 perception_text.len()
             );
             messages.push(ChatMessage {
                 role: "system".to_string(),
-                content: format!("# 📡 Agent 主动感知\n\n{}", perception_text),
+                content: format!("# 📡 Agent Perception\n\n{}", perception_text),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -625,26 +625,26 @@ impl super::AgentRunner {
             });
         }
 
-        // Resume 模式：从 checkpoint 恢复历史消息，放在 system 之后、新 user 消息之前
-        // 这样 LLM 先看到历史上下文，再看到继续指令
+        // Resume mode: restore history messages from checkpoint, placed after system and before new user message
+        // So LLM sees historical context first, then the continue instruction
         if let Some(ref resumed) = ctx.resumed_messages {
-            // 跳过原 system 消息（已用新的替换），追加其余历史
+            // Skip original system message (replaced with new one), append remaining history
             for msg in resumed.iter().skip(1) {
                 messages.push(msg.clone());
             }
-            info!("[resume] 从 checkpoint 恢复 {} 条历史消息", resumed.len().saturating_sub(1));
+            info!("[resume] restored {} history messages from checkpoint", resumed.len().saturating_sub(1));
         }
 
-        // 新的 user 消息放在历史之后，作为继续指令
+        // New user message placed after history as continue instruction
         let resume_task_parts = if ctx.expected_output.is_empty() && ctx.success_criteria.is_empty() {
-            format!("当前任务: {}", ctx.objective)
+            format!("Current Task: {}", ctx.objective)
         } else {
-            let mut parts = vec![format!("当前任务: {}", ctx.objective)];
+            let mut parts = vec![format!("Current Task: {}", ctx.objective)];
             if !ctx.expected_output.is_empty() {
-                parts.push(format!("预期输出: {}", ctx.expected_output));
+                parts.push(format!("Expected Output: {}", ctx.expected_output));
             }
             if !ctx.success_criteria.is_empty() {
-                parts.push(format!("成功标准: {}", ctx.success_criteria));
+                parts.push(format!("Success Criteria: {}", ctx.success_criteria));
             }
             parts.join("\n")
         };
@@ -652,7 +652,7 @@ impl super::AgentRunner {
             role: "user".to_string(),
             content: if ctx.resumed_messages.is_some() {
                 format!(
-                    "[继续执行] 请从上次中断处继续完成任务。\n\n{}",
+                    "[Continue] Please continue the task from where you left off.\n\n{}",
                     resume_task_parts
                 )
             } else {
@@ -671,7 +671,7 @@ impl super::AgentRunner {
             .tool_definitions_for_role(&agent.role.to_string());
 
         info!(
-            "AgentRunner 开始: role={}, model={}, tools={}, supports_reasoning={}",
+            "AgentRunner start: role={}, model={}, tools={}, supports_reasoning={}",
             agent.role,
             model,
             tools.len(),
@@ -684,7 +684,7 @@ impl super::AgentRunner {
         let mut consecutive_failures = 0u32;
         let mut recovery_mode_active = false;
         let mut guard_pending_pre_injections: Vec<String> = Vec::new();
-        // 跟踪每个工具的错误次数，同工具反复失败时提前终止
+        // Track error count per tool, early terminate if same tool fails repeatedly
         let mut tool_error_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         let mut tool_recovery_injected: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut action_tracker = crate::core::tracked_action::ActionTracker::new(
@@ -693,7 +693,7 @@ impl super::AgentRunner {
         );
         let checkpoint_manager = crate::core::checkpoint::CheckpointManager::with_persistence(self.l0_store.clone());
 
-        // 追踪内容最丰富的 turn（用于跨 Agent 传递 archive_iri，指向实质内容而非末轮摘要）
+        // Track the richest content turn (used for passing archive_iri across agents, pointing to substantive content rather than final turn summary)
         let mut best_content_len: usize = 0;
         let mut best_content_str: String = String::new();
         let mut best_content_iri: String = String::new();
@@ -705,7 +705,7 @@ impl super::AgentRunner {
             AgentRole::Act => ctx.max_iterations.min(150),
         };
 
-        // 初始 checkpoint：记录任务开始状态
+        // Initial checkpoint: record task start state
         let start_role_str = agent.role.to_string();
         if let Err(e) = checkpoint_manager.create_ext(
             &ctx.task_iri,
@@ -723,46 +723,46 @@ impl super::AgentRunner {
             None, None, None, None, None, None,
             None, None, None,
         ) {
-            warn!("[checkpoint] 初始保存失败: {}", e);
+            warn!("[checkpoint] initial save failed: {}", e);
         }
 
-        // 软限制状态：渐进式提示，不硬截断（DA 和 AA 使用 3 阶段降级）
+        // Soft limit state: progressive prompts, no hard truncation (DA and AA use 3-stage degradation)
         let mut soft_limit_early_warning_sent = false;
         let mut soft_limit_final_warning_sent = false;
         let mut soft_limit_force_finish = false;
 
         loop {
-            // --- 软限制阶段 1：提前预警（剩余约 8 轮） ---
+            // --- Soft limit phase 1: Early warning (~8 turns remaining) ---
             if !soft_limit_early_warning_sent && turn >= effective_max_turns.saturating_sub(8) {
                 soft_limit_early_warning_sent = true;
-                warn!("[turn {}] 软限制预警: 剩余约 8 轮 (max={})", turn, effective_max_turns);
+                warn!("[turn {}] soft limit warning: ~8 turns remaining (max={})", turn, effective_max_turns);
                 messages.push(ChatMessage {
                     role: "user".to_string(),
-                    content: "【轮次提醒】请注意控制执行轮次，剩余执行机会有限。请聚焦核心任务，避免不必要的工具调用，尽快完成。".to_string(),
+                    content: "【Turn Limit Notice】Please control execution turns. Limited turns remain. Focus on the core task, avoid unnecessary tool calls, and finish as soon as possible.".to_string(),
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,
                     reasoning_content: None,
                 });
             }
-            // --- 软限制阶段 2：最后警告（剩余约 3 轮） ---
+            // --- Soft limit phase 2: Final warning (~3 turns remaining) ---
             if !soft_limit_final_warning_sent && turn >= effective_max_turns.saturating_sub(3) {
                 soft_limit_final_warning_sent = true;
-                warn!("[turn {}] 软限制最后警告: 剩余约 3 轮 (max={})", turn, effective_max_turns);
+                warn!("[turn {}] soft limit final warning: ~3 turns remaining (max={})", turn, effective_max_turns);
                 messages.push(ChatMessage {
                     role: "user".to_string(),
-                    content: "【轮次紧急提醒】仅剩最后 3 轮执行机会。请立即完成当前工作并输出最终结果，不要发起新的工具调用。".to_string(),
+                    content: "【Turn Limit Urgent】Only 3 turns remaining. Please finish your current work and output the final result immediately. Do not initiate new tool calls.".to_string(),
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,
                     reasoning_content: None,
                 });
             }
-            // --- 软限制阶段 3：强制收尾（达到上限时注入指令，让 LLM 回应，不截断） ---
+            // --- Soft limit phase 3: Force finish (inject directive at limit, let LLM respond, no truncation) ---
             if turn >= effective_max_turns {
                 if !soft_limit_force_finish {
                     soft_limit_force_finish = true;
-                    warn!("[turn {}] 已达到最大轮次限制 {}，注入强制收尾指令（不截断）", turn, effective_max_turns);
+                    warn!("[turn {}] max turns {} reached, injecting force-finish directive (no truncation)", turn, effective_max_turns);
                     errs.push("max turns reached".to_string());
                     if let Some(ref event_bus) = self.event_bus {
                         let _ = event_bus.emit(&ctx.task_iri, "AGENT_BLOCKED", &agent.agent_id, &serde_json::json!({"iterations": turn}).to_string()).await;
@@ -791,20 +791,20 @@ impl super::AgentRunner {
                         Some(&action_str),
                         None,
                     ) {
-                        warn!("[checkpoint] max_turns 保存失败: {}", e);
+                        warn!("[checkpoint] max_turns save failed: {}", e);
                     }
                     messages.push(ChatMessage {
                         role: "user".to_string(),
-                        content: "【系统强制收尾】已达到最大执行轮次。请立即输出你的最终总结和结果，不要调用任何工具。如果之前有未完成的工具执行，请基于已有结果做出总结。".to_string(),
+                        content: "【System Force-Finish】Maximum execution turns reached. Please output your final summary and results immediately. Do not call any more tools. If there are incomplete tool executions, base your summary on the results already available.".to_string(),
                         name: None,
                         tool_calls: None,
                         tool_call_id: None,
                         reasoning_content: None,
                     });
-                    // 不 break，让本轮 LLM 来回应强制收尾指令
+                    // Don't break, let this turn's LLM respond to the force-finish directive
                 } else {
-                    // 强制收尾已注入过，LLM 仍没完成 → 硬性结束，取最后一次 assistant 回复
-                    warn!("[turn {}] 强制收尾后 LLM 仍未完成，硬性结束", turn);
+                    // Force-finish already injected, LLM still hasn't completed -> hard stop, take last assistant reply
+                    warn!("[turn {}] LLM still not completed after force-finish, hard stopping", turn);
                     let force_role_str = agent.role.to_string();
                     let tool_error_str = serde_json::json!({
                         "error_counts": tool_error_counts,
@@ -827,7 +827,7 @@ impl super::AgentRunner {
                         Some(&action_str),
                         None,
                     );
-                    // 兜底：如果没有任何有实质内容的 turn，从 tool 结果做 LLM 聚合摘要
+                    // Fallback: if no turn has substantive content, aggregate tool results via LLM
                     let (force_summary, force_output, force_archive) =
                         if !best_content_str.is_empty() {
                             let s = Self::generate_auto_summary(&best_content_str);
@@ -842,7 +842,7 @@ impl super::AgentRunner {
                             (Self::generate_auto_summary(&last.content),
                              Some(Value::String(last.content.clone())), None)
                         } else {
-                            ("任务未完成".to_string(), None, None)
+                            ("Task not completed".to_string(), None, None)
                         };
                     return Ok(TaskResult {
                         task_iri: ctx.task_iri,
@@ -862,7 +862,7 @@ impl super::AgentRunner {
             }
             turn += 1;
 
-            // 每 5 轮保存一次周期 checkpoint（含工具错误状态）
+            // Save periodic checkpoint every 5 turns (including tool error state)
             if turn % 5 == 0 {
                 let turn_role_str = agent.role.to_string();
                 let tool_error_str = serde_json::json!({
@@ -888,18 +888,18 @@ impl super::AgentRunner {
                     Some(&action_str),
                     None,
                 ) {
-                    warn!("[checkpoint] 周期保存失败 (turn={}): {}", turn, e);
+                    warn!("[checkpoint] periodic save failed (turn={}): {}", turn, e);
                 }
             }
 
-            // 失败模式检测与恢复模式
+            // Failure mode detection and recovery mode
             if consecutive_failures >= 3 && !recovery_mode_active {
                 recovery_mode_active = true;
                 let recovery_msg = format!(
-                    "[系统诊断] 检测到连续 {} 次操作失败。请暂停执行，分析失败原因，提出不同的解决思路。\
-                     \n\n失败记录：{}\n\n请重新评估当前方法，考虑替代方案后再继续。",
+                    "[System Diagnostic] Detected {} consecutive operation failures. Pause execution, analyze the cause, and propose an alternative approach.\
+                     \n\nFailure record: {}\n\nPlease re-evaluate the current method and consider alternatives before continuing.",
                     consecutive_failures,
-                    errs.last().map(|e| e.as_str()).unwrap_or("多次失败")
+                    errs.last().map(|e| e.as_str()).unwrap_or("multiple failures")
                 );
                 messages.push(ChatMessage {
                     role: "user".to_string(),
@@ -909,22 +909,22 @@ impl super::AgentRunner {
                     tool_call_id: None,
                     reasoning_content: None,
                 });
-                info!("[consecutive_failures] 触发恢复模式: 连续 {} 次失败", consecutive_failures);
+                info!("[consecutive_failures] triggered recovery mode: {} consecutive failures", consecutive_failures);
                 consecutive_failures = 0;
                 continue;
             }
 
-            // ===== Thought 阶段 =====
+            // ===== Thought Phase =====
             info!("[ReAct Turn {}] ===== Thought =====", turn);
 
-            // CycleStart: 注入补充输入（SA 写入 → AgentRunner 消费）
+            // CycleStart: inject supplementary input (SA writes -> AgentRunner consumes)
             {
                 let pending = self.supplement_store.take_pending(&ctx.task_iri);
                 if !pending.is_empty() {
                     info!(
                         task_iri = %ctx.task_iri,
                         count = pending.len(),
-                        "注入 {} 条补充输入到 AgentRunner 上下文",
+                        "injecting {} supplementary inputs into AgentRunner context",
                         pending.len()
                     );
                     for entry in &pending {
@@ -972,7 +972,7 @@ impl super::AgentRunner {
                 }
             }
 
-            // 使用 ContextWindowManager 做基于消息数和 token 的双维度压缩决策
+            // Use ContextWindowManager for dual-dimension compression based on message count and tokens
             let context_window_compressed = if let Some(ref cwm_lock) = self.context_window_manager {
                 let cwm = cwm_lock.lock().expect("cwm_lock Mutex poisoned");
                 if cwm.should_compress(messages.len(), &messages) {
@@ -981,7 +981,7 @@ impl super::AgentRunner {
                         sess.add_summary("system", &summary_text, None);
                     }
                     info!(
-                        "[turn {}] ContextWindowManager 压缩: {} -> {} 条消息",
+                        "[turn {}] ContextWindowManager compressed: {} -> {} messages",
                         turn,
                         messages.len(),
                         compressed.len()
@@ -997,7 +997,7 @@ impl super::AgentRunner {
             if let Some(compressed) = context_window_compressed {
                 messages = compressed;
             } else if messages.len() > 30 {
-                // 回退：纯硬截断（仅在 CWM 不可用时或配置不当的情况下触发）
+                // Fallback: hard truncation (only triggered when CWM is unavailable or misconfigured)
                 let system_msg = messages.first().cloned();
                 let kept_recent = messages.len().saturating_sub(15);
 
@@ -1034,12 +1034,12 @@ impl super::AgentRunner {
                 let summary_iris = sess.get_summary_chain_with_iris(10, 100);
                 let summary_text = if summary_iris.is_empty() {
                     format!(
-                        "[历史摘要] 之前已执行 {} 轮操作，包含 {} 次工具调用。以下是最近的对话：",
+                        "[History Summary] Previously executed {} turns with {} tool calls. Here is the recent conversation:",
                         turn - 1, tc
                     )
                 } else {
                     format!(
-                        "[历史摘要] 已执行 {} 轮。关键记录：\n{}\n\n如需详细信息，使用 kg_search / knowledge_query 查询 IRI。",
+                        "[History Summary] Executed {} turns. Key records:\n{}\n\nFor details, use kg_search / knowledge_query with the IRI.",
                         turn - 1,
                         summary_iris.join("\n")
                     )
@@ -1057,7 +1057,7 @@ impl super::AgentRunner {
                 messages.extend(recent);
 
                 info!(
-                    "[turn {}] 消息历史截断: 保留 {} 条 (原始 {} 条)",
+                    "[turn {}] message history truncated: kept {} (original {} messages)",
                     turn,
                     messages.len(),
                     kept_recent + 17
@@ -1066,13 +1066,13 @@ impl super::AgentRunner {
 
             if !guard_pending_pre_injections.is_empty() {
                 let prompt = format!(
-                    "\n\n[ToolGuard 约束指令]\n{}\n注意：以上约束仅适用于你接下来发起的同名工具调用。请严格遵守。",
+                    "\n\n[ToolGuard Constraint Directive]\n{}\nNote: The above constraints only apply to the same-named tool calls you make next. Strictly comply.",
                     guard_pending_pre_injections.join("\n")
                 );
                 if let Some(sys_msg) = messages.first_mut() {
                     if sys_msg.role == "system" {
-                        // 替换而非追加：移除旧的 ToolGuard 块，防止每轮累积膨胀
-                        if let Some(pos) = sys_msg.content.find("\n\n[ToolGuard 约束指令]") {
+                        // Replace rather than append: remove old ToolGuard block to prevent cumulative bloat per turn
+                        if let Some(pos) = sys_msg.content.find("\n\n[ToolGuard Constraint Directive]") {
                             sys_msg.content.truncate(pos);
                         }
                         sys_msg.content.push_str(&prompt);
@@ -1082,7 +1082,7 @@ impl super::AgentRunner {
             }
 
             debug!(
-                "[turn {}] 调用 LLM (history: {} msgs, tools: {})",
+                "[turn {}] calling LLM (history: {} msgs, tools: {})",
                 turn,
                 messages.len(),
                 tools.len()
@@ -1096,7 +1096,7 @@ impl super::AgentRunner {
                     None,
                     None,
                     {
-                        // 每次调用前刷新 tools 列表，确保新注册的微工具（如 read_full_result_*）被包含
+                        // Refresh tools list before each call to ensure newly registered micro-tools (e.g. read_full_result_*) are included
                         let current_tools = self
                             .tool_executor
                             .read()
@@ -1142,7 +1142,7 @@ impl super::AgentRunner {
             let finish = choice.finish_reason.as_deref().unwrap_or("");
 
             debug!(
-                "[turn {}] LLM 回复: finish={}, content_len={}, has_reasoning={}",
+                "[turn {}] LLM response: finish={}, content_len={}, has_reasoning={}",
                 turn,
                 finish,
                 raw_content.len(),
@@ -1156,7 +1156,7 @@ impl super::AgentRunner {
             );
 
             if !parsed.is_valid_json && finish != "tool_calls" {
-                warn!("[turn {}] LLM 回复不是有效 JSON，使用 fallback 处理", turn);
+                warn!("[turn {}] LLM response is not valid JSON, using fallback", turn);
                 consecutive_failures += 1;
                 debug!("[consecutive_failures] JSON parse failed: {}/3", consecutive_failures);
             }
@@ -1169,7 +1169,7 @@ impl super::AgentRunner {
             if finish == "tool_calls" && choice.message.tool_calls.is_some() {
                 action = "tool_call".to_string();
                 debug!(
-                    "[turn {}] finish=tool_calls 且存在 tool_calls，强制 action=tool_call",
+                    "[turn {}] finish=tool_calls with tool_calls present, forcing action=tool_call",
                     turn
                 );
             }
@@ -1177,7 +1177,7 @@ impl super::AgentRunner {
             if (finish == "stop" || finish == "end_turn") && action != "tool_call" {
                 if action != "finish" {
                     debug!(
-                        "[turn {}] finish={} 且无工具调用，将 action 从 {} 修正为 finish",
+                        "[turn {}] finish={} with no tool calls, correcting action from {} to finish",
                         turn, finish, action
                     );
                 }
@@ -1213,7 +1213,7 @@ impl super::AgentRunner {
                 ).await;
             }
 
-            // 保存强调内容到 L0 永久记忆
+            // Save emphasis content to L0 persistent memory
             if !parsed.emphasis.is_empty() {
                 let dedup_threshold = self
                     .emphasis_config
@@ -1229,7 +1229,7 @@ impl super::AgentRunner {
                 .await;
             }
 
-            // 归档到 L0：保存完整回复 + 思考内容
+            // Archive to L0: save full response + thought content
             let l0_iri = sess
                 .archive_full_to_l0(
                     &self.l0_store,
@@ -1239,7 +1239,7 @@ impl super::AgentRunner {
                 )
                 .ok();
             debug!(
-                "[L0] 归档: {:?}, has_reasoning={}, is_valid_json={}",
+                "[L0] archived: {:?}, has_reasoning={}, is_valid_json={}",
                 l0_iri, parsed.has_native_reasoning, parsed.is_valid_json
             );
 
@@ -1301,7 +1301,7 @@ impl super::AgentRunner {
                 .write_node(&node_iri, &node_json.to_string(), &cfg)
             {
                 Ok(_) => {
-                    debug!("[L2] 写入节点: {}", node_iri);
+                    debug!("[L2] writing node: {}", node_iri);
 
                     // BlackboardWrite hook
                     let mut hook_ctx = HookContext::new(
@@ -1316,17 +1316,17 @@ impl super::AgentRunner {
                         .await;
                 }
                 Err(e) => {
-                    warn!("[L2] 写入节点失败 {}: {:?}", node_iri, e);
+                    warn!("[L2] failed to write node {}: {:?}", node_iri, e);
                 }
             }
 
-            // 使用解析后的 summary 或生成 fallback
+            // Use parsed summary or generate fallback
             let summary_text = parsed
                 .summary
                 .clone()
                 .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content));
             let l1_turn = sess.add_summary(&agent.role.to_string(), &summary_text, l0_iri.clone());
-            // 计算 turn embedding 和 relevance_score
+            // Compute turn embedding and relevance_score
             if let (Some(ref embedder), Some(ref tracker_lock)) = (&self.embedder, &self.relevance_tracker) {
                 if let Ok(emb) = embedder.embed(&summary_text).await {
                     let mut tracker = tracker_lock.lock().unwrap();
@@ -1336,12 +1336,12 @@ impl super::AgentRunner {
                 }
             }
 
-            // ===== Action 阶段 =====
+            // ===== Action Phase =====
             info!("[ReAct Turn {}] ===== Action =====", turn);
 
             match action.as_str() {
                 "finish" => {
-                    info!("[ReAct] Agent 决定完成任务");
+                    info!("[ReAct] Agent decided to complete task");
 
                     // CycleEnd hook
                     {
@@ -1358,11 +1358,11 @@ impl super::AgentRunner {
                             .await;
                     }
 
-                    info!("AgentRunner 完成: {} turns, {} tools", turn, tc);
+                    info!("AgentRunner completed: {} turns, {} tools", turn, tc);
                     debug!("[L0] L0 entries: {}", self.l0_store.count().unwrap_or(0));
 
-                    // 当 parsed.content 为空（LLM 返回 content=null + tool_calls），
-                    // 从 messages 中的工具结果聚合生成内容，确保后续 agent 能读到有效 plan
+                    // When parsed.content is empty (LLM returned content=null + tool_calls),
+                    // aggregate from tool results in messages to ensure subsequent agent can read a valid plan
                     let (final_summary, output_value) =
                         if !parsed.content.trim().is_empty() {
                             (parsed.summary.clone()
@@ -1401,7 +1401,7 @@ impl super::AgentRunner {
                             if let Ok(node_iri) =
                                 self.store_jsonld_to_l2(&node, &ctx.task_iri).await
                             {
-                                debug!("[L2] JSON-LD 输出已存储: {}", node_iri);
+                                debug!("[L2] JSON-LD output stored: {}", node_iri);
                             }
                         }
                     }
@@ -1434,11 +1434,11 @@ impl super::AgentRunner {
                         Some(&action_str),
                         None,
                     ) {
-                        warn!("[checkpoint] finish 保存失败: {}", e);
+                        warn!("[checkpoint] finish save failed: {}", e);
                     }
 
-                    // 指向最长内容的 turn（而非最后一条 summary），
-                    // 确保 dispatch_agent 从 L2 读取时能拿到实质内容。
+                    // Point to the turn with the longest content (not the last summary),
+                    // so dispatch_agent can get substantive content when reading from L2.
                     let archive_iri = if !best_content_iri.is_empty() {
                         Some(best_content_iri.clone())
                     } else {
@@ -1460,13 +1460,13 @@ impl super::AgentRunner {
                     });
                 }
                 "tool_call" => {
-                    // 软限制阶段 3 触发后：拦截工具调用，强制以当前输出作为最终结果
+                    // After soft limit phase 3: intercept tool calls, force current output as final result
                     if soft_limit_force_finish {
-                        warn!("[强制收尾] 拦截 tool_call={:?}，强制输出最终结果", 
+                        warn!("[force-finish] intercepted tool_call={:?}, forcing final output", 
                             choice.message.tool_calls.as_ref().map(|c| {
                                 c.iter().map(|t| t.function.name.as_str()).collect::<Vec<_>>()
                             }));
-                        // 如果当前 parsed.content 为空（tool_calls-only 响应），尝试对已有工具结果做 LLM 聚合
+                        // If parsed.content is empty (tool_calls-only response), try LLM aggregation of existing tool results
                         let (final_summary, output_value) =
                             if !parsed.content.trim().is_empty() {
                                 (parsed.summary.clone()
@@ -1509,7 +1509,7 @@ impl super::AgentRunner {
                             calls.iter().map(|c| c.function.name.as_str()).collect();
                         debug!("[tool_calls] {} → {:?}", calls.len(), tool_names);
 
-                        // 🔴 PA角色禁止调用写操作工具，但允许只读工具
+                        // 🔴 PA role forbidden from calling write tools, but read-only tools allowed
                         if agent.role == AgentRole::Plan {
                             let write_tools: Vec<&str> = calls
                                 .iter()
@@ -1528,15 +1528,15 @@ impl super::AgentRunner {
 
                             if force_finish {
                                 warn!(
-                                    "[PA] 检测到写操作工具调用: {:?}，强制转换为finish",
+                                    "[PA] detected write tool call: {:?}, forcing finish",
                                     write_tools
                                 );
-                                info!("[ReAct] PA Agent 被强制结束（禁止写操作）");
+                                info!("[ReAct] PA Agent force-ended (write operations prohibited)");
 
                                 let (final_summary, output_value) =
                                     if !parsed.content.trim().is_empty() {
                                         (parsed.summary.clone()
-                                            .unwrap_or_else(|| "PA已制定计划".to_string()),
+                                            .unwrap_or_else(|| "PA has formulated a plan".to_string()),
                                          Value::String(parsed.content.clone()))
                                     } else if let Some((agg_summary, agg_content)) =
                                         self.aggregate_tool_results(&messages, agent, &ctx).await
@@ -1544,7 +1544,7 @@ impl super::AgentRunner {
                                         (agg_summary, Value::String(agg_content))
                                     } else {
                                         (parsed.summary.clone()
-                                            .unwrap_or_else(|| "PA已制定计划".to_string()),
+                                            .unwrap_or_else(|| "PA has formulated a plan".to_string()),
                                          Value::String(parsed.content.clone()))
                                     };
                                 let jsonld_output = self.apply_output_mapping(
@@ -1657,7 +1657,7 @@ impl super::AgentRunner {
 
                             let handler = {
                                 let executor = self.tool_executor.read().unwrap_or_else(|e| {
-                                    warn!("ToolExecutor 读锁中毒 (exec handler): {}", e);
+                                    warn!("ToolExecutor read lock poisoned (exec handler): {}", e);
                                     e.into_inner()
                                 });
                                 executor.try_get_handler(name)
@@ -1711,7 +1711,7 @@ impl super::AgentRunner {
                             }
                             self.compress_tool_results_with_microtools(&mut messages);
 
-                            // 跨轮次老化：按陈旧度压缩旧 tool 结果
+                            // Cross-turn aging: compress old tool results by staleness
                             if let Some(ref aging) = self.tool_result_aging {
                                 aging.age_tool_results(&mut messages, &self.tool_executor);
                             }
@@ -1719,37 +1719,37 @@ impl super::AgentRunner {
                             if let Some(err) = result.get("error") {
                                 let err_msg = err.as_str().unwrap_or("");
                                 let is_tool_not_found = err_msg.starts_with("Tool not found: ");
-                                warn!("[tool] {} 失败: {}", name, err);
+                                warn!("[tool] {} failed: {}", name, err);
                                 errs.push(format!("{}: {}", name, err));
 
                                 if is_tool_not_found {
-                                    // 微工具注册与 handler 不一致导致「找不到工具」。
-                                    // 这不属于 LLM 的错误——工具列表是系统告诉它的。不要计入连续失败。
-                                    // try_get_handler 已通过 fallback 路径尽力查找，若仍找不到则说明
-                                    // 该微工具有效期已过或数据已清理。LLM 应改用原工具（bash/grep 等）
-                                    // 加更精确参数来获取所需数据。
-                                    // 此外，向 tool 消息注入提示语，引导 LLM 正确操作。
-                                    info!("[tool_error] {} 工具不存在（微工具 fallback 也失败），不计入连续失败", name);
-                                    // 向 tool 消息注入引导提示，帮助 LLM 改用原工具
+                                    // Micro-tool registration and handler mismatch causes "tool not found".
+                                    // This is not an LLM error -- the tool list was provided by the system. Don't count as consecutive failure.
+                                    // try_get_handler already attempted fallback paths; if still not found, it means
+                                    // the micro-tool's validity has expired or data has been cleaned. LLM should use original tools (bash/grep etc.)
+                                    // with more precise parameters to obtain needed data.
+                                    // Additionally, inject prompt into tool message to guide LLM.
+                                    info!("[tool_error] {} tool not found (micro-tool fallback also failed), not counting as consecutive failure", name);
+                                    // Inject guidance prompt into tool message, helping LLM switch to original tools
                                     result_str = format!(
-                                        "{}\n\n提示：工具 {} 当前不可用。请改用原始工具（如 bash、grep_search）加更精确的参数直接获取所需数据，不要重复调用此微工具。",
+                                        "{}\n\nTip: Tool {} is currently unavailable. Please use the original tools (e.g. bash, grep_search) with more precise parameters to directly obtain the data. Do not call this micro-tool again.",
                                         result_str, name
                                     );
                                 } else {
-                                    // 工具执行错误不计入 consecutive_failures。
-                                    // consecutive_failures 只追踪 LLM 级别的故障（JSON 解析失败等）。
-                                    // 工具错误是正常操作反馈——LLM 已收到错误消息并能自主调整策略。
-                                    // 同工具反复失败有独立的 tool_error_counts 计数器处理。
+                                    // Tool execution errors don't count toward consecutive_failures.
+                                    // consecutive_failures only tracks LLM-level failures (JSON parse failures, etc.).
+                                    // Tool errors are normal operational feedback -- LLM has received the error and can adjust strategy.
+                                    // Repeated failure of the same tool is handled by the independent tool_error_counts counter.
                                     let tool_count = tool_error_counts.entry(name.clone()).or_insert(0);
                                     *tool_count += 1;
-                                    debug!("[tool_error] {} 失败次数: {}/3", name, *tool_count);
+                                    debug!("[tool_error] {} failure count: {}/3", name, *tool_count);
                                     if *tool_count >= 3 && !tool_recovery_injected.contains(name) {
-                                        warn!("[tool_error] {} 连续失败 {} 次，注入恢复引导", name, *tool_count);
+                                        warn!("[tool_error] {} failed {} consecutive times, injecting recovery guidance", name, *tool_count);
                                         tool_recovery_injected.insert(name.clone());
                                         result_str = format!(
-                                            "{}\n\n[系统提示] 工具 {} 连续 3 次执行失败，说明该工具当前不可用。\
-                                             \n请改用其他可用工具完成当前目标（如 web_search / bash / grep 等）。\
-                                             \n不要再调用 {}。",
+                                            "{}\n\n[System Prompt] Tool {} failed 3 consecutive times, indicating it is currently unavailable.\
+                                             \nPlease use other available tools to complete the current objective (e.g. web_search / bash / grep, etc.).\
+                                             \nDo not call {} again.",
                                             result_str, name, name
                                         );
                                     }
@@ -1758,13 +1758,13 @@ impl super::AgentRunner {
                                     let _ = event_bus.emit(&ctx.task_iri, "AGENT_ERROR", &agent.agent_id, &serde_json::json!({"error": err, "tool": name}).to_string()).await;
                                 }
                             } else {
-                                info!("[tool] {} 成功", name);
+                                info!("[tool] {} succeeded", name);
                                 if recovery_mode_active {
-                                    info!("[consecutive_failures] 恢复模式成功退出");
+                                    info!("[consecutive_failures] recovery mode exited successfully");
                                 }
                                 consecutive_failures = 0;
                                 recovery_mode_active = false;
-                                // 该工具成功执行，清除它的错误计数和恢复标志
+                                // Tool executed successfully, clear its error count and recovery flag
                                 tool_error_counts.remove(name);
                                 tool_recovery_injected.remove(name);
                             }
@@ -1784,10 +1784,10 @@ impl super::AgentRunner {
 
                                 if hook_result == HookResult::Abort {
                                     let guard_msg = hook_ctx.error.unwrap_or_else(|| "Tool result rejected by guard".to_string());
-                                    warn!("[tool] {} ToolGuard 拦截: {}", name, guard_msg);
+                                    warn!("[tool] {} ToolGuard intercepted: {}", name, guard_msg);
                                     messages.push(ChatMessage {
                                         role: "tool".to_string(),
-                                        content: format!("[ToolGuard 拦截] 工具 {} 的结果被安全系统拒绝。{}", name, guard_msg),
+                                        content: format!("[ToolGuard Intercepted] Tool {} result rejected by security system. {}", name, guard_msg),
                                         name: None,
                                         tool_calls: None,
                                         tool_call_id: Some(c.id.clone()),
@@ -1806,7 +1806,7 @@ impl super::AgentRunner {
                             }
                         }
 
-                        // ===== Observation 阶段 =====
+                        // ===== Observation Phase =====
                         info!("[ReAct Turn {}] ===== Observation =====", turn);
 
                         // CycleEnd hook (tool calls path)
@@ -1826,7 +1826,7 @@ impl super::AgentRunner {
 
                         continue;
                     } else {
-                        warn!("[ReAct] action=tool_call 但无 tool_calls，继续思考");
+                        warn!("[ReAct] action=tool_call but no tool_calls, continuing to think");
                         let asst_summary = parsed.summary.clone()
                             .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content));
                         messages.push(ChatMessage {
@@ -1882,7 +1882,7 @@ impl super::AgentRunner {
                     }
                 }
                 _ => {
-                    warn!("[ReAct] 未知 action: {}, 继续思考", action);
+                    warn!("[ReAct] unknown action: {}, continuing to think", action);
                     let asst_summary = parsed.summary.clone()
                         .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content));
                     messages.push(ChatMessage {
@@ -1912,8 +1912,8 @@ impl super::AgentRunner {
             }
         }
 
-        warn!("AgentRunner 未完成: {} turns, errors: {:?}", turn, errs);
-        // 优先使用最佳内容 turn 的输出（有实质内容），而非最后一次 assistant 回复的短摘要
+        warn!("AgentRunner incomplete: {} turns, errors: {:?}", turn, errs);
+        // Prefer the best content turn's output (with substantive content) over the last assistant reply's short summary
         let (unfinished_status, unfinished_summary, unfinished_output, unfinished_archive) =
             if !best_content_str.is_empty() {
                 ("partial_success".to_string(),
@@ -1931,7 +1931,7 @@ impl super::AgentRunner {
                  Some(Value::String(last.content.clone())), None)
             } else if tc > 0 {
                 ("partial_success".to_string(),
-                 format!("任务部分完成。执行了 {} 轮，{} 次工具调用，剩余 {} 轮未完成。错误: {} 个。", turn, tc, effective_max_turns.saturating_sub(turn), errs.len()),
+                 format!("Task partially completed. Executed {} turns, {} tool calls, {} remaining. Errors: {}.", turn, tc, effective_max_turns.saturating_sub(turn), errs.len()),
                  None, None)
             } else {
                 ("failed".to_string(), String::new(), None, None)

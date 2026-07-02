@@ -84,7 +84,7 @@ impl SignatureInfo {
 
     pub fn verify(&self, content: &str) -> Result<bool, CoreError> {
         debug!(
-            "验证签名: algorithm={}, signer={:?}",
+            "Verifying signature: algorithm={}, signer={:?}",
             self.algorithm, self.signer_id
         );
 
@@ -164,27 +164,27 @@ impl SecurityPolicy {
         if let Some(ref security_info) = skill.security_info {
             if (security_info.trust_level as u8) < self.min_trust_level as u8 {
                 violations.push(format!(
-                    "信任等级不足: {:?} < {:?}",
+                    "Insufficient trust level: {:?} < {:?}",
                     security_info.trust_level, self.min_trust_level
                 ));
             }
 
             if !self.allowed_sources.contains(&security_info.source) {
-                violations.push(format!("来源不允许: {:?}", security_info.source));
+                violations.push(format!("Source not allowed: {:?}", security_info.source));
             }
 
             if security_info.risk_score > self.max_risk_score {
                 violations.push(format!(
-                    "风险分数过高: {:.2} > {:.2}",
+                    "Risk score too high: {:.2} > {:.2}",
                     security_info.risk_score, self.max_risk_score
                 ));
             }
 
             if self.require_signature && security_info.signature.is_none() {
-                violations.push("缺少必需的签名".to_string());
+                violations.push("Required signature missing".to_string());
             }
         } else if self.min_trust_level != TrustLevel::Untrusted {
-            violations.push("缺少安全信息".to_string());
+            violations.push("Security info missing".to_string());
         }
 
         if violations.is_empty() {
@@ -264,14 +264,14 @@ impl SecurityEngine {
     fn init_default_policies(policies: &mut HashMap<String, SecurityPolicy>) {
         policies.insert(
             "default".to_string(),
-            SecurityPolicy::new("default", "默认策略")
+            SecurityPolicy::new("default", "Default Policy")
                 .with_min_trust_level(TrustLevel::Low)
                 .with_max_risk_score(0.5),
         );
 
         policies.insert(
             "strict".to_string(),
-            SecurityPolicy::new("strict", "严格策略")
+            SecurityPolicy::new("strict", "Strict Policy")
                 .with_min_trust_level(TrustLevel::High)
                 .with_max_risk_score(0.2)
                 .with_require_signature(true),
@@ -279,7 +279,7 @@ impl SecurityEngine {
 
         policies.insert(
             "system".to_string(),
-            SecurityPolicy::new("system", "系统策略")
+            SecurityPolicy::new("system", "System Policy")
                 .with_min_trust_level(TrustLevel::System)
                 .with_allowed_sources(vec![SkillSource::SystemBuiltin])
                 .with_max_risk_score(0.0),
@@ -292,7 +292,7 @@ impl SecurityEngine {
         context: &SecurityContext,
     ) -> Result<SecurityDecision, CoreError> {
         info!(
-            "检查技能执行权限: skill={}, agent={}",
+            "Checking skill execution permission: skill={}, agent={}",
             skill_iri, context.agent_id
         );
 
@@ -341,7 +341,7 @@ impl SecurityEngine {
                     AuditOutcome::Denied,
                 )
                 .await;
-                warn!("技能执行被拒绝: {} - {:?}", skill_iri, reasons);
+                warn!("Skill execution denied: {} - {:?}", skill_iri, reasons);
             }
             SecurityDecision::RequiresApproval { .. } => {
                 self.add_audit_entry(
@@ -391,7 +391,7 @@ impl SecurityEngine {
 
     pub async fn add_policy(&self, policy: SecurityPolicy) -> Result<(), CoreError> {
         let policy_id = policy.policy_id.clone();
-        info!("添加安全策略: {} ({})", policy.name, policy_id);
+        info!("Adding security policy: {} ({})", policy.name, policy_id);
 
         let mut policies = self.policies.write().await;
         policies.insert(policy_id, policy);
@@ -409,7 +409,7 @@ impl SecurityEngine {
     }
 
     pub async fn whitelist_skill(&self, skill_iri: &str) {
-        info!("将技能加入白名单: {}", skill_iri);
+        info!("Whitelisting skill: {}", skill_iri);
         let mut whitelist = self.whitelisted_skills.write().await;
         whitelist.insert(skill_iri.to_string());
     }
@@ -476,7 +476,7 @@ impl SecurityEngine {
         context: SecurityContext,
         reason: &str,
     ) {
-        info!("请求审批: skill={}, agent={}", skill_iri, context.agent_id);
+        info!("Requesting approval: skill={}, agent={}", skill_iri, context.agent_id);
 
         let mut queue = self.approval_queue.write().await;
         queue.push((skill_iri.to_string(), context, reason.to_string()));

@@ -55,24 +55,24 @@ impl QueryTemplateId {
 
     pub fn description(&self) -> &'static str {
         match self {
-            Self::MocScan => "扫描 MOC 索引，获取领域入口",
-            Self::SkillByTag => "按标签查询技能列表",
-            Self::SkillByStack => "按技术栈查询技能列表",
-            Self::SkillByRole => "按角色查询技能列表",
-            Self::SkillSummary => "按 @id 查询技能摘要（5W2H）",
-            Self::SkillSteps => "按 @id 拉取步骤列表",
-            Self::StepDetail => "按 @id 拉取步骤细节",
-            Self::Validation => "拉取验证条件",
-            Self::RequiresDirect => "查询直接依赖",
-            Self::RequiresTransitive => "查询传递依赖（预计算）",
+            Self::MocScan => "Scan MOC index for domain entry points",
+            Self::SkillByTag => "Query skill list by tag",
+            Self::SkillByStack => "Query skill list by tech stack",
+            Self::SkillByRole => "Query skill list by role",
+            Self::SkillSummary => "Query skill summary by @id (5W2H)",
+            Self::SkillSteps => "Fetch step list by @id",
+            Self::StepDetail => "Fetch step details by @id",
+            Self::Validation => "Fetch validation conditions",
+            Self::RequiresDirect => "Query direct dependencies",
+            Self::RequiresTransitive => "Query transitive dependencies (pre-computed)",
         }
     }
 
     pub fn target_layer(&self) -> &'static str {
         match self {
-            Self::MocScan | Self::SkillByTag | Self::SkillByStack | Self::SkillByRole => "L2-预聚合",
-            Self::SkillSummary | Self::RequiresDirect | Self::RequiresTransitive => "L2-索引",
-            Self::SkillSteps | Self::StepDetail | Self::Validation => "L3-详情",
+            Self::MocScan | Self::SkillByTag | Self::SkillByStack | Self::SkillByRole => "L2-pre-aggregated",
+            Self::SkillSummary | Self::RequiresDirect | Self::RequiresTransitive => "L2-indexed",
+            Self::SkillSteps | Self::StepDetail | Self::Validation => "L3-detailed",
         }
     }
 
@@ -195,7 +195,7 @@ impl QueryEngine {
         QueryResult {
             template_id: "q:moc-scan".to_string(),
             data: Value::Array(filtered),
-            from_layer: "L2-预聚合".to_string(),
+            from_layer: "L2-pre-aggregated".to_string(),
             result_count: count,
             cached: false,
         }
@@ -228,7 +228,7 @@ impl QueryEngine {
         QueryResult {
             template_id: "q:skill-by-tag".to_string(),
             data: Value::Array(results),
-            from_layer: "L2-预聚合".to_string(),
+            from_layer: "L2-pre-aggregated".to_string(),
             result_count: count,
             cached: false,
         }
@@ -252,7 +252,7 @@ impl QueryEngine {
         QueryResult {
             template_id: "q:skill-by-stack".to_string(),
             data: Value::Array(results),
-            from_layer: "L2-预聚合".to_string(),
+            from_layer: "L2-pre-aggregated".to_string(),
             result_count: count,
             cached: false,
         }
@@ -276,7 +276,7 @@ impl QueryEngine {
         QueryResult {
             template_id: "q:skill-by-role".to_string(),
             data: Value::Array(results),
-            from_layer: "L2-预聚合".to_string(),
+            from_layer: "L2-pre-aggregated".to_string(),
             result_count: count,
             cached: false,
         }
@@ -299,7 +299,7 @@ impl QueryEngine {
         QueryResult {
             template_id: "q:skill-summary".to_string(),
             data: data.unwrap_or(Value::Null),
-            from_layer: "L2-索引".to_string(),
+            from_layer: "L2-indexed".to_string(),
             result_count: count,
             cached: false,
         }
@@ -313,7 +313,7 @@ impl QueryEngine {
         QueryResult {
             template_id: "q:skill-steps".to_string(),
             data: data.unwrap_or(Value::Null),
-            from_layer: "L3-详情".to_string(),
+            from_layer: "L3-detailed".to_string(),
             result_count: count,
             cached: false,
         }
@@ -327,7 +327,7 @@ impl QueryEngine {
         QueryResult {
             template_id: "q:step-detail".to_string(),
             data: data.unwrap_or(Value::Null),
-            from_layer: "L3-详情".to_string(),
+            from_layer: "L3-detailed".to_string(),
             result_count: count,
             cached: false,
         }
@@ -352,7 +352,7 @@ impl QueryEngine {
         QueryResult {
             template_id: "q:validation".to_string(),
             data: data.unwrap_or(Value::Null),
-            from_layer: "L3-详情".to_string(),
+            from_layer: "L3-detailed".to_string(),
             result_count: count,
             cached: false,
         }
@@ -380,7 +380,7 @@ impl QueryEngine {
         QueryResult {
             template_id: "q:requires-direct".to_string(),
             data: Value::Array(deps),
-            from_layer: "L2-索引".to_string(),
+            from_layer: "L2-indexed".to_string(),
             result_count: count,
             cached: false,
         }
@@ -398,7 +398,7 @@ impl QueryEngine {
         QueryResult {
             template_id: "q:requires-transitive".to_string(),
             data: Value::Array(results),
-            from_layer: "L2-预计算".to_string(),
+            from_layer: "L2-pre-computed".to_string(),
             result_count: count,
             cached: false,
         }
@@ -446,7 +446,7 @@ mod tests {
         let result = QueryResult {
             template_id: "q:moc-scan".to_string(),
             data: Value::Array(vec![]),
-            from_layer: "L2-预聚合".to_string(),
+            from_layer: "L2-pre-aggregated".to_string(),
             result_count: 0,
             cached: false,
         };
@@ -462,8 +462,8 @@ mod tests {
 
         store.register_moc(MOCNode {
             moc_iri: "iri://moc/auth".to_string(),
-            name: "认证与授权".to_string(),
-            description: "认证相关技能".to_string(),
+            name: "Authentication & Authorization".to_string(),
+            description: "Authentication-related skills".to_string(),
             entry_points: vec!["iri://skills/jwt".to_string()],
             skill_count: 1,
             sub_categories: vec![],
@@ -471,7 +471,7 @@ mod tests {
 
         let result = engine.execute(
             QueryTemplateId::MocScan,
-            QueryParams::new().with("keyword", Value::String("认证".to_string())),
+            QueryParams::new().with("keyword", Value::String("auth".to_string())),
         );
         assert_eq!(result.result_count, 1);
     }
@@ -482,7 +482,7 @@ mod tests {
         let index = Arc::new(PreAggregatedIndex::new());
         let engine = QueryEngine::new(store.clone(), index.clone());
 
-        let skill = SkillGraphNode::new("iri://skills/jwt", "JWT Auth", "JWT 认证")
+        let skill = SkillGraphNode::new("iri://skills/jwt", "JWT Auth", "JWT Authentication")
             .with_tag("auth")
             .with_tag("jwt");
         index.index_skill(&skill);
@@ -502,7 +502,7 @@ mod tests {
         let index = Arc::new(PreAggregatedIndex::new());
         let engine = QueryEngine::new(store.clone(), index.clone());
 
-        let skill = SkillGraphNode::new("iri://skills/jwt", "JWT Auth", "JWT 认证");
+        let skill = SkillGraphNode::new("iri://skills/jwt", "JWT Auth", "JWT Authentication");
         store.register_skill(skill).unwrap();
 
         let result = engine.execute(

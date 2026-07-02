@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -220,6 +222,19 @@ pub enum SkillLinkType {
     Alternative,
     Extends,
     Generalization,
+}
+
+impl SkillLinkType {
+    pub fn as_sparql_uri(&self) -> &'static str {
+        match self {
+            Self::Prerequisite => "<skill:Prerequisite>",
+            Self::Composition => "<skill:Composition>",
+            Self::Related => "<skill:Related>",
+            Self::Alternative => "<skill:Alternative>",
+            Self::Extends => "<skill:Extends>",
+            Self::Generalization => "<skill:Generalization>",
+        }
+    }
 }
 
 impl Default for SkillLinkType {
@@ -603,6 +618,94 @@ impl SkillGraphNode {
             .collect()
     }
 
+    /// Build an embedding text combining semantic + structural fields (P0-3).
+    pub fn to_embedding_text(&self) -> String {
+        format!(
+            "{}: {} | What: {} | Why: {} | How: {} | Tags: {}",
+            self.name,
+            self.description,
+            self.w2h.what,
+            self.w2h.why,
+            self.w2h.how.approach,
+            self.tags.join(", ")
+        )
+    }
+
+    /// Build a structural embedding emphasising hierarchy and links (P1-2).
+    pub fn to_structural_embedding_text(&self) -> String {
+        let hierarchy = self
+            .attached_to
+            .as_ref()
+            .map(|p| format!(" under {}", p))
+            .unwrap_or_default();
+
+        let prereqs: Vec<&str> = self
+            .links
+            .iter()
+            .filter(|l| l.link_type == SkillLinkType::Prerequisite)
+            .map(|l| l.target_iri.as_str())
+            .collect();
+        let compositors: Vec<&str> = self
+            .links
+            .iter()
+            .filter(|l| l.link_type == SkillLinkType::Composition)
+            .map(|l| l.target_iri.as_str())
+            .collect();
+
+        format!(
+            "{} type:{:?} maturity:{}{} prerequisites:{} compositors:{}",
+            self.name,
+            self.node_type,
+            self.maturity,
+            hierarchy,
+            prereqs.join(","),
+            compositors.join(","),
+        )
+    }
+
+    /// Generate SPARQL INSERT DATA for persisting this node to Oxigraph (P0-1).
+    pub fn to_sparql_insert(&self, graph: &str) -> String {
+        use std::fmt::Write;
+        let mut triples = String::new();
+
+        let _ = write!(
+            triples,
+            "<{}> a <skill:CognitiveSkill> ;\n  <skill:name> '{}' ;\n  <skill:description> '{}' .\n",
+            self.skill_iri,
+            self.name.replace('\'', "\\'"),
+            self.description.replace('\'', "\\'"),
+        );
+
+        let _ = write!(
+            triples,
+            "<{}> <skill:what> '{}' ;\n  <skill:why> '{}' .\n",
+            self.skill_iri,
+            self.w2h.what.replace('\'', "\\'"),
+            self.w2h.why.replace('\'', "\\'"),
+        );
+
+        for link in &self.links {
+            let _ = writeln!(
+                triples,
+                "<{}> <{}> <{}> .",
+                self.skill_iri,
+                link.link_type.as_sparql_uri(),
+                link.target_iri
+            );
+        }
+
+        let _ = write!(
+            triples,
+            "<{}> <skill:usageCount> {} ;\n  <skill:successRate> \"{}\"^^<http://www.w3.org/2001/XMLSchema#float> ;\n  <skill:maturity> '{}' .\n",
+            self.skill_iri,
+            self.graph_meta.usage_count,
+            self.graph_meta.success_rate,
+            self.maturity,
+        );
+
+        format!("INSERT DATA {{ GRAPH <{}> {{ {} }} }}", graph, triples)
+    }
+
     pub fn to_json_ld(&self) -> serde_json::Value {
         use serde_json::json;
 
@@ -934,6 +1037,194 @@ impl MCPSkillMapping {
     }
 }
 
+// ─── P1-1: Hyperedge Composition ──────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Hyperedge {
+    pub hyperedge_id: String,
+    pub name: String,
+    pub description: String,
+    pub components: Vec<String>,
+    pub target_composite: Option<String>,
+    pub composition_type: CompositionType,
+    pub weight: f32,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompositionType {
+    Conjunction,
+    Disjunction,
+    Exactly(u32),
+    AtLeast(u32),
+    Pipeline,
+}
+
+impl Hyperedge {
+    pub fn new(hyperedge_id: &str, name: &str, description: &str, components: Vec<String>) -> Self {
+        Self {
+            hyperedge_id: hyperedge_id.to_string(),
+            name: name.to_string(),
+            description: description.to_string(),
+            components,
+            target_composite: None,
+            composition_type: CompositionType::Conjunction,
+            weight: 1.0,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn with_composition_type(mut self, ct: CompositionType) -> Self {
+        self.composition_type = ct;
+        self
+    }
+
+    pub fn with_target(mut self, target: &str) -> Self {
+        self.target_composite = Some(target.to_string());
+        self
+    }
+
+    pub fn with_weight(mut self, weight: f32) -> Self {
+        self.weight = weight.clamp(0.0, 1.0);
+        self
+    }
+}
+
+// ─── P1-3: Causal Failure Analysis ────────────────────────────────────────
+
+/// P1-3 causal event type, superseded by `causal::types::CausalObservation`.
+/// Use `CausalObservation` for new code.
+#[deprecated(since = "0.1.2", note = "Use crate::causal::types::CausalObservation instead")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CausalEvent {
+    pub event_id: String,
+    pub timestamp: DateTime<Utc>,
+    pub skill_iri: String,
+    pub error_class: String,
+    pub error_signature: String,
+    pub context: HashMap<String, String>,
+    pub propagation_from: Option<String>,
+}
+
+/// Superseded by `causal::types::CausalInference`.
+#[deprecated(since = "0.1.2", note = "Use crate::causal::types::CausalInference instead")]
+#[allow(deprecated)]
+#[derive(Debug, Clone)]
+pub struct CausalChain {
+    pub root_cause: CausalEvent,
+    pub propagation_path: Vec<CausalEvent>,
+    pub confidence: f32,
+}
+
+/// Superseded by `CausalModelStore` + `CausalEngine`.
+#[deprecated(since = "0.1.2", note = "Use crate::causal::store::CausalModelStore instead")]
+#[allow(deprecated)]
+#[derive(Debug, Clone)]
+pub struct SkillCausalModel {
+    pub error_profiles: HashMap<String, HashMap<String, u32>>,
+    pub propagation_edges: HashMap<String, HashMap<String, u32>>,
+    pub root_cause_probability: HashMap<String, f32>,
+}
+
+#[allow(deprecated)]
+impl Default for SkillCausalModel {
+    fn default() -> Self {
+        Self {
+            error_profiles: HashMap::new(),
+            propagation_edges: HashMap::new(),
+            root_cause_probability: HashMap::new(),
+        }
+    }
+}
+
+#[allow(deprecated)]
+impl SkillCausalModel {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn record_failure(&mut self, skill_iri: &str, error_sig: &str) {
+        let profile = self.error_profiles.entry(skill_iri.to_string()).or_default();
+        *profile.entry(error_sig.to_string()).or_insert(0) += 1;
+    }
+
+    pub fn record_propagation(&mut self, from: &str, to: &str) {
+        let edges = self.propagation_edges.entry(from.to_string()).or_default();
+        *edges.entry(to.to_string()).or_insert(0) += 1;
+    }
+
+    pub fn propagation_probability(&self, from: &str, to: &str) -> f32 {
+        self.propagation_edges
+            .get(from)
+            .and_then(|edges| edges.get(to))
+            .copied()
+            .unwrap_or(0) as f32
+    }
+}
+
+// ─── P1-4: Temporal Versioning ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotRecord {
+    pub snapshot_id: String,
+    pub label: String,
+    pub timestamp: DateTime<Utc>,
+    pub skill_count: usize,
+}
+
+// ─── P2-1: Hybrid Search ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct FusedHit {
+    pub iri: String,
+    pub score: f32,
+}
+
+// ─── P2-2: Graph Algorithms ────────────────────────────────────────────────
+
+/// A fused node used by graph algorithm results when the caller wants
+/// an IRI + computed score without coupling to petgraph types.
+#[derive(Debug, Clone)]
+pub struct ScoredNode {
+    pub iri: String,
+    pub score: f64,
+}
+
+// ─── P2-3: Formal Verification ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GraphInvariant {
+    Acyclicity,
+    LinkTargetExists,
+    CompositeReachability,
+    NoDeprecatedPrerequisites,
+    Valid5W2H,
+    ValidSecurityLevels,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ViolationSeverity {
+    Error,
+    Warning,
+    Info,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Violation {
+    pub severity: ViolationSeverity,
+    pub description: String,
+    pub affected_iris: Vec<String>,
+    pub suggestion: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationResult {
+    pub invariant: GraphInvariant,
+    pub passed: bool,
+    pub violations: Vec<Violation>,
+    pub duration_ms: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1195,5 +1486,165 @@ mod tests {
         ).with_storage_tier(StorageTier::L2Blackboard);
 
         assert_eq!(node.storage_tier, StorageTier::L2Blackboard);
+    }
+
+    // ── P1-1: Hyperedge tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_hyperedge_creation() {
+        let he = Hyperedge::new(
+            "hyperedge:auth",
+            "Auth Pipeline",
+            "Authentication pipeline",
+            vec!["iri://skills/login".to_string(), "iri://skills/jwt".to_string()],
+        ).with_composition_type(CompositionType::Conjunction)
+         .with_weight(0.9);
+
+        assert_eq!(he.hyperedge_id, "hyperedge:auth");
+        assert_eq!(he.components.len(), 2);
+        assert_eq!(he.composition_type, CompositionType::Conjunction);
+        assert!((he.weight - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_hyperedge_pipeline() {
+        let he = Hyperedge::new(
+            "hyperedge:deploy",
+            "Deploy Pipeline",
+            "Ordered deployment steps",
+            vec![
+                "iri://skills/build".to_string(),
+                "iri://skills/test".to_string(),
+                "iri://skills/deploy".to_string(),
+            ],
+        ).with_composition_type(CompositionType::Pipeline)
+         .with_target("iri://skills/deploy-pipeline");
+
+        assert_eq!(he.composition_type, CompositionType::Pipeline);
+        assert_eq!(he.target_composite, Some("iri://skills/deploy-pipeline".to_string()));
+    }
+
+    #[test]
+    fn test_hyperedge_at_least() {
+        let he = Hyperedge::new(
+            "hyperedge:any-2",
+            "Any 2 Skills",
+            "Any 2 of 5 skills required",
+            vec![
+                "iri://skills/a".to_string(),
+                "iri://skills/b".to_string(),
+                "iri://skills/c".to_string(),
+            ],
+        ).with_composition_type(CompositionType::AtLeast(2));
+
+        assert_eq!(he.composition_type, CompositionType::AtLeast(2));
+    }
+
+    // ── P1-3: Causal event tests ───────────────────────────────────────
+
+    #[test]
+    fn test_causal_model_record_failure() {
+        let mut model = SkillCausalModel::new();
+        model.record_failure("iri://skills/token-gen", "timeout_error");
+        model.record_failure("iri://skills/token-gen", "timeout_error");
+
+        let profile = model.error_profiles.get("iri://skills/token-gen").unwrap();
+        assert_eq!(profile.get("timeout_error"), Some(&2));
+    }
+
+    #[test]
+    fn test_causal_model_propagation() {
+        let mut model = SkillCausalModel::new();
+        model.record_propagation("iri://skills/db-conn", "iri://skills/query-exec");
+
+        let prob = model.propagation_probability("iri://skills/db-conn", "iri://skills/query-exec");
+        assert!((prob - 1.0).abs() < 1e-6);
+    }
+
+    // ── P1-4: Snapshot record tests ─────────────────────────────────────
+
+    #[test]
+    fn test_snapshot_record() {
+        let record = SnapshotRecord {
+            snapshot_id: "snapshot:test_20260629".to_string(),
+            label: "test".to_string(),
+            timestamp: Utc::now(),
+            skill_count: 42,
+        };
+        assert_eq!(record.skill_count, 42);
+    }
+
+    // ── P2-1: FusedHit tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_fused_hit_ordering() {
+        let mut hits = vec![
+            FusedHit { iri: "iri://skills/a".to_string(), score: 0.5 },
+            FusedHit { iri: "iri://skills/b".to_string(), score: 0.8 },
+            FusedHit { iri: "iri://skills/c".to_string(), score: 0.3 },
+        ];
+        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        assert_eq!(hits[0].iri, "iri://skills/b");
+    }
+
+    // ── P2-3: Verification types tests ──────────────────────────────────
+
+    #[test]
+    fn test_graph_invariant_debug() {
+        let inv = GraphInvariant::Acyclicity;
+        assert_eq!(format!("{:?}", inv), "Acyclicity");
+    }
+
+    #[test]
+    fn test_verification_result() {
+        let result = VerificationResult {
+            invariant: GraphInvariant::LinkTargetExists,
+            passed: true,
+            violations: vec![],
+            duration_ms: 5,
+        };
+        assert!(result.passed);
+        assert_eq!(result.duration_ms, 5);
+    }
+
+    #[test]
+    fn test_violation_severity() {
+        let v = Violation {
+            severity: ViolationSeverity::Error,
+            description: "Missing link target".to_string(),
+            affected_iris: vec!["iri://skills/missing".to_string()],
+            suggestion: "Add the missing skill or remove the link".to_string(),
+        };
+        assert!(matches!(v.severity, ViolationSeverity::Error));
+    }
+
+    #[test]
+    fn test_skill_link_type_sparql_uri() {
+        assert_eq!(SkillLinkType::Prerequisite.as_sparql_uri(), "<skill:Prerequisite>");
+        assert_eq!(SkillLinkType::Composition.as_sparql_uri(), "<skill:Composition>");
+        assert_eq!(SkillLinkType::Related.as_sparql_uri(), "<skill:Related>");
+        assert_eq!(SkillLinkType::Alternative.as_sparql_uri(), "<skill:Alternative>");
+        assert_eq!(SkillLinkType::Extends.as_sparql_uri(), "<skill:Extends>");
+        assert_eq!(SkillLinkType::Generalization.as_sparql_uri(), "<skill:Generalization>");
+    }
+
+    #[test]
+    fn test_to_embedding_text() {
+        let skill = SkillGraphNode::new("iri://skills/test", "Test", "A test skill")
+            .with_tag("rust")
+            .with_tag("auth");
+        let text = skill.to_embedding_text();
+        assert!(text.contains("Test"));
+        assert!(text.contains("rust"));
+        assert!(text.contains("auth"));
+    }
+
+    #[test]
+    fn test_to_structural_embedding_text() {
+        let mut skill = SkillGraphNode::new("iri://skills/test", "Test", "A test skill");
+        skill.add_prerequisite("iri://skills/rust-basics", "Need Rust basics");
+        let text = skill.to_structural_embedding_text();
+        assert!(text.contains("Test"));
+        assert!(text.contains("rust-basics"));
     }
 }

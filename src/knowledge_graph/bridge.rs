@@ -3,6 +3,11 @@ use std::sync::Arc;
 use super::store::KnowledgeGraphStore;
 use super::types::{BridgeRelationType, RdfQuad, RdfValue};
 
+/// Entity-to-skill relation bridge backed by Oxigraph.
+///
+/// **Note**: This struct is only instantiated in unit tests. Production code
+/// uses `UnifiedGraphStore::with_shared_store()` + `SkillGraphStore::with_oxi_store()`
+/// for cross-subsystem Oxigraph sharing. See `src/memory/unified_graph.rs`.
 pub struct KnowledgeBridge {
     store: KnowledgeGraphStore,
     bridge_graph: String,
@@ -121,14 +126,14 @@ mod tests {
             .unwrap();
 
         let skills = bridge.query_bridged_skills("task_001").unwrap();
-        assert_eq!(skills.len(), 2, "应查询到 2 个关联 Skill");
+        assert_eq!(skills.len(), 2, "should query 2 associated skills");
         assert!(
             skills.contains(&"iri://skill/code_review".to_string()),
-            "应包含 code_review"
+            "should include code_review"
         );
         assert!(
             skills.contains(&"iri://skill/testing".to_string()),
-            "应包含 testing"
+            "should include testing"
         );
     }
 
@@ -152,10 +157,10 @@ mod tests {
             .unwrap();
 
         let skills = bridge.query_bridged_skills("entity_alpha").unwrap();
-        assert_eq!(skills.len(), 2, "应查询到 2 个 Skill");
+        assert_eq!(skills.len(), 2, "should query 2 skills");
 
         let empty = bridge.query_bridged_skills("nonexistent").unwrap();
-        assert!(empty.is_empty(), "不存在的实体应返回空列表");
+        assert!(empty.is_empty(), "nonexistent entity should return empty list");
     }
 
     #[test]
@@ -178,17 +183,17 @@ mod tests {
             .unwrap();
 
         let entities = bridge.query_bridged_entities("iri://skill/debug").unwrap();
-        assert_eq!(entities.len(), 2, "应查询到 2 个关联实体");
+        assert_eq!(entities.len(), 2, "should query 2 associated entities");
         assert!(
             entities.contains(&"iri://entity/entity_x".to_string()),
-            "应包含 entity_x"
+            "should include entity_x"
         );
         assert!(
             entities.contains(&"iri://entity/entity_y".to_string()),
-            "应包含 entity_y"
+            "should include entity_y"
         );
 
         let empty = bridge.query_bridged_entities("iri://skill/nonexistent").unwrap();
-        assert!(empty.is_empty(), "不存在的 Skill 应返回空列表");
+        assert!(empty.is_empty(), "nonexistent skill should return empty list");
     }
 }

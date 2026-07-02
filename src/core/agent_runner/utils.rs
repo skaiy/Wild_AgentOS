@@ -18,12 +18,12 @@ use super::{LlmParsedResponse, TaskContext, TaskResult, LLM_RESPONSE_FORMAT_NO_T
 
 impl super::AgentRunner {
     fn extract_summary(&self, content: &str, reasoning_content: Option<&str>) -> String {
-        // 优先从 JSON 中提取 summary 字段
+        // Prefer extracting summary field from JSON first
         if let Ok(parsed) = serde_json::from_str::<Value>(content) {
             if let Some(summary) = parsed.get("summary").and_then(|s| s.as_str()) {
                 return summary.chars().take(500).collect();
             }
-            // 如果有原生思考，不需要从 JSON 中提取 thought（避免重复）
+            // If native reasoning exists, no need to extract thought from JSON (avoid duplication)
             if reasoning_content.is_none() {
                 if let Some(thought) = parsed.get("thought").and_then(|s| s.as_str()) {
                     return thought.chars().take(500).collect();
@@ -34,13 +34,13 @@ impl super::AgentRunner {
             }
         }
 
-        // 如果有原生思考内容，使用它作为 summary
+        // If native reasoning exists, use it as summary
         if let Some(reasoning) = reasoning_content {
             let reasoning_summary: String = reasoning.chars().take(300).collect();
-            return format!("[思考] {}", reasoning_summary);
+            return format!("[Reasoning] {}", reasoning_summary);
         }
 
-        // 最后 fallback：直接使用 content 前 500 字符
+        // Final fallback: use first 500 chars of content
         content.chars().take(500).collect()
     }
 
@@ -60,34 +60,34 @@ impl super::AgentRunner {
             emphasis: Vec::new(),
         };
 
-        // 如果有原生思考内容，直接使用
+        // If native reasoning exists, use it directly
         if let Some(reasoning) = reasoning_content {
             response.thought = Some(reasoning.to_string());
             response.has_native_reasoning = true;
         }
 
-        // 尝试解析 JSON
+        // Parse JSON attempt
         if let Ok(parsed) = serde_json::from_str::<Value>(content) {
             response.is_valid_json = true;
 
-            // 提取 summary
+            // Extract summary
             if let Some(summary) = parsed.get("summary").and_then(|s| s.as_str()) {
                 response.summary = Some(summary.to_string());
             }
 
-            // 提取 content
+            // Extract content
             if let Some(content_str) = parsed.get("content").and_then(|s| s.as_str()) {
                 response.content = content_str.to_string();
             }
 
-            // 提取 thought（仅当模型不支持原生思考时）
+            // Extract thought (only when model does not support native reasoning)
             if !supports_native_reasoning {
                 if let Some(thought) = parsed.get("thought").and_then(|s| s.as_str()) {
                     response.thought = Some(thought.to_string());
                 }
             }
 
-            // 提取 emphasis 字段（LLM 自己识别的强调内容）
+            // Extract emphasis field (emphasis content identified by LLM itself)
             if let Some(emphasis) = parsed.get("emphasis") {
                 if let Some(arr) = emphasis.as_array() {
                     response.emphasis = arr
@@ -107,7 +107,7 @@ impl super::AgentRunner {
                 }
             }
 
-            // 提取 action 字段
+            // Extract action field
             if let Some(action) = parsed.get("action").and_then(|a| a.as_str()) {
                 response.action = Some(action.to_string());
             }
@@ -215,7 +215,7 @@ impl super::AgentRunner {
             return;
         }
 
-        // 应用 max_items 截断，防止 emphasis 无限膨胀
+        // Apply max_items truncation to prevent emphasis from expanding indefinitely
         let max_items = self
             .emphasis_config
             .as_ref()
@@ -223,11 +223,11 @@ impl super::AgentRunner {
             .unwrap_or(50);
         let items: Vec<&String> = emphasis_items.iter().take(max_items).collect();
 
-        // 先加载已有的强调内容用于去重
+        // Load existing emphasis content for deduplication
         let existing = self.load_emphasis_from_l0(task_iri).await;
 
         for content in items {
-            // 去重检测
+            // Deduplication check
             let is_duplicate = existing.iter().any(|existing_content| {
                 let similarity = Self::calculate_similarity(content, existing_content);
                 similarity >= dedup_threshold
@@ -235,7 +235,7 @@ impl super::AgentRunner {
 
             if is_duplicate {
                 debug!(
-                    "[L0] 跳过重复强调内容: {}",
+                    "[L0] Skipping duplicate emphasis content: {}",
                     content.chars().take(50).collect::<String>()
                 );
                 continue;
@@ -257,9 +257,9 @@ impl super::AgentRunner {
             });
 
             if let Err(e) = self.l0_store.store(&iri, &node.to_string()) {
-                warn!("保存强调内容到 L0 失败: {}", e);
+                warn!("Failed to save emphasis content to L0: {}", e);
             } else {
-                info!("[L0] 保存强调内容: {} -> {}", agent_id, &iri);
+                info!("[L0] Saved emphasis content: {} -> {}", agent_id, &iri);
             }
         }
     }
@@ -267,8 +267,8 @@ impl super::AgentRunner {
     pub(super) async fn load_emphasis_from_l0(&self, task_iri: &str) -> Vec<String> {
         let mut result = Vec::new();
 
-        // 使用 IRI 前缀扫描替代全量标签搜索
-        // 保存时 IRI 格式: iri://emphasis/{task_iri}/{uuid}
+        // Use IRI prefix scan instead of full tag search
+        // Save IRI format: iri://emphasis/{task_iri}/{uuid}
         let scan_prefix = format!(
             "iri://emphasis/{}",
             task_iri.strip_prefix("iri://").unwrap_or(task_iri)
@@ -283,7 +283,7 @@ impl super::AgentRunner {
             }
         }
 
-        // 也加载全局 emphasis（无 task_iri 的条目），使用 emphasis 标签回退扫描
+        // Also load global emphasis (entries without task_iri), using emphasis tag fallback scan
         if let Ok(nodes) = self.l0_store.search_by_tags(&[String::from("emphasis")]) {
             for node in nodes {
                 if let Ok(parsed) = serde_json::from_str::<Value>(&node.content) {
@@ -314,7 +314,7 @@ impl super::AgentRunner {
             return 0.0;
         }
 
-        // 使用简单的 Jaccard 相似度
+        // Use simple Jaccard similarity
         let a_set: std::collections::HashSet<char> = a_chars.iter().copied().collect();
         let b_set: std::collections::HashSet<char> = b_chars.iter().copied().collect();
 
@@ -373,7 +373,7 @@ impl super::AgentRunner {
                 for item in arr {
                     if let Some(s) = item.as_str() {
                         if !s.is_empty() {
-                            emphasis_items.push(format!("[约束] {}", s));
+                             emphasis_items.push(format!("[Constraint] {}", s));
                         }
                     }
                 }
@@ -385,8 +385,8 @@ impl super::AgentRunner {
 
     fn extract_emphasis_by_keywords(text: &str) -> Vec<String> {
         let keywords = [
-            "必须", "重要", "关键", "务必", "不要忘记", "切记", "一定",
-            "禁止", "不允许", "注意", "千万不要", "绝不能",
+            "must", "important", "critical", "make sure", "don't forget", "remember", "always",
+            "forbidden", "not allowed", "caution", "never", "absolutely not",
             "MUST", "IMPORTANT", "CRITICAL", "NEVER", "ALWAYS",
             "REQUIRED", "MANDATORY", "ESSENTIAL", "WARNING",
         ];
@@ -491,7 +491,7 @@ impl super::AgentRunner {
         self.blackboard
             .write_node(&node_iri, &node_json.to_string(), &cfg)?;
 
-        info!("[L2] 存储 JSON-LD 节点: {} for task {}", node_iri, task_iri);
+        info!("[L2] Storing JSON-LD node: {} for task {}", node_iri, task_iri);
         Ok(node_iri)
     }
 
@@ -515,7 +515,7 @@ impl super::AgentRunner {
             ctx.tenant_id.as_deref(),
         );
 
-        // 计算任务 embedding，用于语义相关度淘汰
+        // Compute task embedding for semantic relevance pruning
         if let Some(ref embedder) = self.embedder {
             if let Ok(task_emb) = embedder.embed(&ctx.objective).await {
                 session.set_task_embedding(task_emb.clone());
@@ -561,45 +561,46 @@ impl super::AgentRunner {
         let mut prompt_builder = SystemPromptBuilder::new();
         prompt_builder.set_region(SystemPromptRegion::RoleDefinition, agent_md.clone());
 
-        // Region 1.5: 工作区环境信息区
+        // Region 1.5: Workspace environment info
         if let Some(ref ws_root) = self.workspace_root {
             let env_info = format!(
-                "## 工作区\n\n- 工作区路径: {}\n\
-                 - 你的所有文件操作（读取、写入、搜索、命令执行）应限于工作区内\n\
-                 - 工作区外的文件与当前任务无关，不应访问\n\
-                 - 工作区根目录下可能存在与当前任务无关的其他目录和文件，请注意区分",
+                "## Workspace\n\n- Workspace path: {}\n\
+                 - All your file operations (read, write, search, command execution) are limited to the workspace\n\
+                 - Files outside the workspace are not relevant to the current task and should not be accessed\n\
+                 - The workspace root may contain other directories and files unrelated to the current task — please distinguish carefully",
                 ws_root.display()
             );
             prompt_builder.set_region(SystemPromptRegion::EnvironmentInfo, env_info);
         }
 
-        // Region 2: 行为准则区（宪法层 + 方法论层）
+        // Region 2: Code of conduct (constitution + methodology)
         {
             let mut policy_text = build_constitution_prompt(agent.role);
 
-            policy_text.push_str("\n\n### 🔴 任务专注原则（必须遵守）\n");
-            policy_text.push_str("- 你的唯一任务是当前指定的「当前任务」，工作区中的其他任何目录/文件都与你的任务无关\n");
-            policy_text.push_str("- 对于不相关的文件或目录（如其他项目、测试产出、无关代码库），必须直接忽略，禁止探索或处理\n");
-            policy_text.push_str("- 使用 glob_search、file_list 或类似工具时，如果结果中包含无关内容，必须自动过滤，禁止被其分散注意力\n");
-            policy_text.push_str("- 如果遇到任何不属于当前任务的文件/目录，必须跳过它们，继续执行当前任务，不得因无关内容改变任务方向\n");
-            policy_text.push_str("- 检查Agent(CA) 特别注意：你的审计报告只能包含与当前任务相关的内容，发现无关文件时必须忽略，不得写入报告\n");
-            policy_text.push_str("- 决策Agent(AA) 特别注意：禁止主动探索文件，你的决策必须仅基于 CA 审计结果，忽略审计结果中的任何无关内容\n");
+            policy_text.push_str("\n\n### 🔴 Task Focus Principle (Must Follow)\n");
+            policy_text.push_str("- Your only task is the currently assigned \"Current Task\". Other directories/files in the workspace are not relevant to your task\n");
+            policy_text.push_str("- For unrelated files or directories (e.g., other projects, test outputs, irrelevant codebases), you must ignore them directly — do not explore or process them\n");
+            policy_text.push_str("- When using glob_search, file_list, or similar tools, if results contain irrelevant content, you must automatically filter it out — do not let it distract you\n");
+            policy_text.push_str("- If you encounter any files/directories that do not belong to the current task, skip them and continue executing the current task — do not change direction due to irrelevant content\n");
+            policy_text.push_str("- Check Agent (CA) special note: Your audit report may only contain content related to the current task. If you discover irrelevant files, ignore them and do not include them in the report\n");
+            policy_text.push_str("- Decision Agent (AA) special note: Do not actively explore files. Your decisions must be based solely on CA audit results — ignore any irrelevant content in the audit results\n");
 
-            // 注入方法论纪律（PA/CA/AA 专属）
+
+            // Inject methodology discipline (PA/CA/AA specific)
             if let Some(methodology_addendum) = MethodologyPromptInjector::build_for_role(agent.role) {
                 policy_text.push_str(&methodology_addendum);
             }
-            // 注入活跃方法论的劝导指令
+            // Inject persuasive directives for active methodologies
             if let Some(ref gate) = self.methodology_gate {
                 let directives = gate.inner().read().persuasive_directives();
                 if !directives.is_empty() {
-                    policy_text.push_str("\n\n### 方法论执行要求\n");
+                    policy_text.push_str("\n\n### Methodology Execution Requirements\n");
                     for d in &directives {
                         policy_text.push_str(&format!("- {}\n", d));
                     }
                 }
             }
-            // AA 专属：注入方法论进化简报
+            // AA-specific: inject methodology evolution briefing
             if agent.role == AgentRole::Act {
                 if let Some(ref gate) = self.methodology_gate {
                     if let Some(ref evo) = gate.evolution_handle() {
@@ -631,7 +632,7 @@ impl super::AgentRunner {
         };
         prompt_builder.set_region(SystemPromptRegion::OutputFormat, format_constraint);
 
-        // Region: 输出管理区
+        // Region: Output management area
         prompt_builder.set_region(
             SystemPromptRegion::OutputManagement,
             crate::core::system_prompt::OUTPUT_MANAGEMENT.to_string(),
@@ -642,7 +643,7 @@ impl super::AgentRunner {
             prompt_builder.set_region(SystemPromptRegion::Tools, tool_menu);
         }
 
-        // Region: 提取提示区（从配置加载）
+        // Region: Extraction prompt area (loaded from config)
         if let Some(ref config) = self.emphasis_config {
             if config.enabled {
                 prompt_builder.set_region(
@@ -663,12 +664,12 @@ impl super::AgentRunner {
 
         let context_msg = if summary_text.is_empty() {
             format!(
-                "## 当前任务\n{}\n\n## 可用工具\n请根据需要使用工具完成任务。",
+                "## Current Task\n{}\n\n## Available Tools\nUse the tools as needed to complete the task.",
                 ctx.objective
             )
         } else {
             format!(
-                "## 当前任务\n{}\n\n## 历史摘要\n{}\n\n## 可用工具\n请根据需要使用工具完成任务。",
+                "## Current Task\n{}\n\n## History Summary\n{}\n\n## Available Tools\nUse the tools as needed to complete the task.",
                 ctx.objective, summary_text
             )
         };
@@ -699,7 +700,7 @@ impl super::AgentRunner {
             .tool_definitions_for_role(&agent.role.to_string());
 
         info!(
-            "AgentRunner Streaming 开始: role={}, model={}, tools={}",
+            "AgentRunner streaming started: role={}, model={}, tools={}",
             agent.role,
             model,
             tools.len()
@@ -719,7 +720,7 @@ impl super::AgentRunner {
         loop {
             if !guard_pending_pre_injections.is_empty() {
                 let prompt = format!(
-                    "\n\n[ToolGuard 约束指令]\n{}\n注意：以上约束仅适用于你接下来发起的同名工具调用。请严格遵守。",
+                    "\n\n[ToolGuard Constraint Directive]\n{}\nNote: The above constraints only apply to the upcoming tool call with the same name. Strictly comply.",
                     guard_pending_pre_injections.join("\n")
                 );
                 if let Some(sys_msg) = running_messages.first_mut() {
@@ -737,7 +738,7 @@ impl super::AgentRunner {
                     None,
                     None,
                     {
-                        // 每次调用前刷新 tools 列表，确保新注册的微工具被包含
+                        // Refresh the tools list before each call to include newly registered micro-tools
                         let current_tools = self
                             .tool_executor
                             .read()
@@ -807,7 +808,7 @@ impl super::AgentRunner {
                                 !write_tools.is_empty()
                             };
                             if force_finish {
-                                warn!("[PA Streaming] 写操作工具调用被阻止: {:?}", write_tools);
+                                warn!("[PA Streaming] Write operation tool calls blocked: {:?}", write_tools);
                                 break;
                             }
                         }
@@ -866,7 +867,7 @@ impl super::AgentRunner {
 
                             let handler = {
                                 let executor = self.tool_executor.read().unwrap_or_else(|e| {
-                                    warn!("ToolExecutor 读锁中毒 (streaming handler): {}", e);
+                                    warn!("ToolExecutor read lock poisoned (streaming handler): {}", e);
                                     e.into_inner()
                                 });
                                 executor.try_get_handler(name)
@@ -900,28 +901,28 @@ impl super::AgentRunner {
                             };
 
                             if let Some(guard_msg) = &guard_aborted {
-                                warn!("[Streaming] {} ToolGuard 拦截: {}", name, guard_msg);
+                                warn!("[Streaming] {} ToolGuard intercepted: {}", name, guard_msg);
                             } else if let Some(_err_val) = result.get("error") {
                                 let err_msg = _err_val.as_str().unwrap_or("");
                                 let is_tool_not_found = err_msg.starts_with("Tool not found: ");
-                                warn!("[Streaming] tool {} 失败: {}", name, err_msg);
+                                warn!("[Streaming] tool {} failed: {}", name, err_msg);
                                 errs.push(format!("{}: {}", name, err_msg));
                                 if !is_tool_not_found {
                                     let tool_count = tool_error_counts.entry(name.clone()).or_insert(0);
                                     *tool_count += 1;
-                                    debug!("[Streaming][tool_error] {} 失败次数: {}/3", name, *tool_count);
+                                    debug!("[Streaming][tool_error] {} failure count: {}/3", name, *tool_count);
                                     if *tool_count >= 3 {
                                         *tool_count = 999;
                                         result_str = format!(
-                                            "{}\n\n[系统提示] 工具 {} 连续 3 次执行失败，说明该工具当前不可用。\
-                                             \n请改用其他可用工具完成当前目标（如 web_search / bash / grep 等）。\
-                                             \n不要再调用 {}。",
+                                            "{}\n\n[System] Tool {} failed 3 consecutive times — this tool is currently unavailable.\
+                                             \nUse other available tools (e.g., web_search / bash / grep) to complete the current goal.\
+                                             \nDo not call {} again.",
                                             result_str, name, name
                                         );
                                     }
                                 } else {
                                     result_str = format!(
-                                        "{}\n\n提示：工具 {} 当前不可用。请改用原始工具（如 bash、grep_search）加更精确的参数直接获取所需数据，不要重复调用此微工具。",
+                                        "{}\n\nHint: Tool {} is currently unavailable. Use the underlying tools (e.g., bash, grep_search) with more precise parameters to get the needed data directly, and do not call this micro-tool again.",
                                         result_str, name
                                     );
                                 }
@@ -929,11 +930,11 @@ impl super::AgentRunner {
                                     let _ = event_bus.emit(&ctx.task_iri, "AGENT_ERROR", &agent.agent_id, &serde_json::json!({"error": err_msg, "tool": name}).to_string()).await;
                                 }
                             } else {
-                                info!("[Streaming] tool {} 成功", name);
+                                info!("[Streaming] tool {} succeeded", name);
                             }
 
                             let tool_content = if let Some(guard_msg) = &guard_aborted {
-                                format!("[ToolGuard 拦截] 工具 {} 的结果被安全系统拒绝。{}", name, guard_msg)
+                                format!("[ToolGuard Intercepted] Result for tool {} was rejected by the security system. {}", name, guard_msg)
                             } else {
                                 result_str
                             };
@@ -946,7 +947,7 @@ impl super::AgentRunner {
                             }
                             self.compress_tool_results_with_microtools(&mut running_messages);
 
-                            // 跨轮次老化：按陈旧度压缩旧 tool 结果
+                            // Cross-turn aging: compress old tool results by staleness
                             if let Some(ref aging) = self.tool_result_aging {
                                 aging.age_tool_results(&mut running_messages, &self.tool_executor);
                             }
@@ -963,7 +964,7 @@ impl super::AgentRunner {
 
                         turn += 1;
 
-                        // 每次 tool 调用后检查是否需压缩（与 exec() 行为一致）
+                        // Check if compression is needed after each tool call (consistent with exec() behavior)
                         let cwm_did_compress = if let Some(ref cwm_lock) = self.context_window_manager {
                             if let Ok(cwm) = cwm_lock.lock() {
                                 if cwm.should_compress(running_messages.len(), &running_messages) {
@@ -971,7 +972,7 @@ impl super::AgentRunner {
                                     let orig_count = running_messages.len();
                                     running_messages = compressed;
                                     debug!(
-                                        "[Streaming] 上下文压缩: {} → {} 条",
+                                        "[Streaming] Context compression: {} → {} messages",
                                         orig_count,
                                         running_messages.len()
                                     );
@@ -986,7 +987,7 @@ impl super::AgentRunner {
                             false
                         };
 
-                        // 回退：纯硬截断（CWM 不可用时或配置不当的安全保护）
+                        // Fallback: hard truncation (safety net when CWM is unavailable or misconfigured)
                         if !cwm_did_compress && running_messages.len() > 40 {
                             let system_msg = running_messages.first().cloned();
                             let kept_recent = running_messages.len().saturating_sub(15);
@@ -1030,12 +1031,12 @@ impl super::AgentRunner {
 
                             let summary_note = if summary_text.is_empty() {
                                 format!(
-                                    "[历史摘要] 之前已执行 {} 轮操作，包含 {} 次工具调用。以下是最近的对话：",
+                                    "[History Summary] Previously executed {} turns with {} tool calls. Here is the recent conversation:",
                                     turn, tc
                                 )
                             } else {
                                 format!(
-                                    "[历史摘要] 已执行 {} 轮。关键记录：\n{}\n\n如需详细信息，使用 kg_search / knowledge_query 查询 IRI。",
+                                    "[History Summary] {} turns completed. Key records:\n{}\n\nFor details, use kg_search / knowledge_query to query the IRI.",
                                     turn,
                                     summary_text
                                 )
@@ -1052,14 +1053,14 @@ impl super::AgentRunner {
                             running_messages.extend(recent);
 
                             warn!(
-                                "[Streaming] 消息历史硬截断: 保留 {} 条 (原始 {} 条)",
+                                "[Streaming] Message history hard truncated: kept {} messages (original {} )",
                                 running_messages.len(),
                                 kept_recent + 17
                             );
                         }
 
                         if turn >= max_turns {
-                            warn!("[Streaming] 达到最大工具调用轮次 {}", max_turns);
+                            warn!("[Streaming] Reached max tool call turns {}", max_turns);
                             break;
                         }
                         continue;
@@ -1071,7 +1072,7 @@ impl super::AgentRunner {
                     last_thought = parsed.thought.clone().unwrap_or_default();
                     last_summary = parsed.summary.clone()
                         .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content));
-                    info!("AgentRunner Streaming 完成: role={}, tools={}, turn={}",
+                    info!("AgentRunner streaming finished: role={}, tools={}, turn={}",
                         agent.role, tc, turn);
                     break;
                 }
@@ -1098,7 +1099,7 @@ impl super::AgentRunner {
             &last_summary,
             l0_iri.clone(),
         );
-        // 计算 turn embedding 和 relevance_score
+        // Compute turn embedding and relevance_score
         if let (Some(ref embedder), Some(ref tracker_lock)) = (&self.embedder, &self.relevance_tracker) {
             if let Ok(emb) = embedder.embed(&last_summary).await {
                 let mut tracker = tracker_lock.lock().unwrap();
@@ -1126,7 +1127,7 @@ impl super::AgentRunner {
         let output_value = Value::String(last_content.clone());
         let jsonld_output = self.apply_output_mapping(&output_value, &agent.role, &ctx.task_iri);
 
-        info!("AgentRunner Streaming 完成: {} tools", tc);
+        info!("AgentRunner streaming finished: {} tools", tc);
 
         (Ok(TaskResult {
             task_iri: ctx.task_iri,
@@ -1144,14 +1145,14 @@ impl super::AgentRunner {
         }), session)
     }
 
-    /// 将微工具数据同时写入内存和 L0 持久化存储
+    /// Store micro-tool data to both memory and L0 persistent storage
     fn store_micro_tool_data_persistent(&self, storage_key: &str, data: serde_json::Value) {
         let exe = self.tool_executor.write().unwrap_or_else(|e| {
-            warn!("ToolExecutor 写锁中毒 (store_micro_tool_data): {}", e);
+            warn!("ToolExecutor write lock poisoned (store_micro_tool_data): {}", e);
             e.into_inner()
         });
         exe.store_micro_tool_data(storage_key, data.clone());
-        // L0 持久化，保证跨会话可用
+        // L0 persistence for cross-session availability
         if let Ok(data_str) = serde_json::to_string(&data) {
             let _ = self.l0_store.store(storage_key, &data_str);
         }
@@ -1178,8 +1179,8 @@ impl super::AgentRunner {
 
         match decision {
             RouteDecision::PassThrough => {
-                // 小结果: 直通但附加 IRI 元信息
-                // 对超过 prepare_threshold 的结果预注册 micro-tool，为引用式压缩做准备
+                // Small result: pass through but attach IRI metadata
+                // Pre-register micro-tool for results exceeding prepare_threshold, in preparation for reference compression
                 if result_str.len() > settings.prepare_threshold {
                     self.store_micro_tool_data_persistent(&iri, serde_json::json!({
                         "content": result_str,
@@ -1195,7 +1196,7 @@ impl super::AgentRunner {
                     };
                     if let Ok(mut exe) = self.tool_executor.write() {
                         exe.register_micro_tool(&read_tool_name, ctx);
-                        // 通知 workspace_monitor 文件已通过 read_full_result 读取
+                        // Notify workspace_monitor that the file was read via read_full_result
                         if tool_name == "file_read" {
                             if let Ok(val) = serde_json::from_str::<Value>(result_str) {
                                 if let Some(path) = val.get("path").and_then(|v| v.as_str()) {
@@ -1204,7 +1205,7 @@ impl super::AgentRunner {
                             }
                         }
                     } else {
-                        warn!("ToolExecutor 写锁中毒 (register_micro_tool pt): 跳过 micro-tool 注册");
+                        warn!("ToolExecutor write lock poisoned (register_micro_tool pt): skipping micro-tool registration");
                     }
                 }
                 format!("{}\nIRI: {}", result_str, iri)
@@ -1216,7 +1217,7 @@ impl super::AgentRunner {
                 } else {
                     summary::smart_truncate(result_str, max_chars)
                 };
-                // 持久化完整结果到内存+L0
+                // Persist full result to memory + L0
                 self.store_micro_tool_data_persistent(&iri, serde_json::json!({
                     "content": result_str,
                     "tool_name": tool_name,
@@ -1230,11 +1231,11 @@ impl super::AgentRunner {
                     preview_size: settings.preview_size,
                 };
                 let mut exe = self.tool_executor.write().unwrap_or_else(|e| {
-                    warn!("ToolExecutor 写锁中毒 (register_micro_tool trunc): {}", e);
+                    warn!("ToolExecutor write lock poisoned (register_micro_tool trunc): {}", e);
                     e.into_inner()
                 });
                 exe.register_micro_tool(&read_tool_name, ctx);
-                // 通知 workspace_monitor 文件已通过 read_full_result 读取
+                // Notify workspace_monitor that the file was read via read_full_result
                 if tool_name == "file_read" {
                     if let Ok(val) = serde_json::from_str::<Value>(result_str) {
                         if let Some(path) = val.get("path").and_then(|v| v.as_str()) {
@@ -1278,20 +1279,20 @@ impl super::AgentRunner {
                                         preview_size: settings.preview_size,
                                     };
                                     let mut exe = self.tool_executor.write().unwrap_or_else(|e| {
-                                        warn!("ToolExecutor 写锁中毒 (register_micro_tool graphify): {}", e);
+                                        warn!("ToolExecutor write lock poisoned (register_micro_tool graphify): {}", e);
                                         e.into_inner()
                                     });
                                     exe.register_micro_tool(&mt.name, ctx);
                                 }
                                 info!(
-                                    "[ResultRouter] 图谱化: {} 个实体, {} 个关系, {} 个微工具, graph={}",
+                                    "[ResultRouter] Graphified: {} entities, {} relations, {} micro-tools, graph={}",
                                     graphify_result.entity_count, graphify_result.relation_count,
                                     micro_tools.len(), graph_name,
                                 );
                                 summary::format_iri_message(tool_name, call_id, &graphify_result.summary, result_str.len())
                             }
                             Err(e) => {
-                                warn!("[ResultRouter] 图谱化失败: {}, 回退到 IRI 格式", e);
+                                warn!("[ResultRouter] Graphification failed: {}, falling back to IRI format", e);
                                 let truncated = summary::smart_truncate(result_str, settings.threshold_large);
                                 summary::format_iri_message(tool_name, call_id, &truncated, result_str.len())
                             }
@@ -1319,14 +1320,14 @@ impl super::AgentRunner {
                     preview_size,
                 };
                 let mut exe = self.tool_executor.write().unwrap_or_else(|e| {
-                    warn!("ToolExecutor 写锁中毒 (register_micro_tool summarize): {}", e);
+                    warn!("ToolExecutor write lock poisoned (register_micro_tool summarize): {}", e);
                     e.into_inner()
                 });
                 exe.register_micro_tool(&read_tool_name, ctx);
 
                 let preview = summary::generate_text_summary(result_str, tool_name, preview_size);
                 info!(
-                    "[ResultRouter] 摘要化: {} 字节 -> 预览 {} 字节, 微工具: {}, IRI: {}",
+                    "[ResultRouter] Summarized: {} bytes -> preview {} bytes, micro-tool: {}, IRI: {}",
                     result_str.len(), preview_size, read_tool_name, iri,
                 );
                 summary::format_iri_message(tool_name, call_id, &preview, result_str.len())
@@ -1334,8 +1335,8 @@ impl super::AgentRunner {
         }
     }
 
-    /// 引用式压缩：对超过阈值的 tool 消息，若存在对应 micro-tool 则替换为轻量引用。
-    /// 在 ToolResultCompressor::compress_tool_messages 之后调用。
+    /// Reference compression: for tool messages exceeding the threshold, replace with a lightweight reference if a corresponding micro-tool exists.
+    /// Call after ToolResultCompressor::compress_tool_messages.
     pub(super) fn compress_tool_results_with_microtools(
         &self,
         messages: &mut Vec<ChatMessage>,
@@ -1368,11 +1369,11 @@ impl super::AgentRunner {
                 let iri = format!("iri://tool-result/{}", call_id);
                 let original_size = msg.content.len();
                 msg.content = format!(
-                    "[已压缩 {} 字节] 完整结果请调用 `{}` 工具\nIRI: {}",
+                    "[Compressed {} bytes] Call the `{}` tool for the full result\nIRI: {}",
                     original_size, micro_tool_name, iri,
                 );
                 debug!(
-                    "[tool_compress] 引用式压缩: {} ({} 字节 -> {} 字节)",
+                    "[tool_compress] Reference compression: {} ({} bytes -> {} bytes)",
                     micro_tool_name, original_size, msg.content.len(),
                 );
             }

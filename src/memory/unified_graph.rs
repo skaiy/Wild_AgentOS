@@ -133,6 +133,24 @@ impl UnifiedGraphStore {
         })
     }
 
+    /// Create a UnifiedGraphStore backed by a shared Oxigraph `Arc<Store>`.
+    ///
+    /// All subsystems (skill graph, knowledge bridge, blackboard) that receive
+    /// the same `Arc<Store>` will share the underlying Oxigraph store, enabling
+    /// cross-subsystem SPARQL joins via named graphs.
+    ///
+    /// This is the production pattern used by the gRPC server — it creates one
+    /// `UnifiedGraphStore` and passes `Arc::clone(&store.store())` to all consumers
+    /// via their respective `with_shared_store()` / `with_oxi_store()` builders.
+    pub fn with_shared_store(store: Arc<Store>) -> Self {
+        Self {
+            store,
+            default_graph: "http://agent-os.org/graph/default".to_string(),
+            transaction_log: RwLock::new(TransactionLog::new()),
+            in_transaction: RwLock::new(false),
+        }
+    }
+
     pub fn store(&self) -> Arc<Store> {
         self.store.clone()
     }

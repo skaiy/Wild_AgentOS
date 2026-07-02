@@ -73,7 +73,7 @@ impl PrefetchEngine {
             let mut pending_set = self.pending.write();
             top_candidates.into_iter().filter(|(iri, _)| {
                 if pending_set.contains(iri) {
-                    debug!(entity_iri = %iri, "跳过重复预取");
+                    debug!(entity_iri = %iri, "skipping duplicate prefetch");
                     false
                 } else {
                     pending_set.insert(iri.clone());
@@ -103,7 +103,7 @@ impl PrefetchEngine {
         debug!(
             intent = %new_intent,
             candidates = to_enqueue.len(),
-            "意图变更触发预取"
+            "intent change triggered prefetch"
         );
     }
 
@@ -143,7 +143,7 @@ impl PrefetchEngine {
             }
         }
 
-        debug!(entity_iri = %entity_iri, "新实体加入预取队列");
+        debug!(entity_iri = %entity_iri, "new entity added to prefetch queue");
     }
 
     pub async fn execute_prefetch(&self) -> Result<usize, CoreError> {
@@ -156,7 +156,7 @@ impl PrefetchEngine {
             return Ok(0);
         }
 
-        info!(task_count = tasks.len(), "开始执行预取");
+        info!(task_count = tasks.len(), "starting prefetch execution");
 
         let config = CoreConfig::default();
         let mut handles = Vec::new();
@@ -207,7 +207,7 @@ impl PrefetchEngine {
                         successes.write().insert(entity_iri.clone());
                     }
                     Err(e) => {
-                        warn!(entity_iri = %entity_iri, error = %e, "预取投影失败");
+                        warn!(entity_iri = %entity_iri, error = %e, "prefetch projection failed");
                         failures.write().push((entity_iri.clone(), 1u32));
                     }
                 }
@@ -238,14 +238,14 @@ impl PrefetchEngine {
                 let count = retries.entry(entity_iri.clone()).or_insert(0);
                 *count += 1;
                 if *count < MAX_RETRIES {
-                    debug!(entity_iri = %entity_iri, retry = *count, "重试预取");
+                    debug!(entity_iri = %entity_iri, retry = *count, "retrying prefetch");
                     queue.push_back(PrefetchTask {
                         entity_iri: entity_iri.clone(),
                         intent: "retry".to_string(),
                         priority: 0.1,
                     });
                 } else {
-                    warn!(entity_iri = %entity_iri, "预取重试耗尽");
+                    warn!(entity_iri = %entity_iri, "prefetch retries exhausted");
                     self.pending.write().remove(entity_iri);
                     retries.remove(entity_iri);
                 }
@@ -253,7 +253,7 @@ impl PrefetchEngine {
         }
 
         let prefetched = success_set.read().len();
-        info!(prefetched = prefetched, "预取完成");
+        info!(prefetched = prefetched, "prefetch completed");
         Ok(prefetched)
     }
 
@@ -268,7 +268,7 @@ impl PrefetchEngine {
                 }
             }
         }
-        debug!(entity_iri = %entity_iri, related_count = related.len(), "实体图已更新");
+        debug!(entity_iri = %entity_iri, related_count = related.len(), "entity graph updated");
     }
 
     pub fn get_related_entities(&self, entity_iri: &str, max_hops: usize) -> Vec<(String, f64)> {

@@ -56,11 +56,11 @@ impl ConsistencyEngine {
         let strategy = self.determine_write_strategy(tags);
 
         self.blackboard.mark_dirty(node_iri);
-        debug!(node_iri = %node_iri, strategy = ?strategy, "L2 写入: 标记脏节点");
+        debug!(node_iri = %node_iri, strategy = ?strategy, "L2 write: marking dirty node");
 
         if strategy == WriteStrategy::WriteThrough {
             let flushed = self.blackboard.flush_dirty_nodes(&self.l0_store)?;
-            debug!(node_iri = %node_iri, flushed = flushed, "WriteThrough: 脏节点已写回 L0");
+            debug!(node_iri = %node_iri, flushed = flushed, "WriteThrough: dirty node flushed to L0");
         }
 
         self.memory_bus.publish_invalidate(node_iri, task_iri).await;
@@ -75,17 +75,17 @@ impl ConsistencyEngine {
         if let Some(node) = self.blackboard.read_node(node_iri)? {
             match node.mesi_state {
                 MesiState::Modified | MesiState::Exclusive | MesiState::Shared => {
-                    debug!(node_iri = %node_iri, state = ?node.mesi_state, "L2 读取: 缓存命中");
+                    debug!(node_iri = %node_iri, state = ?node.mesi_state, "L2 read: cache hit");
                 }
                 MesiState::Invalid => {
-                    debug!(node_iri = %node_iri, "L2 读取: Invalid 状态, 从 L0 重载");
+                    debug!(node_iri = %node_iri, "L2 read: Invalid state, reloading from L0");
                     self.blackboard.delete_node(node_iri)?;
                     if let Some(entry) = self.l0_store.retrieve(node_iri)? {
                         let config = CoreConfig::default();
                         self.blackboard.write_node(node_iri, &entry.content, &config)?;
-                        debug!(node_iri = %node_iri, "L2 读取: 已从 L0 重载节点");
+                        debug!(node_iri = %node_iri, "L2 read: node reloaded from L0");
                     } else {
-                        warn!(node_iri = %node_iri, "L2 读取: L0 中未找到对应条目");
+                        warn!(node_iri = %node_iri, "L2 read: no corresponding entry in L0");
                     }
                 }
             }
@@ -96,7 +96,7 @@ impl ConsistencyEngine {
     #[instrument(skip(self))]
     pub async fn on_l0_update(&self, iri: &str) -> Result<(), CoreError> {
         self.l0_store.update_mesi_state(iri, MesiState::Modified)?;
-        debug!(iri = %iri, "L0 更新: MESI 状态设为 Modified");
+        debug!(iri = %iri, "L0 update: MESI state set to Modified");
 
         self.memory_bus.publish_invalidate(iri, iri).await;
 

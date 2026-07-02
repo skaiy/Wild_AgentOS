@@ -220,19 +220,19 @@ impl ToolGuard {
             vec![
                 PreInjectionRule {
                     enforcement: EnforcementLevel::Must,
-                    instruction: "读取文件时，只读取与当前任务直接相关的内容。\
-                        如果文件内容已通过其他方式（如 read_full_result 微工具、\
-                        之前的 file_read 调用等）获取过，无需重复读取。\
-                        禁止根据 import/use/include 声明递归读取所有引用的文件——\
-                        只在确定这些引用文件与当前任务直接相关时才读取。"
+                    instruction: "When reading files, only read content directly relevant to the current task. \
+                        If file content has already been obtained through other means (e.g. read_full_result micro-tool, \
+                        previous file_read calls, etc.), do NOT re-read it. \
+                        Do NOT recursively read all referenced files based on import/use/include declarations — \
+                        only read referenced files when you are certain they are directly relevant to the current task."
                         .to_string(),
                     tool_names: vec![],
                 },
                 PreInjectionRule {
                     enforcement: EnforcementLevel::Must,
-                    instruction: "只读取与当前任务相关的文件。\
-                        禁止读取项目源码、node_modules、target、.git 等与任务无关的目录和文件。\
-                        如果 file_list 结果中包含无关内容，请忽略它们。"
+                    instruction: "Only read files relevant to the current task. \
+                        Do NOT read project source code, node_modules, target, .git or other directories and files unrelated to the task. \
+                        If file_list results contain irrelevant content, ignore it."
                         .to_string(),
                     tool_names: vec![],
                 },
@@ -247,7 +247,7 @@ impl ToolGuard {
                     Value::Number(serde_json::Number::from_f64(0.80).expect("0.80 is a valid f64")),
                 )]
                 .into(),
-                fix_instruction: "文件读取不完整。如果当前已读内容足够理解文件和完成任务，可以继续；否则请用 offset/limit 读取剩余行。"
+                fix_instruction: "File read incomplete. If current content is sufficient to understand the file and complete the task, proceed; otherwise use offset/limit to read remaining lines."
                     .to_string(),
                 max_retries: 2,
             }],
@@ -259,18 +259,18 @@ impl ToolGuard {
             vec![
                 PreInjectionRule {
                     enforcement: EnforcementLevel::Must,
-                    instruction: "搜索操作必须获取所有匹配结果。\
-                        检查返回中的 num_matches / num_files 字段，\
-                        确认与返回的实际结果数量一致。\
-                        如果结果过多，使用更精确的搜索条件缩小范围。"
+                    instruction: "Search operations must retrieve all matching results. \
+                        Check the num_matches / num_files fields in the response \
+                        and confirm they match the actual number of returned results. \
+                        If there are too many results, use more precise search criteria to narrow the scope."
                         .to_string(),
                     tool_names: vec![],
                 },
                 PreInjectionRule {
                     enforcement: EnforcementLevel::Must,
-                    instruction: "搜索范围必须限制在当前工作区内。\
-                        禁止搜索项目源码、node_modules、target、.git 等与当前任务无关的目录。\
-                        如果搜索结果中包含无关文件，忽略它们并专注于任务相关文件。"
+                    instruction: "Search scope must be limited to within the current workspace. \
+                        Do NOT search project source code, node_modules, target, .git or other directories unrelated to the current task. \
+                        If search results contain irrelevant files, ignore them and focus on task-related files."
                         .to_string(),
                     tool_names: vec![],
                 },
@@ -281,7 +281,7 @@ impl ToolGuard {
             vec![ValidationRule {
                 validator: "search_count_check".to_string(),
                 params: HashMap::new(),
-                fix_instruction: "搜索返回不完整。请增大 head_limit 或使用更精确的关键词。"
+                fix_instruction: "Search returned incomplete results. Please increase head_limit or use more precise keywords."
                     .to_string(),
                 max_retries: 1,
             }],
@@ -293,17 +293,17 @@ impl ToolGuard {
             vec![
                 PreInjectionRule {
                     enforcement: EnforcementLevel::Must,
-                    instruction: "命令执行后必须检查退出码（exit_code）。\
-                        若 exit_code ≠ 0，必须分析 stderr 的完整内容，\
-                        不得使用非零退出码的结果作为有效输出。"
+                    instruction: "After executing a command, you MUST check the exit_code. \
+                        If exit_code ≠ 0, analyze the full stderr content. \
+                        Do NOT use results with non-zero exit codes as valid output."
                         .to_string(),
                     tool_names: vec!["bash".to_string(), "powershell".to_string()],
                 },
                 PreInjectionRule {
                     enforcement: EnforcementLevel::Must,
-                    instruction: "所有命令必须在当前工作目录（工作区）范围内执行。\
-                        禁止访问工作区之外的目录。使用 cd 切换目录时不应超出工作区范围。\
-                        你的工作区边界由系统管理，工作区外的目录与当前任务无关。"
+                    instruction: "All commands must be executed within the current working directory (workspace). \
+                        Do NOT access directories outside the workspace. When using cd, do not go beyond the workspace boundary. \
+                        Your workspace boundary is managed by the system; directories outside are unrelated to the current task."
                         .to_string(),
                     tool_names: vec!["bash".to_string(), "powershell".to_string()],
                 },
@@ -314,7 +314,7 @@ impl ToolGuard {
             vec![ValidationRule {
                 validator: "exit_code_check".to_string(),
                 params: HashMap::new(),
-                fix_instruction: "命令退出码非零。请分析 stderr 中的错误信息，修复问题后重试。"
+                fix_instruction: "Command exited with non-zero code. Please analyze stderr for error information, fix the issue, and retry."
                     .to_string(),
                 max_retries: 2,
             }],
@@ -326,15 +326,15 @@ impl ToolGuard {
             vec![
                 PreInjectionRule {
                     enforcement: EnforcementLevel::Should,
-                    instruction: "执行 SPARQL 查询时，如果结果为 0，\
-                        请尝试更宽松的查询（如移除 FILTER）。"
+                    instruction: "When executing SPARQL queries, if results return 0, \
+                        try a more relaxed query (e.g., remove FILTER)."
                         .to_string(),
                     tool_names: vec!["knowledge_query".to_string()],
                 },
                 PreInjectionRule {
                     enforcement: EnforcementLevel::Should,
-                    instruction: "执行邻居遍历时，depth 参数建议至少为 2，\
-                        以获得有意义的上下文。"
+                    instruction: "When traversing neighbors, the depth parameter should be at least 2 \
+                        to obtain meaningful context."
                         .to_string(),
                     tool_names: vec!["knowledge_neighbors".to_string()],
                 },
@@ -346,14 +346,14 @@ impl ToolGuard {
                 ValidationRule {
                     validator: "knowledge_empty_check".to_string(),
                     params: HashMap::new(),
-                    fix_instruction: "查询结果为空。请尝试移除 FILTER 条件或使用更宽松的匹配。"
+                    fix_instruction: "Query returned no results. Try removing FILTER conditions or using more relaxed matching."
                         .to_string(),
                     max_retries: 1,
                 },
                 ValidationRule {
                     validator: "knowledge_depth_check".to_string(),
                     params: HashMap::new(),
-                    fix_instruction: "遍历深度不足。请将 depth 参数设置为至少 2。"
+                    fix_instruction: "Traversal depth is insufficient. Set the depth parameter to at least 2."
                         .to_string(),
                     max_retries: 1,
                 },
@@ -365,9 +365,9 @@ impl ToolGuard {
             ToolCategory::KnowledgeExtract,
             vec![PreInjectionRule {
                 enforcement: EnforcementLevel::Must,
-                instruction: "抽取结果必须包含 entities 和 relations 数组。\
-                    所有实体必须有唯一的 id。\
-                    如果文本过长（超过 4000 字符），必须分段抽取后合并去重。"
+                instruction: "Extraction results must include entities and relations arrays. \
+                    All entities must have a unique id. \
+                    If the text is too long (over 4000 characters), extract in segments and then merge with deduplication."
                     .to_string(),
                 tool_names: vec![],
             }],
@@ -377,7 +377,7 @@ impl ToolGuard {
             vec![ValidationRule {
                 validator: "extract_empty_check".to_string(),
                 params: HashMap::new(),
-                fix_instruction: "未抽取到任何实体。请确保文本包含可抽取的结构化信息，并重新尝试。"
+                fix_instruction: "No entities extracted. Ensure the text contains extractable structured information and try again."
                     .to_string(),
                 max_retries: 1,
             }],
@@ -388,8 +388,8 @@ impl ToolGuard {
             ToolCategory::HttpRequest,
             vec![PreInjectionRule {
                 enforcement: EnforcementLevel::Must,
-                instruction: "检查 HTTP 状态码。\
-                    若 status_code ≥ 400，必须分析错误原因并报告，不得忽略。"
+                instruction: "Check the HTTP status code. \
+                    If status_code ≥ 400, analyze the error cause and report it — do NOT ignore."
                     .to_string(),
                 tool_names: vec!["web_fetch".to_string(), "http_request".to_string()],
             }],
@@ -399,7 +399,7 @@ impl ToolGuard {
             vec![ValidationRule {
                 validator: "http_status_check".to_string(),
                 params: HashMap::new(),
-                fix_instruction: "HTTP 请求返回错误状态码。请检查 URL 是否正确或是否需要认证。"
+                fix_instruction: "HTTP request returned an error status code. Check if the URL is correct or if authentication is required."
                     .to_string(),
                 max_retries: 1,
             }],
@@ -430,9 +430,9 @@ impl ToolGuard {
                             .iter()
                             .map(|r| {
                                 let tag = match r.enforcement {
-                                    EnforcementLevel::Must => "强制",
-                                    EnforcementLevel::Should => "建议",
-                                    EnforcementLevel::Info => "提示",
+                                    EnforcementLevel::Must => "MUST",
+                                    EnforcementLevel::Should => "SHOULD",
+                                    EnforcementLevel::Info => "INFO",
                                 };
                                 format!("[ToolGuard-{}] {}", tag, r.instruction)
                             })
@@ -518,7 +518,7 @@ impl ToolGuard {
                                                 Some(ratio) => {
                                                     let a = post_guard.file_coverage.lock()
                                                         .get(path).map_or(0, |s| s.attempt_count);
-                                                    warn!(
+                                                    debug!(
                                                         tool = %tool_name,
                                                         ratio = ratio,
                                                         attempt = a,
@@ -532,7 +532,7 @@ impl ToolGuard {
                                     }
 
                                     let error_msg = format!(
-                                        "ToolGuard: {} - {}. 修正建议: {}",
+                                        "ToolGuard: {} - {}. Fix suggestion: {}",
                                         tool_name, msg, rule.fix_instruction
                                     );
                                     warn!(
@@ -794,20 +794,20 @@ mod validators {
         // file_read result is in `lines` array, not `content`
         if result.get("lines").is_some() || result.get("total_lines").is_some() {
             if result.get("error").is_some() {
-                return ValidationOutcome::Fail("文件读取返回错误".to_string());
+                return ValidationOutcome::Fail("File read returned error".to_string());
             }
             // total_lines == 0 means the file exists but is empty → valid state
             let total = result["total_lines"].as_u64().unwrap_or(0);
             if total > 0 {
                 let returned = result["returned"].as_u64().unwrap_or(0);
                 if returned == 0 {
-                    return ValidationOutcome::Warn("文件读取结果为空（total_lines > 0 但 returned 为 0）".to_string());
+                    return ValidationOutcome::Warn("File read result empty (total_lines > 0 but returned is 0)".to_string());
                 }
-                // 校验是否读完整：returned 应 >= total_lines * 0.80
+                // Check if read is complete: returned >= total_lines * 0.80
                 let min_expected = (total as f64 * 0.80).ceil() as u64;
                 if returned < min_expected {
                     return ValidationOutcome::Fail(format!(
-                        "文件读取不完整：共 {} 行，仅返回 {} 行（{:.1}%）",
+                        "File read incomplete: {} total lines, only {} returned ({:.1}%)",
                         total, returned, (returned as f64 / total as f64) * 100.0
                     ));
                 }
@@ -818,9 +818,9 @@ mod validators {
         let content = result["content"].as_str().unwrap_or("");
         if content.is_empty() {
             if result.get("error").is_some() {
-                return ValidationOutcome::Fail("文件读取返回错误".to_string());
+                return ValidationOutcome::Fail("File read returned error".to_string());
             }
-            return ValidationOutcome::Warn("文件内容为空".to_string());
+            return ValidationOutcome::Warn("File content is empty".to_string());
         }
         ValidationOutcome::Pass
     }
@@ -833,7 +833,7 @@ mod validators {
                 .unwrap_or(0);
             if returned < num_files && returned > 0 {
                 return ValidationOutcome::Fail(format!(
-                    "搜索结果不完整: 共 {} 个匹配文件，仅返回 {} 个",
+                    "Search results incomplete: {} matching files, only {} returned (head_limit restriction)",
                     num_files, returned
                 ));
             }
@@ -850,7 +850,7 @@ mod validators {
                 .unwrap_or(0);
             if returned_count > 0 && returned_count < num_matches {
                 return ValidationOutcome::Warn(format!(
-                    "共 {} 个匹配，仅展示 {} 个（可能受 limit 限制）",
+                    "{} matches found, only {} returned (may be limited by limit parameter)",
                     num_matches, returned_count
                 ));
             }
@@ -863,13 +863,13 @@ mod validators {
             if ec != 0 {
                 let stderr = result["stderr"].as_str().unwrap_or("");
                 return ValidationOutcome::Fail(format!(
-                    "退出码非零: {}, stderr: {}",
+                    "Non-zero exit code: {}, stderr: {}",
                     ec,
                     &stderr.chars().take(200).collect::<String>()
                 ));
             }
         } else if result.get("error").is_some() {
-            return ValidationOutcome::Fail("命令执行返回错误".to_string());
+            return ValidationOutcome::Fail("Command execution returned error".to_string());
         }
         ValidationOutcome::Pass
     }
@@ -882,7 +882,7 @@ mod validators {
             .or_else(|| results_arr.map(|a| a.len()))
             .unwrap_or(0);
         if count == 0 {
-            return ValidationOutcome::Warn("查询结果为空，建议尝试更宽松的查询条件".to_string());
+            return ValidationOutcome::Warn("Query returned no results, try more relaxed query conditions".to_string());
         }
         ValidationOutcome::Pass
     }
@@ -891,7 +891,7 @@ mod validators {
         if let Some(depth) = result["depth"].as_u64() {
             if depth < 2 {
                 return ValidationOutcome::Warn(format!(
-                    "遍历深度为 {}，建议增加到 2 以上",
+                    "Traversal depth is {}, recommend increasing to at least 2",
                     depth
                 ));
             }
@@ -907,7 +907,7 @@ mod validators {
             .or_else(|| extracted.map(|a| a.len()))
             .unwrap_or(0);
         if count == 0 {
-            return ValidationOutcome::Fail("未抽取到任何实体".to_string());
+            return ValidationOutcome::Fail("No entities extracted".to_string());
         }
         ValidationOutcome::Pass
     }
@@ -923,7 +923,7 @@ mod validators {
                     .or_else(|| result["content"].as_str())
                     .unwrap_or("");
                 return ValidationOutcome::Fail(format!(
-                    "HTTP {} 错误: {}",
+                    "HTTP {} error: {}",
                     code,
                     &body.chars().take(100).collect::<String>()
                 ));
@@ -951,9 +951,9 @@ impl ToolGuard {
             .iter()
             .map(|(activated, flag)| {
                 let tag = match flag.severity {
-                    crate::methodology::RedFlagSeverity::Critical => "🔴 红线",
-                    crate::methodology::RedFlagSeverity::Warning => "🟡 警告",
-                    crate::methodology::RedFlagSeverity::Info => "🔵 提示",
+                    crate::methodology::RedFlagSeverity::Critical => "🔴 Red Flag",
+                    crate::methodology::RedFlagSeverity::Warning => "🟡 Warning",
+                    crate::methodology::RedFlagSeverity::Info => "🔵 Info",
                 };
                 format!(
                     "[Methodology-{}] {}: {}",
@@ -972,7 +972,7 @@ impl ToolGuard {
             .iter()
             .map(|(activated, flag, check)| {
                 format!(
-                    "[Methodology-{}] ⚠️ 『{}』→ 自检: {}",
+                    "[Methodology-{}] ⚠️ 『{}』→ self-check: {}",
                     activated.methodology_id, flag.pattern, check
                 )
             })

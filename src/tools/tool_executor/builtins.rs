@@ -25,11 +25,11 @@ pub(super) async fn execute_glob_search(input: Value) -> Result<Value, String> {
         serde_json::from_value(input).map_err(|e| format!("Invalid input: {}", e))?;
     let root = params.path.as_deref().unwrap_or(".");
 
-    // 检查搜索路径是否在工作区内
+    // check if search path is within workspace
     if root != "." {
         if let Err(msg) = check_path_in_workspace(root) {
             return Err(format!(
-                "{}\n请专注于当前工作区，在工作目录范围内搜索。",
+                "{}\nPlease focus on the current workspace, search within the working directory.",
                 msg
             ));
         }
@@ -277,7 +277,7 @@ pub(super) async fn execute_web_fetch(input: Value) -> Result<Value, String> {
     let code = resp.status().as_u16();
     if code >= 400 {
         return Err(format!(
-            "HTTP {} {} — 目标 URL 返回错误。请核实 URL 是否正确，或改用 web_search 找到可访问的链接。",
+            "HTTP {} {} — target URL returned an error. Please verify the URL or use web_search to find an accessible link.",
             code,
             resp.status().canonical_reason().unwrap_or("Unknown")
         ));
@@ -292,7 +292,7 @@ pub(super) async fn execute_web_fetch(input: Value) -> Result<Value, String> {
     let content_length = resp.content_length().unwrap_or(0);
     if content_length > 10_000_000 {
         return Err(format!(
-            "内容过大 ({} bytes, 最大 10MB)。建议使用更具体的 URL 或改用 bash curl 分片下载。",
+            "Content too large ({} bytes, max 10MB). Use a more specific URL or bash curl for chunked download.",
             content_length
         ));
     }
@@ -301,13 +301,13 @@ pub(super) async fn execute_web_fetch(input: Value) -> Result<Value, String> {
         Ok(b) => {
             if b.len() > 10_000_000 {
                 return Err(format!(
-                    "内容过大 ({} bytes, 最大 10MB)。建议使用更具体的 URL 或改用 bash curl 分片下载。",
+            "Content too large ({} bytes, max 10MB). Use a more specific URL or bash curl for chunked download.",
                     b.len()
                 ));
             }
             String::from_utf8_lossy(&b).to_string()
         }
-        Err(e) => return Err(format!("读取响应体失败: {}", e)),
+        Err(e) => return Err(format!("Failed to read response body: {}", e)),
     };
 
     let content = if ct.contains("html") { html_to_text(&body) } else { safe_truncate(&body, 8000).to_string() };
@@ -319,11 +319,11 @@ pub(super) async fn execute_web_fetch(input: Value) -> Result<Value, String> {
     }))
 }
 
-/// 使用 Exa API 执行搜索（优先方式，需设置 EXA_API_KEY 环境变量）。
-/// 返回格式与 execute_web_search 兼容。
+/// Execute search using Exa API (preferred, requires EXA_API_KEY env var).
+/// Return format compatible with execute_web_search.
 pub(super) async fn execute_exa_search(query: &str, started: Instant) -> Result<Value, String> {
     let api_key = std::env::var("EXA_API_KEY")
-        .map_err(|_| "EXA_API_KEY 未设置".to_string())?;
+        .map_err(|_| "EXA_API_KEY not set".to_string())?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -341,22 +341,22 @@ pub(super) async fn execute_exa_search(query: &str, started: Instant) -> Result<
         }))
         .send()
         .await
-        .map_err(|e| format!("Exa 搜索请求失败: {}", e))?;
+        .map_err(|e| format!("Exa search request failed: {}", e))?;
 
     let status = resp.status();
     let body: serde_json::Value = resp.json().await
-        .map_err(|e| format!("Exa 响应解析失败: {}", e))?;
+        .map_err(|e| format!("Exa response parse failed: {}", e))?;
 
     if !status.is_success() {
         let error_msg = body.get("error")
             .and_then(|v| v.as_str())
-            .unwrap_or("未知错误");
+            .unwrap_or("Unknown error");
         return Ok(json!({
             "query": query,
             "duration_seconds": started.elapsed().as_secs_f64(),
             "results": [],
-            "error": format!("Exa API 返回 {}: {}", status.as_u16(), error_msg),
-            "suggestion": "Exa 搜索不可用，请检查 API Key 或网络连接"
+            "error": format!("Exa API returned {}: {}", status.as_u16(), error_msg),
+            "suggestion": "Exa search unavailable, please check API Key or network connection"
         }));
     }
 
@@ -399,12 +399,12 @@ pub(super) async fn execute_web_search(input: Value) -> Result<Value, String> {
                     return Ok(v);
                 }
                 tracing::warn!(
-                    "Exa 搜索失败 ({}), 回退到 DuckDuckGo",
-                    v.get("error").and_then(|e| e.as_str()).unwrap_or("未知错误")
+                    "Exa search failed ({}), falling back to DuckDuckGo",
+                    v.get("error").and_then(|e| e.as_str()).unwrap_or("Unknown error")
                 );
             }
             Err(e) => {
-                tracing::warn!("Exa 搜索异常: {}, 回退到 DuckDuckGo", e);
+                tracing::warn!("Exa search error: {}, falling back to DuckDuckGo", e);
             }
         };
     }
@@ -415,11 +415,11 @@ pub(super) async fn execute_web_search(input: Value) -> Result<Value, String> {
         .build()
         .map_err(|e| format!("HTTP client: {}", e))?;
 
-    // 所有搜索 fallback 放在同一个 async 块内，任一网络错误都会落到
-    // 下方的 match Err(e) => Ok(json!({error, suggestion})) 保护中，
-    // 避免 Plan 因网络故障直接退出。
+    // all search fallbacks inside one async block; any network error is caught
+    // by the match Err(e) => Ok(json!({error, suggestion})) guard below,
+    // preventing Plan from exiting on network failure.
     let html_result: Result<(reqwest::StatusCode, String, String), String> = (async {
-        // 优先使用 DuckDuckGo Lite
+        // prefer DuckDuckGo Lite
         let lite_url = format!("https://lite.duckduckgo.com/lite/?q={}", urlencode(&params.query));
         let resp = client.get(&lite_url)
             .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
@@ -431,7 +431,7 @@ pub(super) async fn execute_web_search(input: Value) -> Result<Value, String> {
             return Ok((status, body, "lite".to_string()));
         }
 
-        // 备选: DuckDuckGo HTML
+        // fallback: DuckDuckGo HTML
         let html_url = format!("https://html.duckduckgo.com/html/?q={}", urlencode(&params.query));
         let resp = client.get(&html_url)
             .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
@@ -443,7 +443,7 @@ pub(super) async fn execute_web_search(input: Value) -> Result<Value, String> {
             return Ok((status2, body2, "html".to_string()));
         }
 
-        // 备选: DuckDuckGo Instant Answer API
+        // fallback: DuckDuckGo Instant Answer API
         let api_url = format!("https://api.duckduckgo.com/?q={}&format=json&no_html=1", urlencode(&params.query));
         let resp = client.get(&api_url).send().await.map_err(|e| format!("API: {}", e))?;
         let api_body = resp.text().await.map_err(|e| format!("Read: {}", e))?;
@@ -470,8 +470,8 @@ pub(super) async fn execute_web_search(input: Value) -> Result<Value, String> {
                     "query": params.query,
                     "duration_seconds": started.elapsed().as_secs_f64(),
                     "results": [],
-                    "error": format!("搜索引擎返回非200状态码: {}", status),
-                    "suggestion": "网络搜索不可用，请基于自身知识回答"
+                    "error": format!("Search engine returned non-200 status code: {}", status),
+                    "suggestion": "Web search unavailable, please answer based on your own knowledge"
                 }));
             }
 
@@ -501,8 +501,8 @@ pub(super) async fn execute_web_search(input: Value) -> Result<Value, String> {
                 "query": params.query,
                 "duration_seconds": started.elapsed().as_secs_f64(),
                 "results": [],
-                "error": format!("搜索请求失败: {}", e),
-                "suggestion": "网络搜索不可用，请基于自身知识回答"
+                "error": format!("Search request failed: {}", e),
+                "suggestion": "Web search unavailable, please answer based on your own knowledge"
             }))
         }
     }
@@ -576,15 +576,15 @@ pub(super) async fn execute_file_read(input: Value) -> Result<Value, String> {
     let path = &params.path;
     let path_obj = std::path::Path::new(path);
 
-    // 目录不可读 → 引导 LLM 用 file_list 查看目录内容
+    // directory not readable → guide LLM to use file_list to view contents
     if path_obj.is_dir() {
         return Err(format!(
-            "Read error: \"{}\" 是一个目录，不可直接读取。请先使用 file_list(\"{}\") 查看该目录下的文件，确认正确的文件名后重试。",
+            "Read error: \"{}\" is a directory and cannot be read directly. Use file_list(\"{}\") to view files in this directory, then retry with the correct filename.",
             path, path
         ));
     }
 
-    // 检查文件是否在工作区内，给出温馨提示
+    // check if file is within workspace, provide helpful message
     if let Err(scope_msg) = check_path_in_workspace(path) {
         return Err(scope_msg);
     }
@@ -593,7 +593,7 @@ pub(super) async fn execute_file_read(input: Value) -> Result<Value, String> {
         Ok(c) => c,
         Err(e) => {
             let hint = if !path_obj.exists() {
-                // 文件不存在 → 自动列出父目录内容，帮助 LLM 快速定位正确文件名
+                // file not found → auto-list parent directory contents to help LLM find correct filename
                 let parent = path_obj.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
                 let parent_display = parent.display().to_string();
                 let listing;
@@ -601,30 +601,30 @@ pub(super) async fn execute_file_read(input: Value) -> Result<Value, String> {
                     let files: Vec<String> = entries
                         .filter_map(|e| e.ok())
                         .map(|e| {
-                            let kind = if e.file_type().map(|t| t.is_dir()).unwrap_or(false) { "[目录]" } else { "[文件]" };
+                            let kind = if e.file_type().map(|t| t.is_dir()).unwrap_or(false) { "[dir]" } else { "[file]" };
                             format!("  {} {}", kind, e.file_name().to_string_lossy())
                         })
                         .collect();
                     if files.is_empty() {
-                        listing = format!("\n目录 {} 为空。", parent_display);
+                        listing = format!("\nDirectory {} is empty.", parent_display);
                     } else {
-                        listing = format!("\n目录 {} 下现有文件:\n{}", parent_display, files.join("\n"));
+                        listing = format!("\nFiles in directory {}:\n{}", parent_display, files.join("\n"));
                     }
                 } else {
-                    listing = format!("\n目录 {} 也不存在，请先用 file_list(\".\") 查看工作区根目录结构。", parent_display);
+                    listing = format!("\nDirectory {} does not exist either. Use file_list(\".\") to see workspace root structure.", parent_display);
                 }
                 format!(
-                    "Read error: {}.\n文件 \"{}\" 不存在。{}\n请确认文件名和路径正确后重试。",
+                    "Read error: {}.\nFile \"{}\" does not exist. {}\nPlease verify the filename and path, then retry.",
                     e, path, listing
                 )
             } else if e.kind() == std::io::ErrorKind::InvalidData {
-                // 二进制/非 UTF-8 文件 → 引导 LLM 换用 bash 工具处理
+                // binary/non-UTF-8 file → guide LLM to use bash tool instead
                 format!(
-                    "Read error: 文件 \"{}\" 包含二进制/非文本内容，无法直接读取。\n\
-                     如需查看文件类型: bash(\"file '{}'\")\n\
-                     如需查看文件大小: bash(\"ls -lh '{}'\")\n\
-                     如需查看开头部分（文本 embedded in binary）: bash(\"head -c 200 '{}' | strings\")\n\
-                     请专注于当前任务的工作区文件，此文件非任务所需。",
+                    "Read error: file \"{}\" contains binary/non-text content and cannot be read directly.\n\
+                     To check file type: bash(\"file '{}'\")\n\
+                     To check file size: bash(\"ls -lh '{}'\")\n\
+                     To view beginning (text embedded in binary): bash(\"head -c 200 '{}' | strings\")\n\
+                     Please focus on workspace files relevant to the current task.",
                     path, path, path, path
                 )
             } else {
@@ -646,7 +646,6 @@ pub(super) async fn execute_file_read(input: Value) -> Result<Value, String> {
 
 pub(super) async fn execute_file_write(input: Value) -> Result<Value, String> {
     let params: FileWriteInput = serde_json::from_value(input).map_err(|e| format!("Invalid input: {}", e))?;
-    // 检查是否在工作区内
     check_path_in_workspace(&params.path)?;
     if let Some(parent) = std::path::Path::new(&params.path).parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Mkdir error: {}", e))?;
@@ -659,11 +658,11 @@ pub(super) async fn execute_file_list(input: Value) -> Result<Value, String> {
     let params: FileListInput = serde_json::from_value(input).map_err(|e| format!("Invalid input: {}", e))?;
     let dir = params.path.as_deref().unwrap_or(".");
 
-    // 检查是否在工作区内
+    // check if within workspace
     if dir != "." {
         if let Err(msg) = check_path_in_workspace(dir) {
             return Err(format!(
-                "{}\n请专注于当前工作区（{}），列出工作目录下的文件即可。",
+                "{}\nPlease focus on the current workspace ({}), list files under the working directory.",
                 msg,
                 std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_else(|_| ".".to_string())
             ));
@@ -683,7 +682,7 @@ pub(super) async fn execute_file_list(input: Value) -> Result<Value, String> {
 }
 
 pub(super) async fn execute_bash(input: Value) -> Result<Value, String> {
-    // Windows: 转调 execute_powershell，LLM 无需感知
+    // Windows: delegate to execute_powershell, LLM doesn't need to know
     #[cfg(windows)]
     {
         let params: BashInput = serde_json::from_value(input).map_err(|e| format!("Invalid input: {}", e))?;
@@ -696,7 +695,7 @@ pub(super) async fn execute_bash(input: Value) -> Result<Value, String> {
         return execute_powershell(ps_input).await;
     }
 
-    // Unix: 用 sh -c 执行
+    // Unix: execute via sh -c
     #[cfg(not(windows))]
     {
         let params: BashInput = serde_json::from_value(input).map_err(|e| format!("Invalid input: {}", e))?;
@@ -825,9 +824,9 @@ fn kill_process_group(child: &std::process::Child) {
 #[cfg(not(unix))]
 fn kill_process_group(_child: &std::process::Child) {}
 
-/// 检查路径是否在当前工作目录（工作区）范围内。
-/// 如果路径在工作区外，返回错误提示。
-/// 对于不存在的路径（如 file_write 创建新文件），检查其父目录。
+/// Check if a path is within the current working directory (workspace).
+/// Returns an error if the path is outside the workspace.
+/// For non-existent paths (e.g. file_write creating new files), checks the parent directory.
 fn check_path_in_workspace(path: &str) -> Result<(), String> {
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
@@ -839,30 +838,30 @@ fn check_path_in_workspace(path: &str) -> Result<(), String> {
     };
 
     let requested = std::path::Path::new(path);
-    // 相对路径：拼接 cwd 后解析；绝对路径：直接解析
+    // relative path: join with cwd then resolve; absolute path: resolve directly
     let requested_abs = if requested.is_relative() {
         cwd.join(requested)
     } else {
         requested.to_path_buf()
     };
-    // 尝试规范化路径；如果文件不存在，检查父目录是否在工作区内
+    // try to canonicalize path; if file doesn't exist, check parent directory is within workspace
     let check_path = match requested_abs.canonicalize() {
         Ok(p) => p,
         Err(_) => {
-            // 文件不存在时，检查父目录
+            // file doesn't exist, check parent
             match requested_abs.parent() {
                 Some(parent) => match parent.canonicalize() {
                     Ok(p) => p,
-                    Err(_) => return Ok(()), // 父目录也不存在时不阻拦
+                    Err(_) => return Ok(()), // parent also doesn't exist, don't block
                 },
-                None => return Ok(()), // 无父目录（如根路径）时不阻拦
+                None => return Ok(()), // no parent (e.g. root path), don't block
             }
         }
     };
 
     if !check_path.starts_with(&cwd_canonical) {
         return Err(format!(
-            "路径不在工作区内: {}。当前任务只应访问工作区内的文件。",
+            "Path is not within the workspace: {}. The current task should only access files in the workspace.",
             check_path.display(),
         ));
     }
@@ -872,7 +871,6 @@ fn check_path_in_workspace(path: &str) -> Result<(), String> {
 pub(super) async fn execute_file_edit(input: Value) -> Result<Value, String> {
     let params: FileEditInput = serde_json::from_value(input).map_err(|e| format!("Invalid input: {}", e))?;
 
-    // 检查是否在工作区内
     check_path_in_workspace(&params.path)?;
 
     let content = std::fs::read_to_string(&params.path).map_err(|e| format!("Read error: {}", e))?;
@@ -1095,7 +1093,7 @@ fn extract_ddg_api_results(body: &str) -> Vec<Value> {
     }
 }
 
-// ---- L0 存储读取函数已移除：agent 不应直接访问 L0，应通过 L3 投影读取 ----
+// ---- L0 store read functions removed: agents should not access L0 directly, use L3 projection instead ----
                 }
             }
         }
@@ -1195,7 +1193,7 @@ pub(super) async fn execute_create_skill(input: Value) -> Result<Value, String> 
         };
 
         let result = creator.create_from_description(request).await
-            .map_err(|e| format!("创建 Skill 失败: {:?}", e))?;
+            .map_err(|e| format!("Create Skill failed: {:?}", e))?;
 
         Ok(json!({
             "skill_iri": result.skill_iri,
@@ -1215,7 +1213,7 @@ pub(super) async fn execute_create_skill(input: Value) -> Result<Value, String> 
             "description": description,
             "category": category,
             "registered": false,
-            "note": "Gateway 未初始化，仅返回模板。请通过 SkillCreator API 创建完整 Skill。"
+            "note": "Gateway not initialized, returning template only. Use SkillCreator API to create the full Skill."
         }))
     }
 }
@@ -1241,7 +1239,7 @@ pub(super) async fn execute_convert_skill(input: Value) -> Result<Value, String>
         };
 
         let result = creator.convert_from_markdown(request).await
-            .map_err(|e| format!("转换 Skill 失败: {:?}", e))?;
+            .map_err(|e| format!("Convert Skill failed: {:?}", e))?;
 
         Ok(json!({
             "skill_iri": result.skill_iri,
@@ -1251,7 +1249,7 @@ pub(super) async fn execute_convert_skill(input: Value) -> Result<Value, String>
         }))
     } else {
         let def = crate::skill_graph::SkillCreator::convert_markdown_static(&markdown_content)
-            .map_err(|e| format!("静态解析失败: {:?}", e))?;
+            .map_err(|e| format!("Static parse failed: {:?}", e))?;
 
         Ok(json!({
             "skill_iri": format!("iri://skills/{}", def.name),
@@ -1260,17 +1258,17 @@ pub(super) async fn execute_convert_skill(input: Value) -> Result<Value, String>
             "steps": def.steps.len(),
             "tags": def.tags,
             "registered": false,
-            "note": "Gateway 未初始化，使用静态解析。完整转换需通过 SkillCreator API。"
+            "note": "Gateway not initialized, using static parse. Full conversion requires SkillCreator API."
         }))
     }
 }
 
-// ========== 知识图谱工具实现 ==========
+// ========== Knowledge graph tool implementation ==========
 
 pub(super) async fn execute_knowledge_extract(input: Value, kg_store: Arc<RwLock<KnowledgeGraphStore>>) -> Result<Value, String> {
     let text = input["text"].as_str().unwrap_or("").to_string();
     if text.is_empty() {
-        return Err("text 参数不能为空".to_string());
+        return Err("text parameter cannot be empty".to_string());
     }
     let domain = input["domain"].as_str().map(String::from);
 
@@ -1279,13 +1277,13 @@ pub(super) async fn execute_knowledge_extract(input: Value, kg_store: Arc<RwLock
         .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
     let api_key = std::env::var("ONE_API_KEY")
         .or_else(|_| std::env::var("OPENAI_API_KEY"))
-        .map_err(|_| "未配置 API 密钥: 请设置 ONE_API_KEY 或 OPENAI_API_KEY 环境变量".to_string())?;
+        .map_err(|_| "API key not configured: set ONE_API_KEY or OPENAI_API_KEY environment variable".to_string())?;
     let model = std::env::var("KG_EXTRACT_MODEL")
         .unwrap_or_else(|_| "deepseek-v4-flash".to_string());
 
     let ontology = OntologyManager::new();
     let temp_store = KnowledgeGraphStore::new()
-        .map_err(|e| format!("创建临时存储失败: {}", e))?;
+        .map_err(|e| format!("Create temporary store failed: {}", e))?;
     let extractor = KnowledgeExtractor::new(
         ontology,
         temp_store,
@@ -1296,7 +1294,7 @@ pub(super) async fn execute_knowledge_extract(input: Value, kg_store: Arc<RwLock
 
     let result = extractor.extract(&text, domain.as_deref())?;
 
-    let store = kg_store.write().map_err(|e| format!("获取存储锁失败: {}", e))?;
+    let store = kg_store.write().map_err(|e| format!("Failed to acquire storage lock: {}", e))?;
     let graph = store.default_graph();
     store.write_quads(&result.quads, graph)?;
 
@@ -1312,11 +1310,11 @@ pub(super) async fn execute_knowledge_extract(input: Value, kg_store: Arc<RwLock
 pub(super) async fn execute_knowledge_query(input: Value, kg_store: Arc<RwLock<KnowledgeGraphStore>>) -> Result<Value, String> {
     let sparql = input["sparql"].as_str().unwrap_or("").to_string();
     if sparql.is_empty() {
-        return Err("sparql 参数不能为空".to_string());
+        return Err("sparql parameter cannot be empty".to_string());
     }
     let named_graph = input["named_graph"].as_str().map(String::from);
 
-    let store = kg_store.read().map_err(|e| format!("获取存储锁失败: {}", e))?;
+    let store = kg_store.read().map_err(|e| format!("Failed to acquire storage lock: {}", e))?;
     let results = store.query_sparql(&sparql, named_graph.as_deref())?;
 
     Ok(json!({
@@ -1329,11 +1327,11 @@ pub(super) async fn execute_knowledge_query(input: Value, kg_store: Arc<RwLock<K
 pub(super) async fn execute_knowledge_search(input: Value, kg_store: Arc<RwLock<KnowledgeGraphStore>>) -> Result<Value, String> {
     let keyword = input["keyword"].as_str().unwrap_or("").to_string();
     if keyword.is_empty() {
-        return Err("keyword 参数不能为空".to_string());
+        return Err("keyword parameter cannot be empty".to_string());
     }
     let entity_type = input["entity_type"].as_str().map(String::from);
 
-    let store = kg_store.read().map_err(|e| format!("获取存储锁失败: {}", e))?;
+    let store = kg_store.read().map_err(|e| format!("Failed to acquire storage lock: {}", e))?;
     let results = store.search_entities(&keyword, entity_type.as_deref())?;
 
     Ok(json!({
@@ -1347,11 +1345,11 @@ pub(super) async fn execute_knowledge_search(input: Value, kg_store: Arc<RwLock<
 pub(super) async fn execute_knowledge_neighbors(input: Value, kg_store: Arc<RwLock<KnowledgeGraphStore>>) -> Result<Value, String> {
     let entity_id = input["entity_id"].as_str().unwrap_or("").to_string();
     if entity_id.is_empty() {
-        return Err("entity_id 参数不能为空".to_string());
+        return Err("entity_id parameter cannot be empty".to_string());
     }
     let depth = input["depth"].as_u64().unwrap_or(1).min(3) as usize;
 
-    let store = kg_store.read().map_err(|e| format!("获取存储锁失败: {}", e))?;
+    let store = kg_store.read().map_err(|e| format!("Failed to acquire storage lock: {}", e))?;
     let result = store.get_neighbors(&entity_id, depth)?;
 
     Ok(json!({
@@ -1363,17 +1361,17 @@ pub(super) async fn execute_knowledge_neighbors(input: Value, kg_store: Arc<RwLo
 pub(super) async fn execute_knowledge_import_json(input: Value, kg_store: Arc<RwLock<KnowledgeGraphStore>>) -> Result<Value, String> {
     let json_data_str = input["json_data"].as_str().unwrap_or("");
     if json_data_str.is_empty() {
-        return Err("json_data 参数不能为空".to_string());
+        return Err("json_data parameter cannot be empty".to_string());
     }
     let mapping_config_str = input["mapping_config"].as_str().unwrap_or("");
     if mapping_config_str.is_empty() {
-        return Err("mapping_config 参数不能为空".to_string());
+        return Err("mapping_config parameter cannot be empty".to_string());
     }
 
     let json_data: Value = serde_json::from_str(json_data_str)
-        .map_err(|e| format!("json_data JSON 解析失败: {}", e))?;
+        .map_err(|e| format!("json_data JSON parse failed: {}", e))?;
     let mapping: Value = serde_json::from_str(mapping_config_str)
-        .map_err(|e| format!("mapping_config JSON 解析失败: {}", e))?;
+        .map_err(|e| format!("mapping_config JSON parse failed: {}", e))?;
 
     let id_field = mapping["id_field"].as_str().unwrap_or("id");
     let type_field = mapping["type_field"].as_str().unwrap_or("type");
@@ -1383,7 +1381,7 @@ pub(super) async fn execute_knowledge_import_json(input: Value, kg_store: Arc<Rw
     let items = match json_data {
         Value::Array(arr) => arr,
         Value::Object(_) => vec![json_data],
-        _ => return Err("json_data 必须是 JSON 对象或数组".to_string()),
+        _ => return Err("json_data must be a JSON object or array".to_string()),
     };
 
     let mut nodes = Vec::new();
@@ -1446,12 +1444,12 @@ pub(super) async fn execute_knowledge_import_json(input: Value, kg_store: Arc<Rw
             "success": true,
             "entity_count": 0,
             "relation_count": 0,
-            "message": "未找到可导入的实体",
+            "message": "No importable entities found",
         }));
     }
 
     let graph = {
-        let store = kg_store.read().map_err(|e| format!("获取存储锁失败: {}", e))?;
+        let store = kg_store.read().map_err(|e| format!("Failed to acquire storage lock: {}", e))?;
         store.default_graph().to_string()
     };
 
@@ -1462,7 +1460,7 @@ pub(super) async fn execute_knowledge_import_json(input: Value, kg_store: Arc<Rw
     let result = RdfMapper::map_extraction(&extraction, &graph);
 
     {
-        let store = kg_store.write().map_err(|e| format!("获取存储锁失败: {}", e))?;
+        let store = kg_store.write().map_err(|e| format!("Failed to acquire storage lock: {}", e))?;
         store.write_quads(&result.quads, &graph)?;
     }
 
@@ -1476,9 +1474,9 @@ pub(super) async fn execute_knowledge_import_json(input: Value, kg_store: Arc<Rw
 }
 
 pub(super) async fn execute_ontology_register(input: Value, kg_store: Arc<RwLock<KnowledgeGraphStore>>) -> Result<Value, String> {
-    let terms = input["terms"].as_array().ok_or("terms 参数必须是数组")?;
+    let terms = input["terms"].as_array().ok_or("terms parameter must be an array")?;
     if terms.is_empty() {
-        return Err("terms 数组不能为空".to_string());
+        return Err("terms array cannot be empty".to_string());
     }
 
     let graph = "graph:ontology";
@@ -1531,7 +1529,7 @@ pub(super) async fn execute_ontology_register(input: Value, kg_store: Arc<RwLock
 
     let registered = quads.len() / 3;
     {
-        let store = kg_store.write().map_err(|e| format!("获取存储锁失败: {}", e))?;
+        let store = kg_store.write().map_err(|e| format!("Failed to acquire storage lock: {}", e))?;
         store.write_quads(&quads, graph)?;
     }
 
@@ -1545,11 +1543,11 @@ pub(super) async fn execute_ontology_register(input: Value, kg_store: Arc<RwLock
 pub(super) async fn execute_knowledge_bridge_with_store(input: Value, kg_store: Arc<RwLock<KnowledgeGraphStore>>) -> Result<Value, String> {
     let entity_id = input["entity_id"].as_str().unwrap_or("").to_string();
     if entity_id.is_empty() {
-        return Err("entity_id 参数不能为空".to_string());
+        return Err("entity_id parameter cannot be empty".to_string());
     }
     let skill_iri = input["skill_iri"].as_str().unwrap_or("").to_string();
     if skill_iri.is_empty() {
-        return Err("skill_iri 参数不能为空".to_string());
+        return Err("skill_iri parameter cannot be empty".to_string());
     }
     let relation_type_str = input["relation_type"].as_str().unwrap_or("HasSkill");
 
@@ -1557,7 +1555,7 @@ pub(super) async fn execute_knowledge_bridge_with_store(input: Value, kg_store: 
         "HasSkill" => BridgeRelationType::HasSkill,
         "ApplicableIn" => BridgeRelationType::ApplicableIn,
         "RelatedTo" => BridgeRelationType::RelatedTo,
-        _ => return Err(format!("不支持的关系类型: {}，可选: HasSkill, ApplicableIn, RelatedTo", relation_type_str)),
+        _ => return Err(format!("Unsupported relation type: {}, options: HasSkill, ApplicableIn, RelatedTo", relation_type_str)),
     };
 
     let entity_iri = format!("iri://entity/{}", entity_id);
@@ -1575,7 +1573,7 @@ pub(super) async fn execute_knowledge_bridge_with_store(input: Value, kg_store: 
         graph: Some(bridge_graph.to_string()),
     };
 
-    let store = kg_store.write().map_err(|e| format!("获取存储锁失败: {}", e))?;
+    let store = kg_store.write().map_err(|e| format!("Failed to acquire storage lock: {}", e))?;
     store.write_quads(&[quad], bridge_graph)?;
 
     Ok(json!({
@@ -1589,12 +1587,12 @@ pub(super) async fn execute_knowledge_bridge_with_store(input: Value, kg_store: 
 pub(super) async fn execute_knowledge_extract_code(input: Value, kg_store: Arc<RwLock<KnowledgeGraphStore>>) -> Result<Value, String> {
     let file_path = input["file_path"].as_str().unwrap_or("").to_string();
     if file_path.is_empty() {
-        return Err("file_path 参数不能为空".to_string());
+        return Err("file_path parameter cannot be empty".to_string());
     }
     let graph = input["named_graph"].as_str().unwrap_or("graph:code").to_string();
     let force = input["force"].as_bool().unwrap_or(false);
 
-    let store = kg_store.write().map_err(|e| format!("获取存储锁失败: {}", e))?;
+    let store = kg_store.write().map_err(|e| format!("Failed to acquire storage lock: {}", e))?;
 
     if force {
         let result = CodeAstExtractor::extract_from_file(&file_path, &graph)?;
@@ -1618,7 +1616,7 @@ pub(super) async fn execute_knowledge_extract_code(input: Value, kg_store: Arc<R
                 "file_path": file_path,
                 "mode": "incremental",
                 "status": "unchanged",
-                "message": "文件内容未变化，跳过 AST 提取",
+                "message": "File content unchanged, skipping AST extraction",
             })),
             IncrementalResult::Created { entity_count, relation_count, quad_count } => Ok(json!({
                 "success": true,

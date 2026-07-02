@@ -1,21 +1,21 @@
-//! IRI 注册表 — 中心化的 @id 管理服务
+//! IRI Registry — Centralized @id Management Service
 //!
-//! # 设计目标
+//! # Design Goals
 //!
-//! 解决系统中 29 个文件、57 处 IRI 生成调用之间缺乏协调的问题。
+//! Addresses the lack of coordination among 29 files and 57 IRI generation calls across the system.
 //!
-//! 当前状态：各子系统独立生成 `iri://` 地址，互不知晓对方的存在。
-//! IriRegistry 提供一个中心注册表，回答"这个 @id 的数据在哪里？"。
+//! Current state: each subsystem generates `iri://` addresses independently, oblivious to others.
+//! IriRegistry provides a central registry answering "where is the data for this @id?".
 //!
-//! # 存储
+//! # Storage
 //!
-//! - 权威数据：Oxigraph 的 `graph:registry` Named Graph（持久化）
-//! - 读缓存：DashMap（避免每次 resolve 都查 SPARQL）
+//! - Authoritative data: Oxigraph's `graph:registry` Named Graph (persistent)
+//! - Read cache: DashMap (avoids SPARQL queries on every resolve)
 //!
-//! # 有意简化
+//! # Deliberate Simplifications
 //!
-//! - 非阻塞注册：失败不阻止主流程，注册是侧效（side effect）而非主路径
-//! - 不处理分布式协调：单进程注册，未来可扩展到多进程
+//! - Non-blocking registration: failure does not block the main flow, registration is a side effect
+//! - No distributed coordination: single-process registration, extendable to multi-process in the future
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ use oxigraph::sparql::QueryResults;
 use oxigraph::store::Store;
 use serde::{Deserialize, Serialize};
 
-/// 实体所在位置
+/// Entity location
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityLocation {
     pub iri: String,
@@ -61,24 +61,24 @@ impl StorageLayer {
     }
 }
 
-/// IRI 冲突检测结果
+/// IRI conflict detection result
 #[derive(Debug, Clone)]
 pub struct IriConflict {
     pub iri: String,
     pub locations: Vec<EntityLocation>,
 }
 
-/// 注册结果
+/// Registration result
 #[derive(Debug, Clone)]
 pub struct RegistrationResult {
     pub is_new: bool,
     pub conflicts: Vec<IriConflict>,
 }
 
-/// 中心 IRI 注册表
+/// Central IRI Registry
 ///
-/// 所有注册信息持久化在 Oxigraph 的 `graph:registry` Named Graph 中，
-/// 同时使用 DashMap 提供 O(1) 的读缓存。
+/// All registration data is persisted in Oxigraph's `graph:registry` Named Graph,
+/// with a DashMap providing O(1) read caching.
 pub struct IriRegistry {
     store: Arc<Store>,
     registry_graph: String,
@@ -86,7 +86,7 @@ pub struct IriRegistry {
 }
 
 impl IriRegistry {
-    /// 使用共享 Oxigraph Store 初始化注册表
+    /// Initialize the registry with a shared Oxigraph Store
     pub fn with_shared_store(store: Arc<Store>) -> Self {
         Self {
             store,
@@ -95,10 +95,10 @@ impl IriRegistry {
         }
     }
 
-    /// 注册一个实体 IRI
+    /// Register an entity IRI
     ///
-    /// 如果 IRI 已在其他 Named Graph 中出现过，返回冲突信息。
-    /// 注册是"尽力而为"的——失败不影响主流程。
+    /// If the IRI has appeared in another Named Graph, conflict info is returned.
+    /// Registration is best-effort — failure does not affect the main flow.
     pub fn register(&self, iri: &str, location: EntityLocation) -> RegistrationResult {
         let existing = self.resolve_impl(iri);
 
@@ -122,10 +122,10 @@ impl IriRegistry {
 
         let is_new = existing.is_none();
 
-        // 写入 Oxigraph
+        // Write to Oxigraph
         let _ = self.insert_to_store(iri, &location);
 
-        // 写入本地缓存
+        // Write to local cache
         let mut entry = existing.unwrap_or_default();
         entry.push(location);
         self.local_cache.insert(iri.to_string(), entry);
@@ -133,18 +133,18 @@ impl IriRegistry {
         RegistrationResult { is_new, conflicts }
     }
 
-    /// 通过 IRI 查询所有已知位置
+    /// Query all known locations by IRI
     pub fn resolve(&self, iri: &str) -> Vec<EntityLocation> {
         self.resolve_impl(iri).unwrap_or_default()
     }
 
     fn resolve_impl(&self, iri: &str) -> Option<Vec<EntityLocation>> {
-        // 先查本地缓存
+        // Check local cache first
         if let Some(cached) = self.local_cache.get(iri) {
             return Some(cached.clone());
         }
 
-        // 查 SPARQL
+        // Query via SPARQL
         let results = self.query_store(iri).ok()?;
         if results.is_empty() {
             return None;
@@ -155,7 +155,7 @@ impl IriRegistry {
         Some(locations)
     }
 
-    /// 按命名空间查询所有注册的 IRI
+    /// Query all registered IRIs by namespace
     #[allow(deprecated)]
     pub fn resolve_by_namespace(&self, namespace: &str) -> Vec<EntityLocation> {
         let sparql = format!(
@@ -175,7 +175,7 @@ impl IriRegistry {
             _ => return locations,
         };
         for sol in solutions.flatten() {
-            // Oxigraph 使用 SELECT 变量名查找（不带 ? 前缀）
+            // Oxigraph looks up by SELECT variable name (without ? prefix)
             let iri_term = sol.get("iri").or_else(|| sol.get("?iri"));
             if let Some(iri) = iri_term {
                 let iri_clean = iri
@@ -197,7 +197,7 @@ impl IriRegistry {
         locations
     }
 
-    /// 按实体类型查询
+    /// Query by entity type
     #[allow(deprecated)]
     pub fn resolve_by_type(&self, entity_type: &str) -> Vec<EntityLocation> {
         let sparql = format!(
@@ -238,7 +238,7 @@ impl IriRegistry {
         locations
     }
 
-    /// 检测所有重复 IRI（同一 @id 出现在多个 Named Graph）
+    /// Detect all duplicate IRIs (same @id appearing in multiple Named Graphs)
     #[allow(deprecated)]
     pub fn find_duplicates(&self) -> Vec<IriConflict> {
         let sparql = format!(
@@ -266,12 +266,12 @@ impl IriRegistry {
         }
     }
 
-    /// 查询注册表大小
+    /// Query registry size
     pub fn size(&self) -> usize {
         self.local_cache.len()
     }
 
-    // ─── 内部方法 ───
+    // ─── Internal Methods ───
 
     fn insert_to_store(&self, iri: &str, location: &EntityLocation) -> Result<(), String> {
         let sparql = format!(
@@ -296,7 +296,7 @@ impl IriRegistry {
 
         self.store
             .update(&sparql)
-            .map_err(|e| format!("SPARQL INSERT 失败: {}", e))
+            .map_err(|e| format!("SPARQL INSERT failed: {}", e))
     }
 
     #[allow(deprecated)]
@@ -317,7 +317,7 @@ impl IriRegistry {
         let results = self
             .store
             .query(&sparql)
-            .map_err(|e| format!("SPARQL 查询失败: {}", e))?;
+            .map_err(|e| format!("SPARQL query failed: {}", e))?;
 
         let mut locations = Vec::new();
         if let QueryResults::Solutions(solutions) = results {
@@ -354,7 +354,7 @@ impl IriRegistry {
         Ok(locations)
     }
 
-    /// 清除 IRI 的本地缓存条目
+    /// Clear cached entry for an IRI
     pub fn invalidate_cache(&self, iri: &str) {
         self.local_cache.remove(iri);
     }
@@ -414,7 +414,7 @@ mod tests {
         let result = registry.register("iri://task/dup", loc2);
 
         assert!(!result.is_new);
-        assert!(!result.conflicts.is_empty(), "不同 StorageLayer 应触发冲突");
+        assert!(!result.conflicts.is_empty(), "different StorageLayer should trigger conflict");
     }
 
     #[test]
@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(registry.size(), 1);
 
         registry.invalidate_cache(iri);
-        assert_eq!(registry.size(), 0, "invalidate 后 size 应为 0");
+        assert_eq!(registry.size(), 0, "size should be 0 after invalidate");
     }
 
     #[test]

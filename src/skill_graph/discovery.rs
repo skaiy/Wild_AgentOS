@@ -80,7 +80,7 @@ impl SkillDiscoveryEngine {
     }
 
     pub fn discover_for_task(&self, task: &Task5W2H) -> Vec<SkillMatch> {
-        info!("为任务发现技能: what={}", task.what);
+        info!("Discovering skills for task: what={}", task.what);
         
         let mut matches: Vec<SkillMatch> = Vec::new();
         
@@ -97,18 +97,18 @@ impl SkillDiscoveryEngine {
             let mut score = 0.5f32;
 
             if skill.w2h.what.to_lowercase().contains(&task.what.to_lowercase()) {
-                match_reasons.push("what 匹配".to_string());
+                match_reasons.push("what matched".to_string());
                 score += 0.2;
             }
 
             if skill.w2h.why.to_lowercase().contains(&task.why.to_lowercase()) {
-                match_reasons.push("why 匹配".to_string());
+                match_reasons.push("why matched".to_string());
                 score += 0.15;
             }
 
             if let Some(ref phase) = task.when_phase {
                 if skill.w2h.when.applicable_phases.iter().any(|p| p.to_lowercase() == phase.to_lowercase()) {
-                    match_reasons.push(format!("phase 匹配: {}", phase));
+                    match_reasons.push(format!("phase matched: {}", phase));
                     score += 0.1;
                 }
             }
@@ -116,7 +116,7 @@ impl SkillDiscoveryEngine {
             if let Some(ref role) = task.who {
                 if let Some(ref required_role) = skill.w2h.who.required_agent_role {
                     if required_role.to_lowercase() == role.to_lowercase() {
-                        match_reasons.push(format!("role 匹配: {}", role));
+                        match_reasons.push(format!("role matched: {}", role));
                         score += 0.1;
                     }
                 }
@@ -141,7 +141,7 @@ impl SkillDiscoveryEngine {
 
         matches.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
         
-        debug!("发现 {} 个匹配技能", matches.len());
+        debug!("Found {} matching skills", matches.len());
         matches
     }
 
@@ -194,7 +194,7 @@ impl SkillDiscoveryEngine {
                             skill_a: skill_iris[i].to_string(),
                             skill_b: skill_iris[j].to_string(),
                             conflict_type: "alternative".to_string(),
-                            description: format!("{} 是 {} 的替代方案", skill_iris[j], skill_iris[i]),
+                            description: format!("{} is an alternative to {}", skill_iris[j], skill_iris[i]),
                         });
                     }
                     
@@ -206,7 +206,7 @@ impl SkillDiscoveryEngine {
                             skill_a: skill_iris[i].to_string(),
                             skill_b: skill_iris[j].to_string(),
                             conflict_type: "exclusive".to_string(),
-                            description: "两个技能都标记为互斥".to_string(),
+                            description: "Both skills are marked as exclusive".to_string(),
                         });
                     }
                 }
@@ -272,7 +272,7 @@ impl SkillDiscoveryEngine {
                     matches.push(SkillMatch {
                         skill,
                         relevance_score: result.score,
-                        match_reasons: vec!["语义匹配".to_string()],
+                        match_reasons: vec!["semantic match".to_string()],
                         required_dependencies: self.graph_store.resolve_dependencies(&result.iri),
                     });
                 }

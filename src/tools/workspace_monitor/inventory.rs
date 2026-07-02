@@ -373,6 +373,12 @@ impl FileInventory {
         true
     }
 
+    /// Clear all tracked files from the inventory.
+    pub fn clear_all(&self) {
+        let mut mem = self.mem_cache.write();
+        mem.clear();
+    }
+
     /// Get a file entry by path.
     pub fn get_entry(&self, path: &str) -> Option<FileEntry> {
         let mem = self.mem_cache.read();

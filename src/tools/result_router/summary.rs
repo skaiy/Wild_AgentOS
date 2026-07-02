@@ -63,7 +63,7 @@ fn truncate_json_array(arr: &[Value], max_bytes: usize) -> String {
 
     if kept.len() < total {
         result.push_str(&format!(
-            "\n\n[截断: 共 {} 个元素, 保留 {} 个]",
+            "\n\n[truncated: {} total elements, {} kept]",
             total, kept.len()
         ));
     }
@@ -80,7 +80,7 @@ fn truncate_json_object(obj: &serde_json::Map<String, Value>, max_bytes: usize) 
             if text::display_width(s) > JSON_VALUE_PREVIEW_WIDTH {
                 let preview = text::truncate_preview(s, JSON_VALUE_PREVIEW_WIDTH);
                 Value::String(format!(
-                    "{} [截断: 原始 {} 字符]",
+                    "{} [truncated: original {} characters]",
                     preview,
                     text::display_width(s)
                 ))
@@ -128,9 +128,9 @@ pub fn format_iri_message(
     let size_mark = if result_size < threshold_small {
         ""
     } else if result_size < threshold_large {
-        " [压缩]"
+        " [compressed]"
     } else {
-        " [已存档]"
+        " [archived]"
     };
 
     let iri = format!("iri://tool-result/{}", call_id);
@@ -157,7 +157,7 @@ pub fn generate_text_summary(result_str: &str, tool_name: &str, preview_bytes: u
     };
 
     let mut summary = format!(
-        "工具 [{}] 返回大文本结果 ({} 字节, {} 行):\n\n--- 预览 ---\n{}\n",
+        "Tool [{}] returned large text result ({} bytes, {} lines):\n\n--- Preview ---\n{}\n",
         tool_name, size, line_count, preview
     );
 
@@ -166,8 +166,8 @@ pub fn generate_text_summary(result_str: &str, tool_name: &str, preview_bytes: u
         let tail_start = size.saturating_sub(tail_chars);
         let tail_start_adjusted = text::safe_truncate(result_str, tail_start).len();
         let tail = text::safe_truncate(&result_str[tail_start_adjusted..], tail_chars);
-        summary.push_str(&format!("\n--- 末尾预览 ---\n{}\n", tail));
-        summary.push_str("\n[完整结果已存储, 使用 read_full_result 工具按需读取]");
+        summary.push_str(&format!("\n--- End preview ---\n{}\n", tail));
+        summary.push_str("\n[Full result stored, use read_full_result to read on demand]");
     }
 
     summary
@@ -186,8 +186,8 @@ mod tests {
 
         let result = smart_truncate(&json, 500);
         assert!(result.len() < 600);
-        assert!(result.contains("截断"));
-        assert!(result.contains("50 个元素"));
+        assert!(result.contains("truncated"));
+        assert!(result.contains("50 total elements"));
     }
 
     #[test]
@@ -206,13 +206,13 @@ mod tests {
     fn test_truncate_invalid_json_fallback() {
         let text = "not json\n".repeat(500);
         let result = smart_truncate(&text, 1000);
-        assert!(result.contains("截断"));
-        assert!(result.contains("行"));
+        assert!(result.contains("truncated"));
+        assert!(result.contains("lines"));
     }
 
     #[test]
     fn test_generate_summary_utf8() {
-        let text = "这是中文内容\n".repeat(1000);
+        let text = "Chinese content\n".repeat(1000);
         let summary = generate_text_summary(&text, "test_tool", 200);
         assert!(summary.contains("test_tool"));
         assert!(summary.contains("read_full_result"));
@@ -224,7 +224,7 @@ mod tests {
         let text = "line\n".repeat(1000);
         let summary = generate_text_summary(&text, "test_tool", 200);
         assert!(summary.contains("test_tool"));
-        assert!(summary.contains("1000 行"));
+        assert!(summary.contains("1000 lines"));
         assert!(summary.contains("read_full_result"));
     }
 }

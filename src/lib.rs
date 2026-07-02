@@ -19,6 +19,11 @@ pub mod methodology;
 pub mod knowledge_graph;
 pub mod root_cause;
 
+pub mod causal;
+pub mod temporal;
+pub mod gnn;
+pub mod graph_backend;
+
 #[cfg(feature = "ontology")]
 pub mod ontology;
 

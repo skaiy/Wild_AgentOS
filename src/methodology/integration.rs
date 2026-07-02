@@ -49,41 +49,41 @@ impl MethodologyPromptInjector {
         let boundary = registry.get("methodology:boundary-enforcement");
 
         let mut sections = vec![
-            "\n## 📋 方法论纪律 — 计划审查闸门".to_string(),
-            "作为计划Agent，你必须遵守以下方法论纪律：".to_string(),
+            "\n## 📋 Methodology Discipline — Plan Review Gate".to_string(),
+            "As the Planning Agent, you must follow these methodology disciplines:".to_string(),
         ];
 
-        sections.push("\n### 1. 步骤粒度检查".to_string());
+        sections.push("\n### 1. Step Granularity Check".to_string());
         sections.push(
-            "对每个计划步骤，必须评估其粒度是否合适：\n\
-            - ✅ 过粗：一个步骤包含多个不相关的操作 → 拆解\n\
-            - ✅ 过细：一个步骤只包含原子操作 → 合并\n\
-            - ✅ 标准：一个步骤包含一组相关的操作，有明确的输入和产出\n\
-            示例：'创建文件' 和 '修改文件' 不应分为两步，应合并为 '实现功能X'"
+            "For each plan step, evaluate whether its granularity is appropriate:\n\
+            - ✅ Too coarse: a step contains multiple unrelated operations → split\n\
+            - ✅ Too fine: a step contains only atomic operations → merge\n\
+            - ✅ Standard: a step contains a group of related operations with clear input and output\n\
+            Example: 'create file' and 'edit file' should not be two steps; merge into 'implement feature X'"
                 .to_string(),
         );
 
         if let Some(c) = complexity {
             let reds: Vec<&str> = c.red_flags.iter().map(|r| r.pattern).collect();
-            sections.push("\n### 2. 复杂度匹配".to_string());
+            sections.push("\n### 2. Complexity Matching".to_string());
             sections.push(format!(
-                "所选复杂度级别必须与任务实际需求匹配，禁止：\n\
-                - {}：为省事选择低于实际需求的级别\n\
-                - {}：为炫技选择高于实际需求的级别",
-                reds.first().unwrap_or(&"降级"),
-                reds.get(1).unwrap_or(&"升级"),
+                "Selected complexity level must match actual task requirements. Prohibited:\n\
+                - {}: choosing a lower level for convenience\n\
+                - {}: choosing a higher level for show",
+                reds.first().unwrap_or(&"convenience downgrade"),
+                reds.get(1).unwrap_or(&"show-off upgrade"),
             ));
         }
 
         if let Some(b) = boundary {
             let aps: Vec<&str> = b.anti_patterns.iter().map(|ap| ap.name).collect();
-            sections.push("\n### 3. 边界检查".to_string());
+            sections.push("\n### 3. Boundary Check".to_string());
             sections.push(format!(
-                "计划中不得包含越界操作：\n\
-                - 检查每个步骤的职责是否在 Agent 权限范围内\n\
-                - 禁止计划中包含 {} 类操作\n\
-                - 如果发现越界，必须标记并建议修正",
-                aps.first().unwrap_or(&"越界执行"),
+                "Plans must not contain boundary violations:\n\
+                - Check whether each step's responsibility is within the Agent's authority\n\
+                - Do not include {} operations in the plan\n\
+                - If violations are found, flag and suggest corrections",
+                aps.first().unwrap_or(&"boundary overstep"),
             ));
         }
 
@@ -97,51 +97,51 @@ impl MethodologyPromptInjector {
         let verification = registry.get("methodology:verification-before-completion");
 
         let mut sections = vec![
-            "\n## 📋 方法论纪律 — 双阶段审计 + 反模式检测".to_string(),
-            "作为检查Agent，你必须执行双阶段审计：".to_string(),
+            "\n## 📋 Methodology Discipline — Dual-Stage Audit + Anti-Pattern Detection".to_string(),
+            "As the Checking Agent, you must perform a dual-stage audit:".to_string(),
         ];
 
-        sections.push("\n### 阶段一：输出验证（Output Verification）".to_string());
+        sections.push("\n### Stage 1: Output Verification".to_string());
         sections.push(
-            "验证执行结果是否符合任务要求：\n\
-            - 检查产物是否完整、正确\n\
-            - 验证是否满足成功标准\n\
-            - 确认所有步骤是否都已完成\n\
-            - 检查文件是否真实存在（不要仅依赖 summary）"
+            "Verify that execution results meet task requirements:\n\
+            - Check whether artifacts are complete and correct\n\
+            - Verify whether success criteria are met\n\
+            - Confirm whether all steps have been completed\n\
+            - Check whether files actually exist (don't rely solely on summary)"
                 .to_string(),
         );
 
-        sections.push("\n### 阶段二：方法论合规检查（Methodology Compliance）".to_string());
+        sections.push("\n### Stage 2: Methodology Compliance Check".to_string());
         sections.push(
-            "检查执行过程是否符合方法论要求：\n\
-            - 是否先验证再宣称完成？（Verification-Before-Completion）\n\
-            - 是否存在已知反模式？（如盲目重试、随机修改、全量遍历等）\n\
-            - 是否遵循了成本意识？（避免不必要的大输出、无比较方案）\n\
-            - 是否在权限范围内操作？（Least-Privilege / Boundary-Enforcement）"
+            "Check whether the execution process complied with methodology requirements:\n\
+            - Did you verify before claiming completion? (Verification-Before-Completion)\n\
+            - Are there known anti-patterns? (e.g., blind retry, random modification, full traversal)\n\
+            - Was cost awareness followed? (avoid unnecessary large output, no-alternative comparisons)\n\
+            - Were operations within authorized scope? (Least-Privilege / Boundary-Enforcement)"
                 .to_string(),
         );
 
         if let Some(d) = debugging {
             let aps: Vec<&str> = d.anti_patterns.iter().map(|ap| ap.name).collect();
-            sections.push("\n### 反模式检测".to_string());
+            sections.push("\n### Anti-Pattern Detection".to_string());
             sections.push(format!(
-                "在审计过程中，重点排查以下反模式：\n\
-                - {}：是否同时修改多处而不验证每处？\n\
-                - 无证据声明：是否宣称完成但没有验证证据？\n\
-                - 实现先行：是否先写代码后写测试？",
+                "During the audit, focus on detecting these anti-patterns:\n\
+                - {}: modifying multiple places without verifying each?\n\
+                - no-evidence claim: claiming completion without verification evidence?\n\
+                - implementation first: writing code before tests?",
                 aps.first().unwrap_or(&"Shotgun Debugging"),
             ));
         }
 
         if let Some(v) = verification {
             let reds: Vec<&str> = v.red_flags.iter().map(|r| r.pattern).collect();
-            sections.push("\n### 证据要求".to_string());
+            sections.push("\n### Evidence Requirements".to_string());
             sections.push(format!(
-                "CA 自身的审计结论也需要提供验证证据：\n\
-                - 不要出现『{}』的情况\n\
-                - 每个 PASS/FAIL 结论都要附上实际检查结果\n\
-                - 使用工具验证后再下结论",
-                reds.first().unwrap_or(&"「测试通过」但未运行"),
+                "CA's own audit conclusions also need verification evidence:\n\
+                - Avoid the '{}' situation\n\
+                - Attach actual inspection results to every PASS/FAIL conclusion\n\
+                - Use tools to verify before drawing conclusions",
+                reds.first().unwrap_or(&"claiming pass without running"),
             ));
         }
 
@@ -155,28 +155,28 @@ impl MethodologyPromptInjector {
         let _boundary = registry.get("methodology:boundary-enforcement");
 
         vec![
-            "\n## 📋 方法论纪律 — 压力测试 + 元测试协议".to_string(),
-            "作为决策Agent，你必须执行压力测试：".to_string(),
+            "\n## 📋 Methodology Discipline — Pressure Testing + Meta-Test Protocol".to_string(),
+            "As the Decision Agent, you must perform pressure testing:".to_string(),
             "".to_string(),
-            "### 1. 压力测试（Pressure Testing）".to_string(),
-            "在批准 CA 的审计结论之前，必须主动寻找漏洞：".to_string(),
-            "- 假设 CA 可能遗漏了问题 → 尝试找到 CA 没发现的问题".to_string(),
-            "- 从反面角度审视：'如果这个结论是错的，可能错在哪里？'".to_string(),
-            "- 检查 CA 是否只验证了表面结果，没有深入检查".to_string(),
-            "- 对 CA 的 PASS 结论提出至少一个质疑并验证".to_string(),
+            "### 1. Pressure Testing".to_string(),
+            "Before approving CA's audit conclusions, actively seek out vulnerabilities:".to_string(),
+            "- Assume CA may have missed issues → try to find what CA didn't discover".to_string(),
+            "- Examine from the opposite perspective: 'If this conclusion is wrong, where might the error be?'".to_string(),
+            "- Check whether CA only verified surface-level results without deep inspection".to_string(),
+            "- Raise at least one challenge to CA's PASS conclusion and verify it".to_string(),
             "".to_string(),
-            "### 2. 元测试协议（Meta-Test Protocol）".to_string(),
-            "验证 CA 自身的验证过程是否可靠：".to_string(),
-            "- CA 是否使用了工具验证？（还是仅依赖 summary？）".to_string(),
-            "- CA 是否检查了所有相关维度？（5W2H 是否全覆盖？）".to_string(),
-            "- CA 的审计结论是否有明确的证据支撑？".to_string(),
-            "- 如果发现 CA 的验证有漏洞 → 标记并要求补充检查".to_string(),
+            "### 2. Meta-Test Protocol".to_string(),
+            "Verify whether CA's own verification process is reliable:".to_string(),
+            "- Did CA use tools for verification? (Or rely solely on summary?)".to_string(),
+            "- Did CA check all relevant dimensions? (Is 5W2H fully covered?)".to_string(),
+            "- Are CA's audit conclusions supported by clear evidence?".to_string(),
+            "- If CA's verification has gaps → flag and request supplementary checks".to_string(),
             "".to_string(),
-            "### 3. 决策责任".to_string(),
-            "最终决策权在你，你要为决策后果负责：".to_string(),
-            "- 不要做 CA 的『橡皮图章』——独立判断".to_string(),
-            "- 综合考虑任务目标、实际结果和风险".to_string(),
-            "- 如果需要回退，给出具体的回退建议".to_string(),
+            "### 3. Decision Responsibility".to_string(),
+            "The final decision rests with you; you are accountable for its consequences:".to_string(),
+            "- Don't be CA's 'rubber stamp' — make independent judgments".to_string(),
+            "- Consider task goals, actual results, and risks comprehensively".to_string(),
+            "- If rollback is needed, provide specific rollback recommendations".to_string(),
         ]
         .join("\n")
     }
@@ -204,34 +204,34 @@ impl MethodologyPromptInjector {
             .collect();
 
         let mut sections = vec![
-            "\n## 📋 方法论纪律 — 自动触发协议".to_string(),
-            "作为 Supervisor Agent，你在制定计划时需考虑以下方法论：".to_string(),
+            "\n## 📋 Methodology Discipline — Auto-Trigger Protocol".to_string(),
+            "As the Supervisor Agent, consider the following methodologies when creating plans:".to_string(),
         ];
 
         if !always_on.is_empty() {
-            sections.push("\n### 始终激活的方法论".to_string());
+            sections.push("\n### Always-Active Methodologies".to_string());
             sections.push(format!(
-                "以下方法论始终有效，在计划中必须体现：\n- {}",
+                "The following methodologies are always active and must be reflected in plans:\n- {}",
                 always_on.join("\n- ")
             ));
         }
 
         if !role_triggers.is_empty() {
-            sections.push("\n### 角色触发的方法论".to_string());
+            sections.push("\n### Role-Triggered Methodologies".to_string());
             sections.push(format!(
-                "以下方法论会在特定 Agent 角色执行时自动触发：\n- {}",
+                "The following methodologies auto-trigger when specific Agent roles execute:\n- {}",
                 role_triggers.join("\n- ")
             ));
         }
 
-        sections.push("\n### 计划生成要求".to_string());
+        sections.push("\n### Plan Generation Requirements".to_string());
         sections.push(
-            "在生成计划时，确保：\n\
-            - 每个步骤的职责与相应方法论匹配\n\
-            - 为 DA 步骤预留足够的验证空间\n\
-            - CA 步骤包含双阶段审计（输出验证 + 方法论合规）\n\
-            - AA 步骤包含压力测试要求\n\
-            - 步骤粒度合理：一组相关操作合并为一个步骤"
+            "When generating plans, ensure:\n\
+            - Each step's responsibilities match the corresponding methodology\n\
+            - Reserve sufficient verification space for DA steps\n\
+            - CA steps include dual-stage audit (output verification + methodology compliance)\n\
+            - AA steps include pressure testing requirements\n\
+            - Step granularity is reasonable: group related operations into one step"
                 .to_string(),
         );
 
@@ -245,49 +245,49 @@ impl MethodologyPromptInjector {
         let verification = registry.get("methodology:verification-before-completion");
 
         let mut sections = vec![
-            "\n## 📋 方法论纪律 — 执行规范".to_string(),
-            "作为执行Agent，你必须遵守以下执行规范：".to_string(),
+            "\n## 📋 Methodology Discipline — Execution Standards".to_string(),
+            "As the Execution Agent, you must follow these execution standards:".to_string(),
         ];
 
-        sections.push("\n### 1. 最小权限执行（Least Privilege）".to_string());
+        sections.push("\n### 1. Least Privilege Execution".to_string());
         sections.push(
-            "在每一步执行中，严格限定操作范围：\n\
-            - 只执行分配的任务，不越权操作\n\
-            - 不在非职责范围内修改系统配置\n\
-            - 如需扩展权限，先标记再请示"
+            "Strictly limit operation scope in each step:\n\
+            - Only execute assigned tasks; do not exceed authority\n\
+            - Do not modify system configuration outside responsibilities\n\
+            - If scope expansion is needed, flag and request guidance"
                 .to_string(),
         );
 
         if let Some(v) = verification {
             let reds: Vec<&str> = v.red_flags.iter().map(|r| r.pattern).collect();
-            sections.push("\n### 2. 验证前置（Verification Before Completion）".to_string());
+            sections.push("\n### 2. Verification Before Completion".to_string());
             sections.push(format!(
-                "在宣称完成之前，必须提供验证证据：\n\
-                - 避免『{}』——运行时验证\n\
-                - 工具操作后检查实际效果\n\
-                - 文件写入后确认内容正确",
-                reds.first().unwrap_or(&"假设成功"),
+                "Before claiming completion, verification evidence must be provided:\n\
+                - Avoid '{}' — verify at runtime\n\
+                - Check actual effects after tool operations\n\
+                - Confirm content correctness after file writes",
+                reds.first().unwrap_or(&"assumed success"),
             ));
         }
 
         if let Some(d) = debugging {
             let aps: Vec<&str> = d.anti_patterns.iter().map(|ap| ap.name).collect();
-            sections.push("\n### 3. 异常处理规范".to_string());
+            sections.push("\n### 3. Exception Handling Standards".to_string());
             sections.push(format!(
-                "当遇到执行失败时：\n\
-                - 重试前分析根因，不盲目重试\n\
-                - 避免 {}——一次只改一处并验证\n\
-                - 连续失败 3 次后停止并报告",
-                aps.first().unwrap_or(&"随机修改"),
+                "When encountering execution failures:\n\
+                - Analyze root cause before retrying; no blind retries\n\
+                - Avoid {} — change one thing at a time and verify\n\
+                - Stop and report after 3 consecutive failures",
+                aps.first().unwrap_or(&"random modification"),
             ));
         }
 
-        sections.push("\n### 4. 成本意识（Cost Awareness）".to_string());
+        sections.push("\n### 4. Cost Awareness".to_string());
         sections.push(
-            "在执行过程中保持对成本（tokens/时间）的敏感：\n\
-            - 优先使用精准工具而非大输出遍历\n\
-            - 读取文件时只读需要部分，不整文件全读\n\
-            - 不执行不必要的验证步骤超出任务需求"
+            "Maintain sensitivity to costs (tokens/time) during execution:\n\
+            - Prioritize precise tools over large-output traversal\n\
+            - Read only the needed portions of files, not the entire file\n\
+            - Do not execute unnecessary verification steps beyond task requirements"
                 .to_string(),
         );
 
@@ -304,9 +304,9 @@ mod tests {
         let addendum = MethodologyPromptInjector::build_for_role(AgentRole::Plan);
         assert!(addendum.is_some(), "PA should have a methodology addendum");
         let text = addendum.unwrap();
-        assert!(text.contains("粒度检查"), "PA addendum should mention granularity");
-        assert!(text.contains("复杂度匹配"), "PA addendum should mention complexity");
-        assert!(text.contains("边界检查"), "PA addendum should mention boundary");
+        assert!(text.contains("Granularity Check"), "PA addendum should mention granularity");
+        assert!(text.contains("Complexity Matching"), "PA addendum should mention complexity");
+        assert!(text.contains("Boundary Check"), "PA addendum should mention boundary");
     }
 
     #[test]
@@ -314,10 +314,10 @@ mod tests {
         let addendum = MethodologyPromptInjector::build_for_role(AgentRole::Check);
         assert!(addendum.is_some(), "CA should have a methodology addendum");
         let text = addendum.unwrap();
-        assert!(text.contains("双阶段审计"), "CA addendum should mention dual-stage audit");
-        assert!(text.contains("阶段一"), "CA addendum should have Stage 1");
-        assert!(text.contains("阶段二"), "CA addendum should have Stage 2");
-        assert!(text.contains("反模式检测"), "CA addendum should mention anti-pattern detection");
+        assert!(text.contains("Dual-Stage Audit"), "CA addendum should mention dual-stage audit");
+        assert!(text.contains("Stage 1"), "CA addendum should have Stage 1");
+        assert!(text.contains("Stage 2"), "CA addendum should have Stage 2");
+        assert!(text.contains("Anti-Pattern Detection"), "CA addendum should mention anti-pattern detection");
     }
 
     #[test]
@@ -325,9 +325,9 @@ mod tests {
         let addendum = MethodologyPromptInjector::build_for_role(AgentRole::Act);
         assert!(addendum.is_some(), "AA should have a methodology addendum");
         let text = addendum.unwrap();
-        assert!(text.contains("压力测试"), "AA addendum should mention pressure testing");
-        assert!(text.contains("元测试"), "AA addendum should mention meta-test");
-        assert!(text.contains("橡皮图章"), "AA addendum should warn against rubber-stamping");
+        assert!(text.contains("Pressure Testing"), "AA addendum should mention pressure testing");
+        assert!(text.contains("Meta-Test"), "AA addendum should mention meta-test");
+        assert!(text.contains("rubber stamp"), "AA addendum should warn against rubber-stamping");
     }
 
     #[test]
@@ -335,16 +335,16 @@ mod tests {
         let addendum = MethodologyPromptInjector::build_for_role(AgentRole::Do);
         assert!(addendum.is_some(), "DA should now have a methodology addendum");
         let text = addendum.unwrap();
-        assert!(text.contains("最小权限"), "DA addendum should mention least privilege");
-        assert!(text.contains("成本意识"), "DA addendum should mention cost awareness");
+        assert!(text.contains("Least Privilege Execution"), "DA addendum should mention least privilege");
+        assert!(text.contains("Cost Awareness"), "DA addendum should mention cost awareness");
     }
 
     #[test]
     fn test_sa_addendum_exists() {
         let text = MethodologyPromptInjector::build_for_sa();
         assert!(!text.is_empty(), "SA addendum should not be empty");
-        assert!(text.contains("始终激活"), "SA addendum should mention always-on");
-        assert!(text.contains("计划生成要求"), "SA addendum should have plan generation requirements");
+        assert!(text.contains("Always-Active Methodologies"), "SA addendum should mention always-on");
+        assert!(text.contains("Plan Generation Requirements"), "SA addendum should have plan generation requirements");
     }
 
     #[test]
@@ -356,7 +356,7 @@ mod tests {
 
         let sa_text = MethodologyPromptInjector::build_for_sa();
         assert!(
-            always_on_count == 0 || sa_text.contains("方法论"),
+            always_on_count == 0 || sa_text.contains("Methodology"),
             "SA addendum should reference methodologies"
         );
     }
@@ -364,19 +364,19 @@ mod tests {
     #[test]
     fn test_pa_addendum_references_granularity_rules() {
         let text = MethodologyPromptInjector::build_for_role(AgentRole::Plan).unwrap();
-        assert!(text.contains("过粗") || text.contains("过细"), "PA granularity check should define granularity levels");
+        assert!(text.contains("Too coarse") || text.contains("Too fine"), "PA granularity check should define granularity levels");
     }
 
     #[test]
     fn test_ca_addendum_has_evidence_requirement() {
         let text = MethodologyPromptInjector::build_for_role(AgentRole::Check).unwrap();
-        assert!(text.contains("证据"), "CA dual-stage audit should require evidence");
+        assert!(text.contains("Evidence"), "CA dual-stage audit should require evidence");
     }
 
     #[test]
     fn test_aa_addendum_mentions_decision_responsibility() {
         let text = MethodologyPromptInjector::build_for_role(AgentRole::Act).unwrap();
-        assert!(text.contains("决策"), "AA pressure testing should mention decision responsibility");
+        assert!(text.contains("Decision Responsibility"), "AA pressure testing should mention decision responsibility");
     }
 
     #[test]

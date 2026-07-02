@@ -106,7 +106,7 @@ impl PreAggregatedIndex {
         }
 
         self.compute_transitive_deps(&skill.skill_iri, &skill.links);
-        debug!("索引技能: {} (tags={}, stack={}, role={:?})", 
+        debug!("Indexing skill: {} (tags={}, stack={}, role={:?})", 
             iri, skill.tags.len(), skill.w2h.where_.target_stack.len(), skill.w2h.who.required_agent_role);
     }
 

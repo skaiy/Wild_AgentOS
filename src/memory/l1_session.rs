@@ -5,11 +5,11 @@ use tracing::debug;
 use crate::memory::l0_store::{L0Store, MesiState};
 use crate::CoreError;
 
-/// 余弦相似度计算
+/// Cosine similarity calculation
 ///
-/// 计算两个等长 f32 向量之间的余弦相似度。
-/// 范围: [-1.0, 1.0], 1.0 = 完全相同方向, 0.0 = 正交, -1.0 = 完全相反。
-/// 用于 L1 淘汰策略中 turn 与当前查询的语义相关性评估。
+/// Computes cosine similarity between two equal-length f32 vectors.
+/// Range: [-1.0, 1.0], 1.0 = identical direction, 0.0 = orthogonal, -1.0 = opposite.
+/// Used in L1 eviction policy for semantic relevance evaluation between turns and queries.
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
@@ -23,52 +23,52 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     (dot / (norm_a * norm_b)).clamp(-1.0, 1.0) as f64
 }
 
-/// L1 淘汰策略权重配置
+/// L1 eviction policy weight configuration
 ///
-/// 控制 `evict_by_policy()` 中三项评估指标的权重。
-/// 不同 Agent 角色使用不同配置以优化其上下文中保留的内容。
+/// Controls the weights of three evaluation metrics in `evict_by_policy()`.
+/// Different agent roles use different configurations to optimize retained context.
 ///
-/// 公式: `score = recency_weight * (1/time_since) + relevance_weight * (1/semantic_relevance) + cost_weight * token_cost`
+/// Formula: `score = recency_weight * (1/time_since) + relevance_weight * (1/semantic_relevance) + cost_weight * token_cost`
 ///
-/// 其中 `semantic_relevance = beta * query_sim + (1-beta) * task_relevance`
+/// Where `semantic_relevance = beta * query_sim + (1-beta) * task_relevance`
 ///
-/// 增强: 新增硬阈值过滤 (relevance_threshold + safe_window_seconds)，
-/// 低相关度且超安全窗口的条目直接被淘汰，不参与分数排序。
+/// Enhancement: Added hard threshold filtering (relevance_threshold + safe_window_seconds),
+/// entries with low relevance beyond the safe window are directly evicted without score ranking.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EvictionConfig {
     pub recency_weight: f64,
     pub relevance_weight: f64,
     pub cost_weight: f64,
-    /// 低相关度硬阈值: relevance_score < 此值且超过安全窗口 → 直接淘汰
+    /// Hard threshold for low relevance: relevance_score < this AND beyond safe window → direct eviction
     pub relevance_threshold: f64,
-    /// 安全窗口秒数: 即使低相关度也保留的最小时间
+    /// Safe window in seconds: minimum time to keep even low-relevance entries
     pub safe_window_seconds: i64,
-    /// beta 融合权重: β * query_sim + (1-β) * task_relevance
+    /// Beta fusion weight: β * query_sim + (1-β) * task_relevance
     pub beta: f64,
 }
 
 impl EvictionConfig {
-    /// 默认配置 — 适用于 Supervisor (SA)，全面视野
+    /// Default config — for Supervisor (SA), broad perspective
     pub const fn default_sa() -> Self {
         Self { recency_weight: 0.30, relevance_weight: 0.40, cost_weight: 0.30, relevance_threshold: 0.3, safe_window_seconds: 300, beta: 0.7 }
     }
 
-    /// Plan (PA) — 优先保留与计划结构相关的历史
+    /// Plan (PA) — prioritize plan-structure-related history
     pub const fn plan() -> Self {
         Self { recency_weight: 0.20, relevance_weight: 0.60, cost_weight: 0.20, relevance_threshold: 0.3, safe_window_seconds: 300, beta: 0.7 }
     }
 
-    /// Do (DA) — 优先保留近期技术细节，平衡 token 成本
+    /// Do (DA) — prioritize recent technical details, balance token cost
     pub const fn do_agent() -> Self {
         Self { recency_weight: 0.35, relevance_weight: 0.30, cost_weight: 0.35, relevance_threshold: 0.3, safe_window_seconds: 300, beta: 0.7 }
     }
 
-    /// Check (CA) — 优先保留审计标准与验证相关
+    /// Check (CA) — prioritize audit standards and verification relevance
     pub const fn check() -> Self {
         Self { recency_weight: 0.15, relevance_weight: 0.65, cost_weight: 0.20, relevance_threshold: 0.3, safe_window_seconds: 300, beta: 0.7 }
     }
 
-    /// Act (AA) — 均衡配置，略偏向决策上下文
+    /// Act (AA) — balanced config, slightly biased toward decision context
     pub const fn act() -> Self {
         Self { recency_weight: 0.25, relevance_weight: 0.45, cost_weight: 0.30, relevance_threshold: 0.3, safe_window_seconds: 300, beta: 0.7 }
     }
@@ -90,41 +90,41 @@ impl Default for EvictionConfig {
     }
 }
 
-/// L1 单轮摘要记录
+/// L1 single-turn summary record
 ///
-/// L1 仅存储 LLM 响应的 `summary` 字段。
-/// 完整的 `thought` + `content` 通过 `archive_full()` 归档至 L0。
+/// L1 only stores the `summary` field of LLM responses.
+/// Full `thought` + `content` is archived to L0 via `archive_full()`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct L1Turn {
     pub role: String,
     pub summary: String,
     pub timestamp: DateTime<Utc>,
-    /// L0 中归档完整 thought+content 的 IRI
+    /// IRI of archived full thought+content in L0
     pub l0_archive_iri: Option<String>,
-    /// 语义向量，用于相关度计算
+    /// Semantic vector for relevance computation
     #[serde(default)]
     pub embedding: Option<Vec<f32>>,
-    /// 任务关联度系数 [0,1]，用于增强 eviction 策略
+    /// Task relevance coefficient [0,1], used for enhanced eviction strategy
     #[serde(default)]
     pub relevance_score: Option<f64>,
-    /// 最后访问时间（用于安全窗口计算）
+    /// Last access time (used for safe window calculation)
     #[serde(default)]
     pub last_access: Option<DateTime<Utc>>,
-    /// 补充输入标识：true = 用户中间补充，不受硬阈值淘汰
+    /// Supplement flag: true = user mid-turn supplement, not subject to hard threshold eviction
     #[serde(default)]
     pub is_supplement: bool,
 }
 
-/// L1 会话 — 单 Agent 摘要链
+/// L1 session — single agent summary chain
 ///
-/// 设计:
-/// - 每个 LLM 响应仅存储 `summary` 字段
-/// - 完整 `thought` + `content` 归档至 L0
-/// - 构建上下文时仅使用摘要 (节省令牌)
-/// - 完整细节可从 L0 按需重载
-/// - 内置令牌预算机制, 超出时按策略自动驱逐
+/// Design:
+/// - Only `summary` field stored per LLM response
+/// - Full `thought` + `content` archived to L0
+/// - Summary-only context building (token-efficient)
+/// - Full details reloadable from L0 on demand
+/// - Built-in token budget with automatic policy-driven eviction
 ///
-/// 多轮对话的摘要链格式:
+/// Multi-turn conversation summary chain format:
 /// ```text
 /// [Session History]
 /// [agent_A] Step 1 completed: found the main issue
@@ -140,13 +140,13 @@ pub struct L1Session {
     created_at: DateTime<Utc>,
     token_budget: usize,
     current_tokens: usize,
-    /// 淘汰的 IRI 弱引用列表，用于缺页中断重载
+    /// Evicted IRI weak reference list for page-fault reload
     weak_refs: Vec<String>,
-    /// MESI 缓存一致性状态（L1 作为 S/I 状态持有者）
+    /// MESI cache coherence state (L1 as S/I state holder)
     mesi_state: MesiState,
     eviction_config: EvictionConfig,
-    /// 任务级语义向量（从 5W2H.what+why 或 objective 生成）
-    /// 用于 evict_with_query 的 fallback query_embedding
+    /// Task-level semantic vector (generated from 5W2H.what+why or objective)
+    /// Used as fallback query_embedding for evict_with_query
     task_embedding: Option<Vec<f32>>,
     /// 用户态会话隔离：发起任务的用户标识（多租户血缘）
     user_id: Option<String>,
@@ -229,7 +229,7 @@ impl L1Session {
         }
     }
 
-    /// 设置任务级 embedding，用于 evict_with_query 的语义回退
+    /// Set task-level embedding for evict_with_query semantic fallback
     pub fn set_task_embedding(&mut self, embedding: Vec<f32>) {
         self.task_embedding = Some(embedding);
     }
@@ -238,20 +238,20 @@ impl L1Session {
         self.task_embedding.as_deref()
     }
 
-    /// 按驱逐策略淘汰超出令牌预算的轮次
+    /// Evict turns exceeding token budget using eviction policy
     ///
-    /// 策略: 保留第一个 turn, 淘汰得分最低的 turn。
-    /// 得分 = recency_weight * (1 / 距上次访问秒数) + relevance_weight * (1 / 语义相关度) + cost_weight * token_cost
-    /// 得分越低越应被淘汰。
+    /// Strategy: keep first turn, evict lowest-scored turns.
+    /// Score = recency_weight * (1 / seconds_since_last_access) + relevance_weight * (1 / semantic_relevance) + cost_weight * token_cost
+    /// Lower score means more likely to be evicted.
     pub fn evict_by_policy(&mut self) -> usize {
         self.evict_with_query(None)
     }
 
-    /// 使用可选的 query_embedding 进行语义相关度评估的淘汰
+    /// Evict using optional query_embedding for semantic relevance evaluation
     ///
-    /// 策略 (两阶段):
-    /// 1. 硬阈值阶段: relevance < threshold 且超过安全窗口 → 直接淘汰（跳过 is_supplement 条目）
-    /// 2. 评分阶段: 按 recency/relevance/cost 加权评分淘汰
+    /// Strategy (two-phase):
+    /// 1. Hard threshold phase: relevance < threshold AND beyond safe window → direct eviction (skips is_supplement entries)
+    /// 2. Scoring phase: weighted score eviction by recency/relevance/cost
     ///
     /// semantic_relevance = beta * cosine_sim(query, turn_embedding) + (1-beta) * turn.relevance_score
     pub fn evict_with_query(&mut self, query_embedding: Option<&[f32]>) -> usize {
@@ -263,11 +263,11 @@ impl L1Session {
         let mut evicted = 0;
         let cfg = &self.eviction_config;
 
-        // 使用传入的 query_embedding，回退到 self.task_embedding
+        // Use passed query_embedding, fallback to self.task_embedding
         let query = query_embedding.or(self.task_embedding.as_deref());
 
-        // Phase 1: 硬阈值淘汰 — 低相关 + 超安全窗口 → 直接淘汰
-        // is_supplement 条目跳过此阶段，仅参与评分阶段
+        // Phase 1: Hard threshold eviction — low relevance + beyond safe window → direct eviction
+        // is_supplement entries skip this phase, only participate in scoring phase
         if cfg.relevance_threshold > 0.0 {
             let mut i = 1;
             while i < self.turns.len() && self.current_tokens > self.token_budget && self.turns.len() > 1 {
@@ -282,14 +282,14 @@ impl L1Session {
                             self.weak_refs.push(iri);
                         }
                         evicted += 1;
-                        continue; // i 不自增，因为 remove 后后续元素前移
+                        continue; // i not incremented because remove shifts subsequent elements forward
                     }
                 }
                 i += 1;
             }
         }
 
-        // Phase 2: 评分淘汰 — 按 β 融合分数淘汰最低分
+        // Phase 2: Scoring eviction — evict lowest score by β fusion
         while self.current_tokens > self.token_budget && self.turns.len() > 1 {
             let mut min_idx = None;
             let mut min_score = f64::MAX;
@@ -303,7 +303,7 @@ impl L1Session {
                     }
                     _ => 0.5,
                 };
-                // β 融合: 当前查询相关度 × β + 任务关联度 × (1-β)
+                // β fusion: query relevance × β + task relevance × (1-β)
                 let task_relevance = t.relevance_score.unwrap_or(query_sim);
                 let semantic_relevance = (cfg.beta * query_sim + (1.0 - cfg.beta) * task_relevance).max(0.001);
 
@@ -333,7 +333,7 @@ impl L1Session {
         evicted
     }
 
-    /// 尝试从 L0 重载指定 IRI 的内容到 L1 会话
+    /// Attempt to reload content from L0 into L1 session by IRI
     pub fn try_reload_from_l0(&mut self, l0_store: &L0Store, iri: &str) -> bool {
         if let Ok(Some(entry)) = l0_store.retrieve(iri) {
             let summary = if entry.content.len() > 200 {
@@ -341,18 +341,18 @@ impl L1Session {
             } else {
                 entry.content.clone()
             };
-            self.add_summary("system", &format!("[重载] {}", summary), Some(iri.to_string()));
+            self.add_summary("system", &format!("[Reloaded] {}", summary), Some(iri.to_string()));
             true
         } else {
             false
         }
     }
 
-    /// 存储补充输入到 L1（由 AgentRunner 在 CycleStart 注入时调用）
+    /// Store supplement input to L1 (called by AgentRunner on CycleStart injection)
     ///
-    /// 与 add_summary 不同:
-    /// - is_supplement = true（不受淘汰硬阈值影响）
-    /// - 保留 embedding 和 relevance_score 供 eviction 策略使用
+    /// Unlike add_summary:
+    /// - is_supplement = true (not subject to hard threshold eviction)
+    /// - Preserves embedding and relevance_score for eviction policy use
     pub fn add_supplement(
         &mut self,
         role: &str,
@@ -381,9 +381,9 @@ impl L1Session {
         self.turns.last_mut().unwrap()
     }
 
-    /// 存储 LLM `summary` 字段到 L1。
-    /// thought+content 应通过 archive_full() 单独归档至 L0。
-    /// 添加后自动检查令牌预算, 超出则触发驱逐。
+    /// Store LLM `summary` field to L1.
+    /// thought+content should be separately archived to L0 via archive_full().
+    /// Automatically checks token budget after adding, triggers eviction if exceeded.
     pub fn add_summary(&mut self, role: &str, summary: &str, l0_archive_iri: Option<String>) -> &mut L1Turn {
         let turn = L1Turn {
             role: role.to_string(),
@@ -406,8 +406,8 @@ impl L1Session {
         self.turns.last_mut().expect("turn was just pushed above")
     }
 
-    /// 归档完整 thought+content 到 L0 并返回归档 IRI。
-    /// 在 assistant turn 添加之后调用。
+    /// Archive full thought+content to L0 and return archive IRI.
+    /// Called after adding an assistant turn.
     pub fn archive_full_to_l0(
         &self,
         l0_store: &L0Store,
@@ -438,8 +438,8 @@ impl L1Session {
         Ok(iri)
     }
 
-    /// 获取摘要链用于 LLM 上下文构建。
-    /// 返回前确保令牌预算满足。
+    /// Get summary chain for LLM context building.
+    /// Ensures token budget is met before returning.
     pub fn get_summary_chain(&mut self) -> Vec<serde_json::Value> {
         if self.turns.is_empty() {
             return Vec::new();
@@ -451,7 +451,7 @@ impl L1Session {
 
         let threshold = self.eviction_config.relevance_threshold;
 
-        // 按相关度分流：高相关 + supplement 放 main，低相关放 reference
+        // Split by relevance: high-relevance + supplement go to main, low-relevance to reference
         let main: Vec<String> = self
             .turns
             .iter()
@@ -466,7 +466,7 @@ impl L1Session {
             main.join("\n")
         );
 
-        // 低相关度轮次附加为参考段（仅当有意义且有 low_rel 条目时）
+        // Low-relevance turns appended as reference section (only when meaningful and low_rel entries exist)
         let low: Vec<String> = self
             .turns
             .iter()
@@ -474,12 +474,12 @@ impl L1Session {
             .map(|t| {
                 let truncated: String = t.summary.chars().take(80).collect();
                 let score = t.relevance_score.unwrap_or(0.0);
-                format!("[{}] {} (相关度: {:.2})", t.role, truncated, score)
+                format!("[{}] {} (relevance: {:.2})", t.role, truncated, score)
             })
             .collect();
 
         if !low.is_empty() {
-            content.push_str("\n\n[历史参考 - 低相关度]\n");
+            content.push_str("\n\n[Historical Reference - Low Relevance]\n");
             content.push_str(&low.join("\n"));
         }
 
@@ -489,8 +489,8 @@ impl L1Session {
         })]
     }
 
-    /// 获取含 IRI 的摘要链，用于消息截断时构建结构化引用摘要。
-    /// 每轮摘要截断到 summary_length 字符，附带了 L0 归档 IRI。
+    /// Get summary chain with IRIs, for building structured reference summaries on message truncation.
+    /// Each turn's summary is truncated to summary_length characters, with L0 archive IRI attached.
     pub fn get_summary_chain_with_iris(&self, max_turns: usize, summary_length: usize) -> Vec<String> {
         self.turns
             .iter()
@@ -506,7 +506,7 @@ impl L1Session {
             .collect()
     }
 
-    /// 构建紧凑摘要字符串, 用于 Agent 间交接 (L1→下一个 L1)
+    /// Build compact summary string for agent handoff (L1→next L1)
     pub fn handoff_summary(&self) -> String {
         if self.turns.is_empty() {
             return format!(
@@ -527,12 +527,12 @@ impl L1Session {
         )
     }
 
-    /// 当前会话的估算令牌消耗
+    /// Estimated token consumption of the current session
     pub fn estimated_tokens(&self) -> u32 {
         self.current_tokens as u32
     }
 
-    /// 汇总会话状态
+    /// Summarize session state
     pub fn summarize(&self) -> SessionSummary {
         SessionSummary {
             session_id: self.session_id.clone(),
@@ -553,12 +553,12 @@ impl L1Session {
         self.current_tokens = 0;
     }
 
-    /// 获取弱引用列表
+    /// Get weak reference list
     pub fn get_weak_refs(&self) -> &[String] {
         &self.weak_refs
     }
 
-    /// 从弱引用列表重新加载到 L1
+    /// Reload from weak reference list into L1
     pub fn reload_from_weak_refs(&mut self, l0_store: &L0Store) -> usize {
         let mut reloaded = 0;
         let refs_to_reload: Vec<String> = self.weak_refs.drain(..).collect();
@@ -572,24 +572,24 @@ impl L1Session {
         reloaded
     }
 
-    /// 设置 turn 的 embedding（用于语义相关度计算）
+    /// Set turn embedding (for semantic relevance computation)
     pub fn set_turn_embedding(&mut self, turn_idx: usize, embedding: Vec<f32>) {
         if let Some(turn) = self.turns.get_mut(turn_idx) {
             turn.embedding = Some(embedding);
         }
     }
 
-    /// 获取 MESI 状态
+    /// Get MESI state
     pub fn mesi_state(&self) -> MesiState {
         self.mesi_state
     }
 
-    /// 设置 MESI 状态
+    /// Set MESI state
     pub fn set_mesi_state(&mut self, state: MesiState) {
         self.mesi_state = state;
     }
 
-    /// 使缓存失效（将状态设为 Invalid）
+    /// Invalidate cache (set state to Invalid)
     pub fn invalidate(&mut self) {
         self.mesi_state = MesiState::Invalid;
     }
@@ -696,7 +696,7 @@ mod tests {
         assert_eq!(session.estimated_tokens(), 0);
     }
 
-    // ========== 余弦相似度测试 ==========
+    // ========== Cosine Similarity Tests ==========
 
     #[test]
     fn test_cosine_similarity_identical_vectors() {
@@ -735,7 +735,7 @@ mod tests {
         assert!((sim - 0.0).abs() < 1e-6, "zero vector should give 0.0, got {}", sim);
     }
 
-    // ========== 淘汰权重配置测试 ==========
+    // ========== Eviction Config Tests ==========
 
     #[test]
     fn test_eviction_config_default() {
@@ -794,7 +794,7 @@ mod tests {
         assert!(still_has_matching, "matching content should be retained");
     }
 
-    // ========== 补充输入 (Supplement) 测试 ==========
+    // ========== Supplement Input Tests ==========
 
     #[test]
     fn test_add_supplement_preserves_fields() {
@@ -814,23 +814,23 @@ mod tests {
     #[test]
     fn test_supplement_protected_from_hard_threshold_eviction() {
         let mut session = L1Session::with_budget("agent_1", "DA", "iri://task/abc", 10000);
-        // 加一个摘要做第一个 turn，add_supplement 做后续 turn
+        // Add summary as first turn, add_supplement for subsequent turns
         session.add_summary("assistant", "the first real assistant turn", None);
 
-        // 加补充输入，设置低相关度 + 旧时间戳（模拟会触发硬阈值淘汰的场景）
+        // Add supplement with low relevance + old timestamp (simulating scenario that triggers hard threshold eviction)
         session.add_supplement("user", "old supplement", None, Some(0.1));
-        // 强制让这个 turn 的时间戳更老
+        // Force this turn's timestamp to be older
         let old_time = chrono::Utc::now() - chrono::Duration::seconds(600);
         if let Some(t) = session.turns.last_mut() {
             t.timestamp = old_time;
         }
 
-        // 增加 budget 压力，触发 eviction
+        // Increase budget pressure to trigger eviction
         session.token_budget = 100;
 
-        // 硬阈值淘汰不会移除 is_supplement 条目
+        // Hard threshold eviction does not remove is_supplement entries
         let _evicted = session.evict_with_query(None);
-        // 补充输入不应该被硬阈值淘汰
+        // Supplements should not be evicted by hard threshold
         let has_supplement = session.turns.iter().any(|t| t.is_supplement);
         assert!(has_supplement, "supplement should be protected from hard threshold eviction");
     }
@@ -841,11 +841,11 @@ mod tests {
             "agent_1", "DA", "iri://task/abc", 10000,
             EvictionConfig { recency_weight: 0.0, relevance_weight: 1.0, cost_weight: 0.0, relevance_threshold: 0.0, safe_window_seconds: 0, beta: 0.5 }
         );
-        // 保留第一个 turn（always kept），后面加几个 padding 制造预算压力
+        // Keep first turn (always kept), add padding turns to create budget pressure
         session.add_summary("assistant", "first long padding text to generate token cost xxxxxx", None);
         session.add_summary("assistant", "second long padding text to generate more cost yyyyyy", None);
 
-        // 两个 turn: 相同 query_sim 但不同 task_relevance
+        // Two turns: same query_sim but different task_relevance
         let emb = Some(vec![1.0, 0.0]);
         session.add_summary("assistant", "high_rel_turn", None);
         if let Some(t) = session.turns.last_mut() {
@@ -858,7 +858,7 @@ mod tests {
             t.relevance_score = Some(0.1);
         }
 
-        // 直接收紧预算以触发 evict（仅少 1 token，确保只淘汰 1 个 turn）
+        // Tighten budget to trigger evict (1 token less, ensures only 1 turn evicted)
         session.token_budget = session.current_tokens - 1;
         let q_emb = vec![1.0, 0.0];
         let evicted = session.evict_with_query(Some(&q_emb));

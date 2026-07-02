@@ -2,12 +2,15 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
+use oxigraph::store::Store;
 use parking_lot::RwLock;
 use serde_json::Value;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::memory::l0_store::L0Store;
 use crate::memory::l2_blackboard::Blackboard;
+use crate::skill_graph::discovery::SkillDiscoveryEngine;
+use crate::skill_graph::embedding::SkillGraphEmbedder;
 use crate::skill_graph::index::PreAggregatedIndex;
 use crate::skill_graph::types::*;
 use crate::CoreError;
@@ -18,9 +21,12 @@ pub struct SkillGraphStore {
     skills: RwLock<HashMap<String, SkillGraphNode>>,
     mocs: RwLock<HashMap<String, MOCNode>>,
     fragments: RwLock<HashMap<String, KnowledgeFragment>>,
+    hyperedges: RwLock<HashMap<String, Hyperedge>>,
+    snapshot_history: RwLock<Vec<SnapshotRecord>>,
     index: PreAggregatedIndex,
     blackboard: Option<Arc<Blackboard>>,
     l0_store: Option<Arc<L0Store>>,
+    oxi_store: Option<Arc<Store>>,
 }
 
 impl SkillGraphStore {
@@ -29,9 +35,12 @@ impl SkillGraphStore {
             skills: RwLock::new(HashMap::new()),
             mocs: RwLock::new(HashMap::new()),
             fragments: RwLock::new(HashMap::new()),
+            hyperedges: RwLock::new(HashMap::new()),
+            snapshot_history: RwLock::new(Vec::new()),
             index: PreAggregatedIndex::new(),
             blackboard: None,
             l0_store: None,
+            oxi_store: None,
         }
     }
 
@@ -45,22 +54,58 @@ impl SkillGraphStore {
         self
     }
 
+    pub fn with_oxi_store(mut self, store: Arc<Store>) -> Self {
+        self.oxi_store = Some(store);
+        self
+    }
+
     pub fn get_index(&self) -> &PreAggregatedIndex {
         &self.index
     }
 
+    // ── P0-1: Oxigraph sync helpers ─────────────────────────────────────
+
+    fn sync_sparql(&self, sparql: &str) {
+        if let Some(ref store) = self.oxi_store {
+            if let Err(e) = store.update(sparql) {
+                error!("Oxigraph sync failed: {}. SPARQL was: {}", e, sparql);
+            }
+        }
+    }
+
+    fn sync_skill_insert(&self, skill: &SkillGraphNode) {
+        if skill.storage_tier == StorageTier::L1Session {
+            return;
+        }
+        let sparql = skill.to_sparql_insert(SKILL_GRAPH_NAMED_GRAPH);
+        self.sync_sparql(&sparql);
+    }
+
+    fn sync_skill_delete(&self, iri: &str) {
+        let sparql = format!(
+            "DELETE WHERE {{ GRAPH <{}> {{ <{}> ?p ?o }} }}",
+            SKILL_GRAPH_NAMED_GRAPH, iri
+        );
+        self.sync_sparql(&sparql);
+    }
+
     pub fn register_skill(&self, skill: SkillGraphNode) -> Result<(), CoreError> {
         let iri = skill.skill_iri.clone();
-        info!("注册技能到图谱: {} ({})", skill.name, iri);
+        info!("Registering skill to graph: {} ({})", skill.name, iri);
 
         if let Some(_blackboard) = &self.blackboard {
             let json_ld = skill.to_json_ld();
             let json_str = serde_json::to_string(&json_ld).unwrap_or_default();
-            debug!("技能 JSON-LD 已生成: {} bytes", json_str.len());
+            debug!("Skill JSON-LD generated: {} bytes", json_str.len());
         }
 
         self.index.index_skill(&skill);
         self.skills.write().insert(iri.clone(), skill);
+
+        // P0-1: sync to Oxigraph
+        if let Some(skill) = self.skills.read().get(&iri) {
+            self.sync_skill_insert(skill);
+        }
 
         if let Some(ref l0_store) = self.l0_store {
             let now = Utc::now();
@@ -82,7 +127,7 @@ impl SkillGraphStore {
                 hyperspace_point_id: None,
             };
             l0_store.store(&iri, &serde_json::to_string(&entry).unwrap_or_default())?;
-            debug!("技能已写入 L0 存储: {}", iri);
+            debug!("Skill written to L0 store: {}", iri);
         }
 
         Ok(())
@@ -96,6 +141,9 @@ impl SkillGraphStore {
         let iri = skill.skill_iri.clone();
         if self.skills.read().contains_key(&iri) {
             self.index.update_skill(&skill);
+            // P0-1: sync update to Oxigraph (delete old + insert new)
+            self.sync_skill_delete(&iri);
+            self.sync_skill_insert(&skill);
             self.skills.write().insert(iri, skill);
             Ok(())
         } else {
@@ -108,7 +156,9 @@ impl SkillGraphStore {
     pub fn remove_skill(&self, skill_iri: &str) -> Result<(), CoreError> {
         if self.skills.write().remove(skill_iri).is_some() {
             self.index.remove_skill(skill_iri);
-            info!("技能已从图谱移除: {}", skill_iri);
+            // P0-1: sync delete from Oxigraph
+            self.sync_skill_delete(skill_iri);
+            info!("Skill removed from graph: {}", skill_iri);
             Ok(())
         } else {
             Err(CoreError::SkillNotFound {
@@ -134,12 +184,14 @@ impl SkillGraphStore {
                 strength,
                 description: description.to_string(),
             });
-            debug!("添加链接: {} -> {} ({:?})", source_iri, target_iri, link_type);
+            debug!("Adding link: {} -> {} ({:?})", source_iri, target_iri, link_type);
 
             let updated = skills.get(source_iri).cloned();
             drop(skills);
             if let Some(skill) = updated {
                 self.index.update_skill(&skill);
+                // P0-1: sync link triple to Oxigraph
+                self.sync_skill_insert(&skill);
             }
             Ok(())
         } else {
@@ -311,7 +363,7 @@ impl SkillGraphStore {
 
     pub fn register_moc(&self, moc: MOCNode) -> Result<(), CoreError> {
         let moc_iri = moc.moc_iri.clone();
-        info!("注册 MOC 节点: {} ({})", moc.name, moc_iri);
+        info!("Registering MOC node: {} ({})", moc.name, moc_iri);
         self.mocs.write().insert(moc_iri, moc);
         Ok(())
     }
@@ -338,7 +390,7 @@ impl SkillGraphStore {
             fragment = fragment.with_discoverer(d);
         }
 
-        info!("创建知识碎片: {} -> {}", attached_to, fragment_iri);
+        info!("Creating knowledge fragment: {} -> {}", attached_to, fragment_iri);
         
         self.fragments.write().insert(fragment_iri.to_string(), fragment.clone());
         
@@ -368,13 +420,17 @@ impl SkillGraphStore {
             .collect()
     }
 
+    pub fn list_fragments(&self) -> Vec<KnowledgeFragment> {
+        self.fragments.read().values().cloned().collect()
+    }
+
     pub fn record_skill_usage(&self, skill_iri: &str, success: bool) -> Result<(), CoreError> {
         let mut skills = self.skills.write();
         
         if let Some(skill) = skills.get_mut(skill_iri) {
             skill.graph_meta.record_usage(success);
             debug!(
-                "记录技能使用: {} (success={}, rate={:.2})",
+                "Recording skill usage: {} (success={}, rate={:.2})",
                 skill_iri, success, skill.graph_meta.success_rate
             );
 
@@ -500,13 +556,243 @@ impl SkillGraphStore {
         self.skills.read().len()
     }
 
-    pub fn suggest_links(&self, skill_iri: &str) -> Vec<(String, SkillLinkType, f32)> {
+    // ── P1-1: Hyperedge CRUD ───────────────────────────────────────────
+
+    pub fn register_hyperedge(&self, hyperedge: Hyperedge) -> Result<(), CoreError> {
+        let id = hyperedge.hyperedge_id.clone();
+        info!("Registering hyperedge: {} ({})", hyperedge.name, id);
+        self.hyperedges.write().insert(id, hyperedge);
+        Ok(())
+    }
+
+    pub fn get_hyperedge(&self, hyperedge_id: &str) -> Option<Hyperedge> {
+        self.hyperedges.read().get(hyperedge_id).cloned()
+    }
+
+    pub fn list_hyperedges(&self) -> Vec<Hyperedge> {
+        self.hyperedges.read().values().cloned().collect()
+    }
+
+    pub fn remove_hyperedge(&self, hyperedge_id: &str) -> Result<(), CoreError> {
+        if self.hyperedges.write().remove(hyperedge_id).is_some() {
+            info!("Hyperedge removed: {}", hyperedge_id);
+            Ok(())
+        } else {
+            Err(CoreError::SkillNotFound {
+                iri: format!("Hyperedge not found: {}", hyperedge_id),
+            })
+        }
+    }
+
+    pub fn get_composites_containing(&self, skill_iri: &str) -> Vec<Hyperedge> {
+        self.hyperedges
+            .read()
+            .values()
+            .filter(|he| he.components.contains(&skill_iri.to_string()))
+            .cloned()
+            .collect()
+    }
+
+    pub fn resolve_hyperedge(&self, hyperedge_id: &str) -> Result<Vec<SkillGraphNode>, CoreError> {
+        let he = self
+            .hyperedges
+            .read()
+            .get(hyperedge_id)
+            .cloned()
+            .ok_or_else(|| CoreError::SkillNotFound {
+                iri: format!("Hyperedge not found: {}", hyperedge_id),
+            })?;
+
+        let skills = self.skills.read();
+        let mut resolved = Vec::new();
+        for comp_iri in &he.components {
+            if let Some(skill) = skills.get(comp_iri) {
+                resolved.push(skill.clone());
+            } else {
+                warn!("Hyperedge {} references missing skill {}", hyperedge_id, comp_iri);
+            }
+        }
+        Ok(resolved)
+    }
+
+    pub fn migrate_composition_links(&self) -> Result<usize, CoreError> {
+        let skills = self.skills.read();
+        let mut hyperedges_to_create = Vec::new();
+        let mut processed = 0usize;
+
+        // Find all skills that have Composition links pointing to the same composite target
+        let mut target_to_components: HashMap<String, Vec<String>> = HashMap::new();
+        for (iri, skill) in skills.iter() {
+            for link in &skill.links {
+                if link.link_type == SkillLinkType::Composition
+                    && link.strength == LinkStrength::Required
+                {
+                    target_to_components
+                        .entry(link.target_iri.clone())
+                        .or_default()
+                        .push(iri.clone());
+                }
+            }
+        }
+
+        for (target, components) in target_to_components {
+            if components.len() >= 2 {
+                let he = Hyperedge::new(
+                    &format!("hyperedge:composite/{}", target.trim_start_matches("iri://skills/")),
+                    &format!("Hyperedge for {}", target),
+                    &format!("Migrated from Composition links targeting {}", target),
+                    components,
+                );
+                hyperedges_to_create.push(he);
+                processed += 1;
+            }
+        }
+
+        drop(skills);
+        for he in hyperedges_to_create {
+            self.hyperedges.write().insert(he.hyperedge_id.clone(), he);
+        }
+        Ok(processed)
+    }
+
+    // ── P1-4: Temporal Versioning ───────────────────────────────────────
+
+    pub fn snapshot(&self, label: &str) -> Result<String, CoreError> {
+        let snapshot_id = format!(
+            "snapshot:{}_{}",
+            label,
+            Utc::now().format("%Y%m%d_%H%M%S")
+        );
+
+        let skill_count = self.skills.read().len();
+        let record = SnapshotRecord {
+            snapshot_id: snapshot_id.clone(),
+            label: label.to_string(),
+            timestamp: Utc::now(),
+            skill_count,
+        };
+        self.snapshot_history.write().push(record);
+
+        // Persist snapshot JSON to Oxigraph if available
+        if let Some(ref store) = self.oxi_store {
+            let snapshot_graph = format!("system:skill_graph_snapshot/{}", snapshot_id);
+            let copy = format!(
+                "DROP SILENT GRAPH <{}> ; \
+                 INSERT {{ GRAPH <{}> {{ ?s ?p ?o }} }} \
+                 WHERE {{ GRAPH <{}> {{ ?s ?p ?o }} }}",
+                snapshot_graph, snapshot_graph, SKILL_GRAPH_NAMED_GRAPH
+            );
+            if let Err(e) = store.update(copy.as_str()) {
+                warn!("Oxigraph snapshot failed: {}", e);
+            }
+        }
+
+        info!("Snapshot created: {} ({} skills)", snapshot_id, skill_count);
+        Ok(snapshot_id)
+    }
+
+    pub fn list_snapshots(&self) -> Vec<SnapshotRecord> {
+        self.snapshot_history.read().clone()
+    }
+
+    // ── P2-1: Hybrid Search ─────────────────────────────────────────────
+
+    /// Fuse two ranked result sets using Reciprocal Rank Fusion.
+    /// alpha=1.0 → pure text, alpha=0.0 → pure structural.
+    pub fn fuse_results(
+        text_hits: &[(String, f32)],
+        struct_hits: &[(String, f32)],
+        alpha: f32,
+    ) -> Vec<FusedHit> {
+        let k = 60.0f32;
+        let mut score_map: HashMap<String, f32> = HashMap::new();
+
+        for (rank, (iri, _)) in text_hits.iter().enumerate() {
+            let rrf = 1.0 / (k + rank as f32 + 1.0);
+            *score_map.entry(iri.clone()).or_insert(0.0) += alpha * rrf;
+        }
+        for (rank, (iri, _)) in struct_hits.iter().enumerate() {
+            let rrf = 1.0 / (k + rank as f32 + 1.0);
+            *score_map.entry(iri.clone()).or_insert(0.0) += (1.0 - alpha) * rrf;
+        }
+
+        let mut fused: Vec<FusedHit> = score_map
+            .into_iter()
+            .map(|(iri, score)| FusedHit { iri, score })
+            .collect();
+        fused.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        fused
+    }
+
+    pub async fn hybrid_skill_search(
+        &self,
+        skill_iri: &str,
+        text_ranked: Vec<(String, f32)>,
+        struct_ranked: Vec<(String, f32)>,
+        alpha: f32,
+        embedder: Option<&SkillGraphEmbedder>,
+    ) -> Vec<(String, SkillLinkType, f32)> {
+        let struct_ranked = if struct_ranked.is_empty() {
+            if let Some(emb) = embedder {
+                emb.rank_by_similarity(skill_iri, 20)
+            } else {
+                struct_ranked
+            }
+        } else {
+            struct_ranked
+        };
+
+        let fused = Self::fuse_results(&text_ranked, &struct_ranked, alpha);
+        let mut results: Vec<(String, SkillLinkType, f32)> = fused
+            .into_iter()
+            .filter(|h| h.iri != skill_iri)
+            .take(10)
+            .map(|h| (h.iri, SkillLinkType::Related, h.score))
+            .collect();
+        results.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        results
+    }
+
+    /// Suggest related skills for a given skill.
+    ///
+    /// Uses semantic search via `SkillDiscoveryEngine` when available,
+    /// falling back to Jaccard tag overlap when no engine is provided
+    /// or the engine has no vector store configured.
+    pub async fn suggest_links(
+        &self,
+        skill_iri: &str,
+        engine: Option<&SkillDiscoveryEngine>,
+    ) -> Vec<(String, SkillLinkType, f32)> {
+        // Build query from skill metadata (drop lock before potential await)
+        let query = {
+            let skills = self.skills.read();
+            skills.get(skill_iri).map(|s| {
+                let tags = s.tags.join(" ");
+                format!("{} {} {}", s.name, s.description, tags)
+            })
+        };
+
+        if let Some(ref q) = query {
+            if let Some(engine) = engine {
+                if let Ok(matches) = engine.semantic_search(q, 10).await {
+                    if !matches.is_empty() {
+                        return matches
+                            .into_iter()
+                            .map(|m| {
+                                (m.skill.skill_iri.clone(), SkillLinkType::Related, m.relevance_score)
+                            })
+                            .collect();
+                    }
+                }
+            }
+        }
+
         let mut suggestions = Vec::new();
         let skills = self.skills.read();
-        
+
         if let Some(source) = skills.get(skill_iri) {
             let source_tags: HashSet<&String> = source.tags.iter().collect();
-            
+
             for (other_iri, other) in skills.iter() {
                 if other_iri == skill_iri {
                     continue;
@@ -514,10 +800,11 @@ impl SkillGraphStore {
 
                 let other_tags: HashSet<&String> = other.tags.iter().collect();
                 let common_tags = source_tags.intersection(&other_tags).count();
-                
+
                 if common_tags > 0 {
-                    let similarity = common_tags as f32 / ((source_tags.len() + other_tags.len()) as f32 / 2.0);
-                    
+                    let similarity = common_tags as f32
+                        / ((source_tags.len() + other_tags.len()) as f32 / 2.0);
+
                     if similarity > 0.3 {
                         suggestions.push((other_iri.clone(), SkillLinkType::Related, similarity));
                     }
@@ -626,7 +913,7 @@ impl SkillGraphStore {
                 self.index.remove_skill(skill_iri);
                 self.skills.write().insert(skill_iri.to_string(), skill);
             }
-            info!("技能已标记为弃用: {}", skill_iri);
+            info!("Skill marked as deprecated: {}", skill_iri);
             Ok(())
         } else {
             Err(CoreError::SkillNotFound {
@@ -651,7 +938,7 @@ impl SkillGraphStore {
             match self.add_link(source, target, *link_type, *strength, description) {
                 Ok(()) => success_count += 1,
                 Err(e) => {
-                    warn!("批量添加链接失败 ({} -> {}): {:?}", source, target, e);
+                    warn!("Batch add link failed ({} -> {}): {:?}", source, target, e);
                 }
             }
         }
@@ -849,8 +1136,8 @@ mod tests {
         assert_eq!(fragments.len(), 1);
     }
 
-    #[test]
-    fn test_suggest_links() {
+    #[tokio::test]
+    async fn test_suggest_links() {
         let store = SkillGraphStore::new();
         
         let skill1 = SkillGraphNode::new("iri://skills/rust-auth", "Rust Auth", "Auth in Rust")
@@ -869,7 +1156,7 @@ mod tests {
         store.register_skill(skill2).unwrap();
         store.register_skill(skill3).unwrap();
         
-        let suggestions = store.suggest_links("iri://skills/rust-auth");
+        let suggestions = store.suggest_links("iri://skills/rust-auth", None).await;
         
         assert!(!suggestions.is_empty());
         assert!(suggestions.iter().any(|(iri, _, _)| iri == "iri://skills/rust-crypto"));
@@ -907,5 +1194,119 @@ mod tests {
 
         let results = store.find_skills_by_tags(&["auth", "jwt"]);
         assert_eq!(results.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_hybrid_search_with_embedder() {
+        let store = Arc::new(SkillGraphStore::new());
+        let embedder = SkillGraphEmbedder::new(store.clone());
+
+        let foundational = SkillGraphNode::new("iri://skills/foundation", "Foundation", "Base")
+            .with_tag("core");
+        store.register_skill(foundational).unwrap();
+
+        let mut intermediate =
+            SkillGraphNode::new("iri://skills/intermediate", "Intermediate", "Mid-level")
+                .with_tag("core");
+        intermediate.add_prerequisite("iri://skills/foundation", "Needs foundation");
+        store.register_skill(intermediate).unwrap();
+
+        let mut advanced =
+            SkillGraphNode::new("iri://skills/advanced", "Advanced", "Top-level")
+                .with_tag("core");
+        advanced.add_prerequisite("iri://skills/intermediate", "Needs intermediate");
+        store.register_skill(advanced).unwrap();
+
+        let unrelated = SkillGraphNode::new("iri://skills/unrelated", "Unrelated", "Different")
+            .with_tag("other");
+        store.register_skill(unrelated).unwrap();
+
+        let results = store
+            .hybrid_skill_search("iri://skills/intermediate", vec![], vec![], 1.0, Some(&embedder))
+            .await;
+        assert!(!results.is_empty(), "Should find structural neighbors");
+        assert!(
+            results.iter().any(|(iri, _, _)| iri == "iri://skills/foundation"),
+            "Foundational skill (same chain) should appear"
+        );
+        assert!(
+            results.iter().any(|(iri, _, _)| iri == "iri://skills/advanced"),
+            "Advanced skill (same chain) should appear"
+        );
+
+        let text_only: Vec<(String, f32)> = vec![
+            ("iri://skills/foundation".to_string(), 0.9),
+            ("iri://skills/advanced".to_string(), 0.8),
+            ("iri://skills/unrelated".to_string(), 0.1),
+        ];
+        let results = store
+            .hybrid_skill_search(
+                "iri://skills/intermediate",
+                text_only,
+                vec![],
+                1.0,
+                None,
+            )
+            .await;
+        assert_eq!(results.len(), 3);
+        // With alpha=1.0 (pure text), foundation should be first
+        assert_eq!(results[0].0, "iri://skills/foundation");
+
+        let text_ranked: Vec<(String, f32)> = vec![
+            ("iri://skills/unrelated".to_string(), 0.9),
+            ("iri://skills/foundation".to_string(), 0.2),
+        ];
+        let struct_ranked: Vec<(String, f32)> = vec![
+            ("iri://skills/foundation".to_string(), 0.9),
+            ("iri://skills/unrelated".to_string(), 0.1),
+        ];
+        let results = store
+            .hybrid_skill_search(
+                "iri://skills/intermediate",
+                text_ranked,
+                struct_ranked,
+                0.5,
+                None,
+            )
+            .await;
+        assert!(!results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_hybrid_search_self_excluded() {
+        let store = Arc::new(SkillGraphStore::new());
+        let embedder = SkillGraphEmbedder::new(store.clone());
+
+        let skill = SkillGraphNode::new("iri://skills/self", "Self", "Self");
+        store.register_skill(skill).unwrap();
+
+        let other = SkillGraphNode::new("iri://skills/other", "Other", "Other")
+            .with_tag("related");
+        store.register_skill(other).unwrap();
+
+        let results = store
+            .hybrid_skill_search("iri://skills/self", vec![], vec![], 1.0, Some(&embedder))
+            .await;
+        assert!(
+            results.iter().all(|(iri, _, _)| iri != "iri://skills/self"),
+            "Self should be excluded from results"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_hybrid_search_empty_store() {
+        let store = Arc::new(SkillGraphStore::new());
+        let embedder = SkillGraphEmbedder::new(store.clone());
+
+        let results = store
+            .hybrid_skill_search(
+                "iri://skills/nonexistent",
+                vec![],
+                vec![],
+                0.5,
+                Some(&embedder),
+            )
+            .await;
+        assert!(results.is_empty(), "Empty store should return no results");
     }
 }

@@ -136,7 +136,7 @@ impl LLMClient {
         self.gateway.health_check().await
     }
 
-    /// 发送带 JSON 格式约束的聊天请求
+    /// Send chat request with JSON format constraint
     pub async fn chat_with_json_format(
         &self,
         model: &str,
@@ -165,12 +165,12 @@ impl LLMClient {
         Self::parse_completion_response(&response)
     }
 
-    /// 获取默认模型名称
+    /// Get default model name
     pub fn default_model(&self) -> &str {
         &self.default_model
     }
 
-    /// 获取网关引用（用于直接访问限流器、缓存等）
+    /// Get gateway reference (for direct access to rate limiter, cache, etc.)
     pub fn gateway(&self) -> &Arc<UnifiedGateway> {
         &self.gateway
     }

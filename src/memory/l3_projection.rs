@@ -49,7 +49,7 @@ pub struct ProjectionEngine {
     max_size: usize,
     frames: HashMap<String, ProjectionFrame>,
     materialized_cache: RwLock<HashMap<String, MaterializedView>>,
-    /// node_iri → Vec<cache_key> 反向索引，O(1) 节点失效
+    /// node_iri → Vec<cache_key> reverse index for O(1) node invalidation
     reverse_index: RwLock<HashMap<String, Vec<String>>>,
     vector_store: Option<Arc<HyperspaceStore>>,
 }
@@ -89,7 +89,7 @@ impl ProjectionEngine {
             if let Some(view) = cache.get_mut(key) {
                 view.is_valid = false;
                 invalidated += 1;
-                debug!(cache_key = %key, "L3 投影缓存已失效");
+                debug!(cache_key = %key, "L3 projection cache invalidated");
             }
         }
         invalidated
@@ -1023,14 +1023,14 @@ impl ProjectionEngine {
         self
     }
 
-    /// 按节点 IRI 从 L2 黑板上读取单个节点（L3 投影入口）
-    /// 用于 agent 工具 read_agent_output —— 代替直接访问 L0
+    /// Read a single node from L2 blackboard by node IRI (L3 projection entry point)
+    /// Used by agent tool read_agent_output — replaces direct L0 access
     pub fn read_node(&self, node_iri: &str) -> Result<Option<serde_json::Value>, CoreError> {
         match self.blackboard.read_node(node_iri)? {
             Some(node) => {
                 let parsed: serde_json::Value = serde_json::from_str(&node.json_ld)
                     .map_err(|e| CoreError::Internal {
-                        message: format!("解析 L2 节点 JSON 失败: {}", e),
+                        message: format!("Failed to parse L2 node JSON: {}", e),
                     })?;
                 Ok(Some(parsed))
             }

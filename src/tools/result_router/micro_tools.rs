@@ -27,7 +27,7 @@ impl MicroToolGenerator {
             tools.push(MicroToolSchema {
                 name: tool_name,
                 description: format!(
-                    "查询 {} 类型的实体 (共 {} 个)。支持按属性过滤。",
+                    "Query entities of type {} (total {}). Supports property filtering.",
                     short_name, count
                 ),
                 parameters: json!({
@@ -35,15 +35,15 @@ impl MicroToolGenerator {
                     "properties": {
                         "filter_property": {
                             "type": "string",
-                            "description": "要过滤的属性名"
+                            "description": "Property name to filter on"
                         },
                         "filter_value": {
                             "type": "string",
-                            "description": "过滤值"
+                            "description": "Filter value"
                         },
                         "limit": {
                             "type": "integer",
-                            "description": "返回数量限制",
+                            "description": "Maximum results to return",
                             "default": 10
                         }
                     }
@@ -58,13 +58,13 @@ impl MicroToolGenerator {
         if tools.len() < max_tools {
             tools.push(MicroToolSchema {
                 name: "get_entity_details".to_string(),
-                description: "获取指定实体的全部属性和关系".to_string(),
+                description: "Get all properties and relations of a specific entity".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
                         "entity_id": {
                             "type": "string",
-                            "description": "实体 ID"
+                            "description": "Entity ID"
                         }
                     },
                     "required": ["entity_id"]
@@ -79,7 +79,7 @@ impl MicroToolGenerator {
             tools.push(MicroToolSchema {
                 name: "expand_relation".to_string(),
                 description: format!(
-                    "沿关系边遍历。可用关系: {}",
+                    "Traverse along relation edges. Available relations: {}",
                     analysis.relation_types.join(", ")
                 ),
                 parameters: json!({
@@ -87,15 +87,15 @@ impl MicroToolGenerator {
                     "properties": {
                         "entity_id": {
                             "type": "string",
-                            "description": "起始实体 ID"
+                            "description": "Starting entity ID"
                         },
                         "relation": {
                             "type": "string",
-                            "description": "关系类型"
+                            "description": "Relation type"
                         },
                         "depth": {
                             "type": "integer",
-                            "description": "遍历深度",
+                            "description": "Traversal depth",
                             "default": 1
                         }
                     },
@@ -119,7 +119,7 @@ impl MicroToolGenerator {
         MicroToolSchema {
             name: "read_full_result".to_string(),
             description: format!(
-                "读取工具完整结果 (预览已展示前 {} 字符)",
+                "Read full tool result (preview shows first {} characters)",
                 preview_size
             ),
             parameters: json!({
@@ -127,12 +127,12 @@ impl MicroToolGenerator {
                 "properties": {
                     "offset": {
                         "type": "integer",
-                        "description": "起始偏移 (字符)",
+                        "description": "Starting offset (characters)",
                         "default": 0
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "读取长度 (字符)",
+                        "description": "Read length (characters)",
                         "default": 4000
                     }
                 }
@@ -144,14 +144,14 @@ impl MicroToolGenerator {
     }
 
     pub fn format_tool_injection_message(summary: &str, tools: &[MicroToolSchema]) -> String {
-        let mut msg = format!("{}\n\n可用查询工具:\n", summary);
+        let mut msg = format!("{}\n\nAvailable query tools:\n", summary);
         for tool in tools {
             msg.push_str(&format!(
                 "- **{}**: {}\n",
                 tool.name, tool.description
             ));
         }
-        msg.push_str("\n你可以调用这些工具来查询完整数据。");
+        msg.push_str("\nYou can call these tools to query the complete data.");
         msg
     }
 }
@@ -206,10 +206,10 @@ mod tests {
     fn test_format_injection_message() {
         let analysis = make_analysis();
         let tools = MicroToolGenerator::generate_from_schema(&analysis, "call_4", 5);
-        let msg = MicroToolGenerator::format_tool_injection_message("测试摘要", &tools);
+        let msg = MicroToolGenerator::format_tool_injection_message("Test summary", &tools);
 
-        assert!(msg.contains("测试摘要"));
+        assert!(msg.contains("Test summary"));
         assert!(msg.contains("query_person"));
-        assert!(msg.contains("查询工具"));
+        assert!(msg.contains("query tools"));
     }
 }
