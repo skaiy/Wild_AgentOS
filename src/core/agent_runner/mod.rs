@@ -23,6 +23,7 @@ use crate::methodology::{
     gate::{MethodologyGate, MethodologyGateHandle},
     MethodologyRegistry,
 };
+use crate::causal::fused::FusedRootCauseEngine;
 use crate::root_cause::RootCauseEngine;
 use crate::templates::template_engine::TemplateEngine;
 use crate::tools::hooks::HookManager;
@@ -93,6 +94,8 @@ pub struct TaskContext {
     pub user_id: Option<String>,
     /// 用户态会话隔离：租户标识（多租户血缘），透传至 L1Session
     pub tenant_id: Option<String>,
+    /// PDCA cycle identifier for L2 blackboard filtered queries
+    pub cycle_id: String,
 }
 
 impl TaskContext {
@@ -118,6 +121,7 @@ impl TaskContext {
             success_criteria: String::new(),
             user_id: None,
             tenant_id: None,
+            cycle_id: String::new(),
         }
     }
 
@@ -125,6 +129,11 @@ impl TaskContext {
     pub fn with_identity(mut self, user_id: Option<String>, tenant_id: Option<String>) -> Self {
         self.user_id = user_id;
         self.tenant_id = tenant_id;
+        self
+    }
+
+    pub fn with_cycle_id(mut self, cycle_id: &str) -> Self {
+        self.cycle_id = cycle_id.to_string();
         self
     }
 
@@ -204,6 +213,7 @@ impl Default for TaskContext {
             success_criteria: String::new(),
             user_id: None,
             tenant_id: None,
+            cycle_id: String::new(),
         }
     }
 }
@@ -471,6 +481,18 @@ impl AgentRunner {
     pub fn with_embedder(mut self, embedder: Arc<dyn EmbeddingService>) -> Self {
         self.embedder = Some(embedder);
         self.relevance_tracker = Some(Arc::new(std::sync::Mutex::new(RelevanceTracker::new(0.6))));
+        self
+    }
+
+    /// Upgrade RootCauseEngine with a three-dimensional fusion engine
+    /// (structural dependency-graph BFS + semantic SPARQL neighbor traversal).
+    /// Call this before finalize_setup() to ensure hooks are properly registered.
+    pub fn with_fused_root_cause_engine(mut self, fused: FusedRootCauseEngine) -> Self {
+        let mut engine = RootCauseEngine::default();
+        engine = engine.with_fused_engine(fused);
+        let engine = Arc::new(engine);
+        engine.register_hooks(&self.hook_manager, "agent");
+        self.root_cause_engine = Some(engine);
         self
     }
 
