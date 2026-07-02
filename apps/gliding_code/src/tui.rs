@@ -1272,8 +1272,13 @@ impl App {
         let engine = self.engine.clone();
         let input2 = input.clone();
         let task_iri_bg = task_iri.clone();
-        // 取出 resumed_messages，只使用一次
-        let resumed = self.resumed_messages.take();
+        // 仅在同任务延续时传递 resumed_messages，主题切换时丢弃
+        let resumed = if is_topic_shift {
+            self.resumed_messages = None; // 新任务：丢弃之前对话历史
+            None
+        } else {
+            self.resumed_messages.take()  // 同任务：传递历史用于上下文延续
+        };
 
         self.rt.spawn(async move {
             let mut guard = engine.lock().await;
