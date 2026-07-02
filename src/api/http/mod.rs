@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::convert::Infallible;
 
 use axum::{
-    extract::State,
-    http::StatusCode,
+    extract::{Query, State},
+    http::{header, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse,
@@ -23,6 +23,7 @@ use crate::knowledge_graph::types::{EdgeDef, LLMExtractionOutput, NodeDef};
 use crate::tools::tool_guard::{GuardAuditEntry, GUARD_AUDIT_LOG};
 use crate::tools::prompt_registry::{PromptRegistry, PromptVersion};
 use crate::tools::skill_registry::SkillMeta;
+use crate::memory::hyperspace_store::{HybridSearchFilter, HyperspaceStore};
 
 pub mod iam;
 use iam::UserIdentity;
@@ -46,6 +47,10 @@ pub struct AppState {
     pub kb_categories: Arc<tokio::sync::RwLock<Vec<Value>>>,
     /// 知识库注册表（向量/图，运行期可增删，持久化到 data/knowledge_bases.json）。
     pub knowledge_bases: Arc<tokio::sync::RwLock<Vec<Value>>>,
+    /// 知识包注册表（运行期可增删改，持久化到 data/knowledge_packs.json；首启由内置包种子化）。
+    pub knowledge_packs: Arc<tokio::sync::RwLock<Vec<Value>>>,
+    /// 向量库（HyperspaceStore，按 embedding 配置初始化；初始化失败则为 None，向量检索禁用）。
+    pub vector_store: Option<Arc<HyperspaceStore>>,
 }
 
 /// 持久化数据目录；可由 AGENTOS_DATA_DIR 覆盖（便于测试隔离），缺省为 "data"。
@@ -180,6 +185,37 @@ fn save_knowledge_bases(bases: &[Value]) -> std::io::Result<()> {
     std::fs::write(&path, content)
 }
 
+/// 知识包注册表的持久化文件路径。
+fn knowledge_packs_store_path() -> std::path::PathBuf {
+    data_dir().join("knowledge_packs.json")
+}
+
+/// 启动时加载知识包；文件不存在时用内置包种子化并落盘（Decision B：内置包亦可编辑）。
+fn load_knowledge_packs() -> Vec<Value> {
+    match std::fs::read_to_string(knowledge_packs_store_path()) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => {
+            // 种子化：把内置静态知识包写入 JSON，之后完全由 JSON 驱动、可编辑。
+            let seed: Vec<Value> = crate::knowledge_graph::ontology_layer::knowledge_packs()
+                .iter()
+                .filter_map(|p| serde_json::to_value(p).ok())
+                .collect();
+            let _ = save_knowledge_packs(&seed);
+            seed
+        }
+    }
+}
+
+/// 将知识包持久化到磁盘（pretty JSON）。
+fn save_knowledge_packs(packs: &[Value]) -> std::io::Result<()> {
+    let path = knowledge_packs_store_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content = serde_json::to_string_pretty(packs).unwrap_or_else(|_| "[]".to_string());
+    std::fs::write(&path, content)
+}
+
 /// 运行期配置覆盖文件路径；由 PUT /api/v1/config 写入，启动时被 Settings::load() 作为
 /// 高于 config.yaml 的来源读取。路径与 Settings::load 中的 "data/config_override" 保持一致。
 fn config_override_path() -> std::path::PathBuf {
@@ -202,6 +238,10 @@ fn save_config_override(patch: &Value) -> std::io::Result<()> {
         let mut clean = gateway_patch.clone();
         // api_key_configured 仅用于前端展示，不是 GatewaySettings 字段。
         clean.remove("api_key_configured");
+        // 不持久化空 api_key，避免覆盖 config.yaml 中已配置的密钥。
+        if clean.get("api_key").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(false) {
+            clean.remove("api_key");
+        }
 
         if let Some(obj) = root.as_object_mut() {
             let existing_gateway = obj.entry("gateway").or_insert(json!({}));
@@ -288,11 +328,25 @@ pub fn build_router(
     kg_store: Arc<oxigraph::store::Store>,
     config_info: Value,
     agents_info: Value,
+    embedding: crate::config::settings::EmbeddingSettings,
 ) -> Router {
     // 启动时加载用户态注册的技能并重新注册到内存技能表（默认技能由 SemanticCore 播种）。
     for skill in load_user_skills() {
         core.skills.register_skill(skill);
     }
+
+    // 向量库：按 embedding 配置初始化 HyperspaceStore；失败则禁用向量检索（不影响图检索）。
+    let vector_store: Option<Arc<HyperspaceStore>> = {
+        let embed = crate::memory::embedding_service::create_embedding_service_from_config(&embedding);
+        let vdir = data_dir().join("vector_store");
+        match HyperspaceStore::open(&vdir, embed) {
+            Ok(s) => Some(Arc::new(s)),
+            Err(e) => {
+                tracing::warn!("向量库初始化失败，向量检索禁用: {}", e);
+                None
+            }
+        }
+    };
 
     let state = Arc::new(AppState {
         core,
@@ -305,6 +359,8 @@ pub fn build_router(
         prompts: Arc::new(PromptRegistry::load(prompts_store_path())),
         kb_categories: Arc::new(tokio::sync::RwLock::new(load_kb_categories())),
         knowledge_bases: Arc::new(tokio::sync::RwLock::new(load_knowledge_bases())),
+        knowledge_packs: Arc::new(tokio::sync::RwLock::new(load_knowledge_packs())),
+        vector_store,
     });
 
     Router::new()
@@ -322,12 +378,15 @@ pub fn build_router(
         .route("/api/v1/events", post(emit_event_handler))
         .route("/api/v1/batch/events", get(stream_batch_events_handler))
         .route("/api/v1/skills", get(list_skills_handler).post(register_skill_handler))
+        .route("/api/v1/skills/manifest", get(skill_manifest_handler))
+        .route("/api/v1/skills/import-git", post(import_git_skill_handler))
         .route("/api/v1/guard/audit", get(guard_audit_handler))
         .route("/api/v1/guard/stats", get(guard_stats_handler))
         .route("/api/v1/kg/import", post(kg_import_handler))
         .route("/api/v1/kg/query", post(kg_query_handler))
-        // ── 本体层（Ontology Layer）只读元数据 ──
-        .route("/api/v1/knowledge-packs", get(list_knowledge_packs_handler))
+        // ── 本体层（Ontology Layer）：知识包 CRUD + 只读本体元数据 ──
+        .route("/api/v1/knowledge-packs", get(list_knowledge_packs_handler).post(create_knowledge_pack_handler))
+        .route("/api/v1/knowledge-packs/:id", put(update_knowledge_pack_handler).delete(delete_knowledge_pack_handler))
         .route("/api/v1/ontology/types", get(ontology_types_handler))
         .route("/api/v1/ontology/actions/:id/invoke", post(invoke_action_handler))
         // ── 知识库分类管理 CRUD ──
@@ -336,6 +395,7 @@ pub fn build_router(
         // ── 知识库（向量/图）管理 ──
         .route("/api/v1/kb/bases", get(list_knowledge_bases_handler).post(create_knowledge_base_handler))
         .route("/api/v1/kb/bases/:id", delete(delete_knowledge_base_handler))
+        .route("/api/v1/kb/bases/:id/ingest", post(ingest_knowledge_base_handler))
         .route("/api/v1/agents", get(list_agents_handler).post(create_agent_handler))
         .route("/api/v1/agents/:id", put(update_agent_handler).delete(delete_agent_handler))
         .route("/api/v1/agents/:id/graph", post(bind_agent_graph_handler))
@@ -384,7 +444,8 @@ async fn update_config_handler(
         if let Some(base_url) = gw_patch.get("base_url").and_then(|v| v.as_str()) {
             state.gateway.set_base_url(base_url.to_string());
         }
-        if let Some(api_key) = gw_patch.get("api_key").and_then(|v| v.as_str()) {
+        // 仅当用户明确提供了非空 api_key 时才更新运行时网关（避免覆盖 config.yaml 的密钥）。
+        if let Some(api_key) = gw_patch.get("api_key").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
             state.gateway.set_api_key(api_key.to_string());
         }
         if let Some(default_model) = gw_patch.get("default_model").and_then(|v| v.as_str()) {
@@ -411,9 +472,12 @@ async fn update_config_handler(
                 if let Some(gateway_obj) = gateway.as_object_mut() {
                     for (k, v) in gw_patch {
                         if k == "api_key" {
+                            // api_key_configured: 新 key 非空 OR 环境变量有配置（兜底）。
+                            let new_key = v.as_str().unwrap_or("");
+                            let env_key = std::env::var("AGENT_OS_GATEWAY_API_KEY").unwrap_or_default();
                             gateway_obj.insert(
                                 "api_key_configured".into(),
-                                json!(!v.as_str().unwrap_or("").is_empty()),
+                                json!(!new_key.is_empty() || !env_key.is_empty()),
                             );
                         } else {
                             gateway_obj.insert(k.clone(), v.clone());
@@ -465,6 +529,9 @@ pub struct AgentCreateRequest {
     #[serde(default)]
     pub skills: Vec<String>,
     pub knowledge_graph: Option<String>,
+    /// 关联的知识包 id 列表（Agent → N 知识包）。
+    #[serde(default)]
+    pub knowledge_pack_ids: Vec<String>,
     pub enabled: Option<bool>,
     pub icon: Option<String>,
     pub color: Option<String>,
@@ -482,6 +549,7 @@ async fn create_agent_handler(
         "business_domain": req.business_domain.unwrap_or_default(),
         "skills": req.skills,
         "knowledge_graph": req.knowledge_graph.unwrap_or_default(),
+        "knowledge_pack_ids": req.knowledge_pack_ids,
         "enabled": req.enabled.unwrap_or(true),
         "icon": req.icon.unwrap_or_else(|| "Bot".to_string()),
         "color": req.color.unwrap_or_else(|| "bg-blue-500".to_string()),
@@ -700,29 +768,75 @@ async fn agent_chat_handler(
         }
     };
     let agent_name = agent.get("name").and_then(|v| v.as_str()).unwrap_or("维修助手").to_string();
-    let graph = agent
-        .get("knowledge_graph")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| expand_iri(s));
+    // 2a. 解析 Agent 的知识来源：展开知识包 → 命名图集合 + 向量命名空间集合（兼容旧 knowledge_graph 单值）。
+    let mut graph_iris: Vec<String> = Vec::new();
+    let mut vector_namespaces: Vec<String> = Vec::new();
+    if let Some(g) = agent.get("knowledge_graph").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        graph_iris.push(expand_iri(g));
+    }
+    let pack_ids: Vec<String> = agent
+        .get("knowledge_pack_ids")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+    if !pack_ids.is_empty() {
+        let packs = state.knowledge_packs.read().await;
+        let bases = state.knowledge_bases.read().await;
+        let ids_of = |pack: &Value, key: &str| -> Vec<String> {
+            pack.get(key)
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default()
+        };
+        for pid in &pack_ids {
+            let pack = match packs.iter().find(|p| p.get("id").and_then(|v| v.as_str()) == Some(pid.as_str())) {
+                Some(p) => p,
+                None => continue,
+            };
+            if let Some(g) = pack.get("named_graph").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                graph_iris.push(expand_iri(g));
+            }
+            if let Some(ns) = pack.get("vector_namespace").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                vector_namespaces.push(ns.to_string());
+            }
+            for gid in ids_of(pack, "graph_kb_ids") {
+                if let Some(kb) = bases.iter().find(|b| b.get("id").and_then(|v| v.as_str()) == Some(gid.as_str())) {
+                    if let Some(g) = kb.get("graph").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                        graph_iris.push(expand_iri(g));
+                    }
+                }
+            }
+            for vid in ids_of(pack, "vector_kb_ids") {
+                if let Some(kb) = bases.iter().find(|b| b.get("id").and_then(|v| v.as_str()) == Some(vid.as_str())) {
+                    if let Some(ns) = kb.get("vector_namespace").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                        vector_namespaces.push(ns.to_string());
+                    }
+                }
+            }
+        }
+    }
+    graph_iris.sort();
+    graph_iris.dedup();
+    vector_namespaces.sort();
+    vector_namespaces.dedup();
 
-    // 2. 知识图谱检索（仅当绑定了图谱时）。
+    // 2b. 图知识库检索：对每个命名图执行故障码/品牌召回（先按故障码，全空再按品牌）。
     let mut rows: Vec<Value> = Vec::new();
-    if let Some(graph_iri) = graph.as_deref() {
+    {
         let kg = state.kg_store.clone();
         if let Ok(store) = KnowledgeGraphStore::with_shared_store(kg) {
             let codes = extract_code_tokens(&message);
             let brands = extract_brand_labels(&message);
-            // 优先按故障码精确片段命中。
             if !codes.is_empty() {
                 let conds: Vec<String> = codes
                     .iter()
                     .map(|t| format!("CONTAINS(LCASE(STR(?code)), \"{}\")", t))
                     .collect();
                 let q = build_fault_query(&conds.join(" || "), 6);
-                rows = store.query_sparql(&q, Some(graph_iri)).unwrap_or_default();
+                for graph_iri in &graph_iris {
+                    rows.extend(store.query_sparql(&q, Some(graph_iri)).unwrap_or_default());
+                }
             }
-            // 故障码无命中时，按品牌召回若干代表性故障码。
             if rows.is_empty() && !brands.is_empty() {
                 let conds: Vec<String> = brands
                     .iter()
@@ -743,12 +857,27 @@ async fn agent_chat_handler(
                     f = ONT_FAULT, m = META, rl = RDFS_LABEL, br = ONT_BRAND_REL,
                     flt = conds.join(" || "),
                 );
-                rows = store.query_sparql(&q, Some(graph_iri)).unwrap_or_default();
+                for graph_iri in &graph_iris {
+                    rows.extend(store.query_sparql(&q, Some(graph_iri)).unwrap_or_default());
+                }
             }
         }
     }
 
-    // 3. 组装检索事实上下文。
+    // 2c. 向量知识库检索：对每个命名空间做语义相似检索（向量库启用时）。
+    let mut vector_hits: Vec<(String, f32)> = Vec::new();
+    if let Some(vstore) = &state.vector_store {
+        for ns in &vector_namespaces {
+            let filter = HybridSearchFilter::new().with_named_graph(ns.clone());
+            if let Ok(hits) = vstore.search_with_filter(&message, &filter, 5).await {
+                for h in hits {
+                    vector_hits.push((h.text, h.score));
+                }
+            }
+        }
+    }
+
+    // 3. 组装检索事实上下文（图知识库 + 向量知识库）。
     let get = |row: &Value, k: &str| row.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let mut facts = String::new();
     let mut sources: Vec<Value> = Vec::new();
@@ -765,19 +894,31 @@ async fn agent_chat_handler(
         ));
         sources.push(json!({ "code": code, "label": label, "brand": brand }));
     }
+    // 向量检索命中作为补充事实（不并入 sources，避免污染故障码来源与动作建议）。
+    let mut vector_facts = String::new();
+    for (text, score) in &vector_hits {
+        vector_facts.push_str(&format!("- （相关度 {:.2}）{}\n", score, trunc(text, 400)));
+    }
+    let vector_retrieved = vector_hits.len();
 
     // 4. 构造提示并调用 LLM 网关。
     let sys = format!(
-        "你是「{agent_name}」，一名专业的新能源汽车故障诊断与维修助手。请严格依据下方“知识图谱检索结果”，\
+        "你是「{agent_name}」，一名专业的新能源汽车故障诊断与维修助手。请严格依据下方“知识库检索结果”，\
 用简体中文回答用户问题：解释故障含义、是否可继续行驶、维修建议与适用车型。\
 若检索结果为空或不足以支撑回答，请如实说明并给出通用排查建议，切勿编造具体故障码信息。\
 回答需专业、严谨、条理清晰。"
     );
-    let user_content = if facts.is_empty() {
-        format!("【知识图谱检索结果】\n（未检索到相关故障码记录）\n\n【用户问题】\n{message}")
+    let graph_section = if facts.is_empty() {
+        "【知识图谱检索结果】\n（未检索到相关故障码记录）\n".to_string()
     } else {
-        format!("【知识图谱检索结果】\n{facts}\n【用户问题】\n{message}")
+        format!("【知识图谱检索结果】\n{facts}")
     };
+    let vector_section = if vector_facts.is_empty() {
+        String::new()
+    } else {
+        format!("\n【向量知识库检索结果】\n{vector_facts}")
+    };
+    let user_content = format!("{graph_section}{vector_section}\n【用户问题】\n{message}");
     let messages = vec![
         ChatMessage { role: "system".into(), content: sys, name: None, tool_calls: None, tool_call_id: None, reasoning_content: None },
         ChatMessage { role: "user".into(), content: user_content, name: None, tool_calls: None, tool_call_id: None, reasoning_content: None },
@@ -798,6 +939,7 @@ async fn agent_chat_handler(
                     "grounded": !rows.is_empty(),
                     "sources": sources,
                     "retrieved": rows.len(),
+                    "vector_retrieved": vector_retrieved,
                     "model": state.gateway.default_model(),
                     "suggested_actions": build_action_suggestions(&sources),
                 })),
@@ -819,6 +961,7 @@ async fn agent_chat_handler(
                         "grounded": true,
                         "sources": sources,
                         "retrieved": rows.len(),
+                        "vector_retrieved": vector_retrieved,
                         "warning": format!("LLM 网关不可用，已回退为图谱直出：{}", e),
                         "suggested_actions": build_action_suggestions(&sources),
                     })),
@@ -1143,6 +1286,92 @@ async fn list_skills_handler(
     }))
 }
 
+/// skill.yaml 下载端点的查询参数。
+#[derive(Deserialize)]
+struct SkillManifestQuery {
+    iri: String,
+}
+
+/// 将字符串转义为合法的 YAML 双引号标量。
+fn yaml_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// 依据已注册的技能元数据生成标准化 skill.yaml 文本。
+/// input_schema / output_schema 直接内联为 JSON（YAML 是 JSON 的超集，合法）。
+fn build_skill_yaml(skill: &SkillMeta, signature_status: &str) -> String {
+    let roles_json = serde_json::to_string(&skill.allowed_roles).unwrap_or_else(|_| "[]".into());
+    let perms_json = serde_json::to_string(&skill.skill_types).unwrap_or_else(|_| "[]".into());
+    let input_json = serde_json::to_string(&skill.input_schema).unwrap_or_else(|_| "{}".into());
+    let output_json = serde_json::to_string(&skill.output_schema).unwrap_or_else(|_| "{}".into());
+    format!(
+        "# skill.yaml — 由 Wild AgentOS 依据已注册技能元数据生成\n\
+apiVersion: agentos.dev/v1\n\
+kind: Skill\n\
+metadata:\n\
+\x20 iri: {iri}\n\
+\x20 name: {name}\n\
+\x20 version: {version}\n\
+\x20 category: {category}\n\
+spec:\n\
+\x20 description: {desc}\n\
+\x20 security_level: {sec}\n\
+\x20 signature_status: {sig}\n\
+\x20 allowed_roles: {roles}\n\
+\x20 permissions: {perms}\n\
+\x20 input_schema: {input}\n\
+\x20 output_schema: {output}\n",
+        iri = yaml_quote(&skill.skill_iri),
+        name = yaml_quote(&skill.name),
+        version = yaml_quote(&skill.version),
+        category = yaml_quote(&skill.category),
+        desc = yaml_quote(&skill.description),
+        sec = yaml_quote(&skill.security_level),
+        sig = yaml_quote(signature_status),
+        roles = roles_json,
+        perms = perms_json,
+        input = input_json,
+        output = output_json,
+    )
+}
+
+/// GET /api/v1/skills/manifest?iri=... — 生成并下载指定技能的 skill.yaml。
+async fn skill_manifest_handler(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<SkillManifestQuery>,
+) -> impl IntoResponse {
+    match state.core.skills.get_skill(&q.iri) {
+        Some(skill) => {
+            let sig = state.core.skills.verify_skill_signature(&skill);
+            let yaml = build_skill_yaml(&skill, sig.as_str());
+            // 文件名以技能名为基，去除路径分隔符等不安全字符。
+            let safe: String = skill
+                .name
+                .chars()
+                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                .collect();
+            let filename = if safe.is_empty() { "skill".to_string() } else { safe };
+            (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "application/x-yaml; charset=utf-8".to_string()),
+                    (
+                        header::CONTENT_DISPOSITION,
+                        format!("attachment; filename=\"{}.skill.yaml\"", filename),
+                    ),
+                ],
+                yaml,
+            )
+                .into_response()
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "status": "error", "error": "技能不存在", "iri": q.iri })),
+        )
+            .into_response(),
+    }
+}
+
 /// POST /api/v1/skills — 注册新技能（G7：仅 DA 角色可用）
 async fn register_skill_handler(
     State(state): State<Arc<AppState>>,
@@ -1175,6 +1404,236 @@ async fn register_skill_handler(
         "signature_status": sig_status.as_str(),
         "registered_by": identity.user_id,
         "tenant_id": identity.tenant_id,
+    }))).into_response()
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Git 技能导入
+// ──────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct GitImportRequest {
+    /// Git 仓库 URL（https:// 或 git@）。
+    repo_url: String,
+    /// 分支/Tag/Commit，缺省 "main"。
+    #[serde(default = "default_ref")]
+    r#ref: String,
+    /// 仓库内 skill.yaml 所在子目录，缺省根目录 "."。
+    #[serde(default = "default_path")]
+    path: String,
+    // ── 下列字段为可选覆盖（优先于 skill.yaml 中同名字段） ──
+    skill_iri: Option<String>,
+    name: Option<String>,
+    description: Option<String>,
+    version: Option<String>,
+    category: Option<String>,
+    security_level: Option<String>,
+    allowed_roles: Option<Vec<String>>,
+    skill_types: Option<Vec<String>>,
+}
+
+fn default_ref() -> String { "main".into() }
+fn default_path() -> String { ".".into() }
+
+/// 从 skill.yaml 文本中解析扁平化 key→value 映射（支持 metadata/spec 两级）。
+/// 不依赖任何外部 YAML 库，直接按行分析。
+fn parse_skill_yaml_text(yaml: &str) -> HashMap<String, String> {
+    let mut flat: HashMap<String, String> = HashMap::new();
+    let mut section = String::new();
+    for line in yaml.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') { continue; }
+        let indent = line.len() - line.trim_start().len();
+        if let Some(colon_pos) = trimmed.find(':') {
+            let key = trimmed[..colon_pos].trim().to_string();
+            let value_raw = trimmed[colon_pos + 1..].trim().to_string();
+            if indent == 0 {
+                if value_raw.is_empty() { section = key; } else { flat.insert(key, yaml_unquote(&value_raw)); }
+            } else {
+                let full_key = if section.is_empty() { key.clone() } else { format!("{}.{}", section, key) };
+                if !value_raw.is_empty() { flat.insert(full_key, yaml_unquote(&value_raw)); }
+            }
+        }
+    }
+    flat
+}
+
+fn yaml_unquote(s: &str) -> String {
+    let s = s.trim();
+    if s.len() >= 2 && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\''))) {
+        s[1..s.len() - 1].replace("\\\"", "\"").replace("\\'", "'")
+    } else {
+        s.to_string()
+    }
+}
+
+/// 从 Git 仓库 URL 派生默认 skill IRI。
+/// 例：https://github.com/org/repo.git → skill://org/repo
+fn iri_from_git_url(url: &str) -> String {
+    let base = url.trim_end_matches(".git");
+    let without_proto: String = if let Some(rest) = base.strip_prefix("https://")
+        .or_else(|| base.strip_prefix("http://"))
+    {
+        rest.to_string()
+    } else if let Some(rest) = base.strip_prefix("git@") {
+        rest.replacen(':', "/", 1)
+    } else {
+        base.to_string()
+    };
+    let parts: Vec<&str> = without_proto.trim_matches('/').split('/').collect();
+    if parts.len() >= 2 {
+        format!("skill://{}/{}", parts[parts.len() - 2], parts[parts.len() - 1])
+    } else {
+        format!("skill://repo/{}", without_proto.replace('/', "-"))
+    }
+}
+
+/// POST /api/v1/skills/import-git — 从 Git 仓库导入技能。
+/// 需要 DA 角色（X-Identity 头）。
+async fn import_git_skill_handler(
+    State(state): State<Arc<AppState>>,
+    identity: UserIdentity,
+    Json(req): Json<GitImportRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = identity.require_role("DA") {
+        return e.into_response();
+    }
+    if req.repo_url.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "status": "error", "error": "repo_url 不能为空" }))).into_response();
+    }
+
+    // 1. git clone --depth 1 -b <ref> <url> /tmp/<uuid>
+    let clone_dir = std::env::temp_dir().join(format!("waos-skill-{}", uuid::Uuid::new_v4()));
+    let output = tokio::process::Command::new("git")
+        .args([
+            "clone", "--depth", "1",
+            "-b", req.r#ref.as_str(),
+            "--single-branch",
+            req.repo_url.trim(),
+            clone_dir.to_str().unwrap_or("/tmp/waos-skill-clone"),
+        ])
+        .output()
+        .await;
+
+    // cleanup helper (best-effort; ignore errors)
+    let cleanup = |dir: &std::path::Path| { let _ = std::fs::remove_dir_all(dir); };
+
+    let git_ok = match output {
+        Ok(ref o) => o.status.success(),
+        Err(_) => false,
+    };
+    let git_stderr = output
+        .as_ref()
+        .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+        .unwrap_or_default();
+
+    // 2. 尝试读取 skill.yaml（允许失败，此时完全依赖请求体字段）。
+    let mut yaml_fields: HashMap<String, String> = HashMap::new();
+    if git_ok {
+        let skill_yaml_path = {
+            let sub = req.path.trim_matches('/');
+            if sub.is_empty() || sub == "." {
+                clone_dir.join("skill.yaml")
+            } else {
+                clone_dir.join(sub).join("skill.yaml")
+            }
+        };
+        if let Ok(text) = std::fs::read_to_string(&skill_yaml_path) {
+            yaml_fields = parse_skill_yaml_text(&text);
+        }
+    }
+
+    // 3. 合并字段（请求体优先）。
+    let skill_iri = req.skill_iri
+        .filter(|s| !s.is_empty())
+        .or_else(|| yaml_fields.get("metadata.iri").cloned())
+        .unwrap_or_else(|| iri_from_git_url(&req.repo_url));
+
+    let name = req.name
+        .filter(|s| !s.is_empty())
+        .or_else(|| yaml_fields.get("metadata.name").cloned())
+        .unwrap_or_else(|| skill_iri.split('/').last().unwrap_or("unnamed").to_string());
+
+    let description = req.description
+        .filter(|s| !s.is_empty())
+        .or_else(|| yaml_fields.get("spec.description").cloned())
+        .unwrap_or_default();
+
+    let version = req.version
+        .filter(|s| !s.is_empty())
+        .or_else(|| yaml_fields.get("metadata.version").cloned())
+        .unwrap_or_else(|| "1.0.0".into());
+
+    let category = req.category
+        .filter(|s| !s.is_empty())
+        .or_else(|| yaml_fields.get("metadata.category").cloned())
+        .unwrap_or_else(|| "application".into());
+
+    let security_level = req.security_level
+        .filter(|s| !s.is_empty())
+        .or_else(|| yaml_fields.get("spec.security_level").cloned())
+        .unwrap_or_else(|| "normal".into());
+
+    let allowed_roles = req.allowed_roles.unwrap_or_else(|| {
+        // 尝试从 yaml 字段解析 JSON 数组
+        yaml_fields
+            .get("spec.allowed_roles")
+            .and_then(|v| serde_json::from_str::<Vec<String>>(v).ok())
+            .unwrap_or_else(|| vec!["DA".into()])
+    });
+
+    let skill_types = req.skill_types.unwrap_or_else(|| {
+        yaml_fields
+            .get("spec.permissions")
+            .and_then(|v| serde_json::from_str::<Vec<String>>(v).ok())
+            .unwrap_or_default()
+    });
+
+    if skill_iri.is_empty() {
+        cleanup(&clone_dir);
+        return (StatusCode::BAD_REQUEST, Json(json!({ "status": "error", "error": "无法确定 skill_iri，请手动填写" }))).into_response();
+    }
+
+    let skill = SkillMeta {
+        skill_iri: skill_iri.clone(),
+        name: name.clone(),
+        description,
+        version,
+        category,
+        security_level,
+        allowed_roles,
+        input_schema: serde_json::Value::Object(Default::default()),
+        output_schema: serde_json::Value::Object(Default::default()),
+        compiled_template: String::new(),
+        signature: None,
+        signature_algorithm: None,
+        input_mapping: HashMap::new(),
+        output_mapping: HashMap::new(),
+        skill_types,
+    };
+
+    let sig_status = state.core.skills.verify_skill_signature(&skill);
+    use crate::tools::skill_registry::SignatureStatus;
+    if sig_status == SignatureStatus::Invalid {
+        cleanup(&clone_dir);
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "status": "error", "error": "签名校验失败，技能被拒绝注册",
+        }))).into_response();
+    }
+
+    let _ = save_user_skill(&skill);
+    state.core.skills.register_skill(skill);
+    cleanup(&clone_dir);
+
+    (StatusCode::CREATED, Json(json!({
+        "status": "ok",
+        "skill_iri": skill_iri,
+        "name": name,
+        "git_cloned": git_ok,
+        "git_stderr": if git_ok { "" } else { git_stderr.trim() },
+        "yaml_fields_found": yaml_fields.len(),
+        "signature_status": sig_status.as_str(),
+        "registered_by": identity.user_id,
     }))).into_response()
 }
 
@@ -1337,12 +1796,154 @@ pub struct KbCategoryCreateRequest {
     pub description: Option<String>,
 }
 
-/// GET /api/v1/knowledge-packs — 返回系统内置的知识包清单（含本体统计摘要）
+/// GET /api/v1/knowledge-packs — 返回知识包清单（内置种子 + 用户创建，均持久化于 data/knowledge_packs.json）。
 ///
-/// 本体层只读元数据：每个知识包封装独立的 RDF 命名图与向量命名空间，支持 Agent 挂载与包间隔离。
-async fn list_knowledge_packs_handler() -> impl IntoResponse {
-    let packs = crate::knowledge_graph::ontology_layer::knowledge_packs();
+/// 每个知识包关联 N 个知识库分类 / N 个图知识库 / N 个向量知识库，可被 Agent 挂载。
+async fn list_knowledge_packs_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let packs = state.knowledge_packs.read().await.clone();
     Json(json!({ "count": packs.len(), "knowledge_packs": packs }))
+}
+
+#[derive(Deserialize)]
+pub struct KnowledgePackCreateRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub version: Option<String>,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    #[serde(default)]
+    pub category_ids: Vec<String>,
+    #[serde(default)]
+    pub graph_kb_ids: Vec<String>,
+    #[serde(default)]
+    pub vector_kb_ids: Vec<String>,
+}
+
+/// 校验知识包关联的分类/图库/向量库 id 均存在且类型匹配；返回 Err(错误消息)。
+async fn validate_pack_refs(
+    state: &AppState,
+    category_ids: &[String],
+    graph_kb_ids: &[String],
+    vector_kb_ids: &[String],
+) -> Result<(), String> {
+    {
+        let cats = state.kb_categories.read().await;
+        for cid in category_ids {
+            if !cats.iter().any(|c| c.get("id").and_then(|v| v.as_str()) == Some(cid.as_str())) {
+                return Err(format!("分类不存在: {cid}"));
+            }
+        }
+    }
+    let bases = state.knowledge_bases.read().await;
+    for gid in graph_kb_ids {
+        let ok = bases.iter().any(|b| {
+            b.get("id").and_then(|v| v.as_str()) == Some(gid.as_str())
+                && b.get("kb_type").and_then(|v| v.as_str()) == Some("graph")
+        });
+        if !ok {
+            return Err(format!("图知识库不存在或类型不符: {gid}"));
+        }
+    }
+    for vid in vector_kb_ids {
+        let ok = bases.iter().any(|b| {
+            b.get("id").and_then(|v| v.as_str()) == Some(vid.as_str())
+                && b.get("kb_type").and_then(|v| v.as_str()) == Some("vector")
+        });
+        if !ok {
+            return Err(format!("向量知识库不存在或类型不符: {vid}"));
+        }
+    }
+    Ok(())
+}
+
+/// POST /api/v1/knowledge-packs — 创建知识包并持久化。
+async fn create_knowledge_pack_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<KnowledgePackCreateRequest>,
+) -> impl IntoResponse {
+    if req.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name 不能为空" })));
+    }
+    if let Err(e) = validate_pack_refs(&state, &req.category_ids, &req.graph_kb_ids, &req.vector_kb_ids).await {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": e })));
+    }
+    let id = uuid::Uuid::new_v4().hyphenated().to_string();
+    let pack = json!({
+        "id": id,
+        "name": req.name,
+        "description": req.description.unwrap_or_default(),
+        "version": req.version.unwrap_or_else(|| "1.0.0".to_string()),
+        "icon": req.icon.unwrap_or_else(|| "Package".to_string()),
+        "color": req.color.unwrap_or_else(|| "sky".to_string()),
+        "named_graph": "",
+        "vector_namespace": "",
+        "ontology_domain": "",
+        "stats": { "object_types": 0, "link_types": 0, "action_types": 0, "functions": 0 },
+        "category_ids": req.category_ids,
+        "graph_kb_ids": req.graph_kb_ids,
+        "vector_kb_ids": req.vector_kb_ids,
+        "builtin": false,
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    });
+    let mut guard = state.knowledge_packs.write().await;
+    guard.push(pack.clone());
+    let _ = save_knowledge_packs(&guard);
+    (StatusCode::CREATED, Json(json!({ "id": pack["id"], "status": "created", "knowledge_pack": pack })))
+}
+
+/// PUT /api/v1/knowledge-packs/:id — 更新知识包（合并 patch，校验关联引用）。
+async fn update_knowledge_pack_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(patch): Json<Value>,
+) -> impl IntoResponse {
+    let extract_ids = |k: &str| -> Vec<String> {
+        patch
+            .get(k)
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default()
+    };
+    let cat = extract_ids("category_ids");
+    let gks = extract_ids("graph_kb_ids");
+    let vks = extract_ids("vector_kb_ids");
+    if let Err(e) = validate_pack_refs(&state, &cat, &gks, &vks).await {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": e })));
+    }
+    let mut guard = state.knowledge_packs.write().await;
+    let found = guard.iter_mut().find(|p| p.get("id").and_then(|v| v.as_str()) == Some(id.as_str()));
+    match found {
+        Some(pack) => {
+            if let (Some(obj), Some(patch_obj)) = (pack.as_object_mut(), patch.as_object()) {
+                for (k, v) in patch_obj {
+                    if k == "id" || k == "created_at" || k == "builtin" {
+                        continue;
+                    }
+                    obj.insert(k.clone(), v.clone());
+                }
+                obj.insert("updated_at".into(), json!(chrono::Utc::now().to_rfc3339()));
+            }
+            let updated = pack.clone();
+            let _ = save_knowledge_packs(&guard);
+            (StatusCode::OK, Json(json!({ "status": "updated", "knowledge_pack": updated })))
+        }
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "knowledge pack not found", "id": id }))),
+    }
+}
+
+/// DELETE /api/v1/knowledge-packs/:id — 删除知识包并持久化。
+async fn delete_knowledge_pack_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let mut guard = state.knowledge_packs.write().await;
+    let before = guard.len();
+    guard.retain(|p| p.get("id").and_then(|v| v.as_str()) != Some(id.as_str()));
+    if guard.len() == before {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "knowledge pack not found", "id": id })));
+    }
+    let _ = save_knowledge_packs(&guard);
+    (StatusCode::OK, Json(json!({ "status": "deleted", "id": id })))
 }
 
 /// GET /api/v1/ontology/types — 返回新能源车维修域本体定义（对象/链接/动作/函数）
@@ -1766,6 +2367,12 @@ async fn create_knowledge_base_handler(
         None
     };
 
+    // 向量类型：分配隔离命名空间，供运行时向量检索按 namespace 过滤。
+    let vector_namespace = if req.kb_type == "vector" {
+        format!("vec:tenant/{}/kb/{}", identity.tenant_id, kb_id)
+    } else {
+        String::new()
+    };
     let kb = json!({
         "id": kb_id,
         "name": req.name,
@@ -1773,6 +2380,7 @@ async fn create_knowledge_base_handler(
         "kb_type": req.kb_type,
         "category_id": req.category_id.unwrap_or_default(),
         "graph": graph_iri.clone().unwrap_or_default(),
+        "vector_namespace": vector_namespace,
         "tenant_id": identity.tenant_id,
         "created_by": identity.user_id,
         "created_at": chrono::Utc::now().to_rfc3339(),
@@ -1813,6 +2421,96 @@ async fn delete_knowledge_base_handler(
         }
     }
     (StatusCode::OK, Json(json!({ "status": "deleted", "id": id })))
+}
+
+#[derive(Deserialize)]
+pub struct IngestRequest {
+    #[serde(default)]
+    pub texts: Vec<String>,
+    pub text: Option<String>,
+}
+
+/// 简单按字符长度切块（按 char 切，避免破坏 UTF-8 边界；中文友好）。
+fn chunk_text(text: &str, max_chars: usize) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max_chars {
+        let t = text.trim().to_string();
+        return if t.is_empty() { vec![] } else { vec![t] };
+    }
+    chars
+        .chunks(max_chars)
+        .map(|c| c.iter().collect::<String>().trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// POST /api/v1/kb/bases/:id/ingest — 向向量知识库写入文本（分块→embedding→写入向量库）。
+async fn ingest_knowledge_base_handler(
+    State(state): State<Arc<AppState>>,
+    identity: UserIdentity,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<IngestRequest>,
+) -> impl IntoResponse {
+    let kb = {
+        let guard = state.knowledge_bases.read().await;
+        guard
+            .iter()
+            .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .cloned()
+    };
+    let kb = match kb {
+        Some(k) => k,
+        None => return (StatusCode::NOT_FOUND, Json(json!({ "error": "knowledge base not found", "id": id }))),
+    };
+    if kb.get("kb_type").and_then(|v| v.as_str()) != Some("vector") {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "仅向量知识库支持 ingest" })));
+    }
+    let namespace = kb
+        .get("vector_namespace")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if namespace.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "该向量库缺少 vector_namespace" })));
+    }
+    let store = match &state.vector_store {
+        Some(s) => s.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "向量库未启用（embedding 初始化失败）" })),
+            )
+        }
+    };
+    let mut texts: Vec<String> = req.texts;
+    if let Some(t) = req.text {
+        if !t.trim().is_empty() {
+            texts.push(t);
+        }
+    }
+    if texts.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "texts/text 不能为空" })));
+    }
+    let tags = vec![namespace.clone(), format!("tenant:{}", identity.tenant_id)];
+    let mut count = 0usize;
+    for text in &texts {
+        for chunk in chunk_text(text, 500) {
+            let iri = format!("{}#chunk/{}", namespace, uuid::Uuid::new_v4().hyphenated());
+            match store
+                .upsert_with_metadata(&iri, &chunk, &tags, Some(0.5), None, Some(namespace.as_str()))
+                .await
+            {
+                Ok(_) => count += 1,
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": format!("写入失败: {e}") })),
+                    )
+                }
+            }
+        }
+    }
+    (StatusCode::OK, Json(json!({ "status": "ingested", "chunks": count, "namespace": namespace })))
 }
 
 fn convert_event_to_sse(event: &crate::core::event_bus::Event) -> Option<Event> {
@@ -2151,6 +2849,8 @@ mod tests {
             prompts: Arc::new(PromptRegistry::new()),
             kb_categories: Arc::new(tokio::sync::RwLock::new(vec![])),
             knowledge_bases: Arc::new(tokio::sync::RwLock::new(vec![])),
+            knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
+            vector_store: None,
         });
 
         // 构造 Router 并发起 GET /api/v1/config 请求
@@ -2220,6 +2920,8 @@ mod tests {
             prompts: Arc::new(PromptRegistry::new()),
             kb_categories: Arc::new(tokio::sync::RwLock::new(vec![])),
             knowledge_bases: Arc::new(tokio::sync::RwLock::new(vec![])),
+            knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
+            vector_store: None,
         });
 
         let router = Router::new()
@@ -2387,6 +3089,289 @@ mod tests {
         // 清理
         std::env::remove_var("AGENTOS_DATA_DIR");
         std::env::remove_var("AGENTOS_AUTH_STRICT");
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// skill manifest / import-git 单元测试 + HTTP 集成测试
+// ──────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod skill_manifest_tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use tower::ServiceExt;
+    use crate::core::core_types::{CoreConfig, SemanticCore};
+
+    // ── 辅助：最小 AppState ───────────────────────────────────────────────────
+    fn make_state(tmp: &std::path::Path) -> Arc<AppState> {
+        let l0 = tmp.join("l0");
+        std::fs::create_dir_all(&l0).unwrap();
+        let core = Arc::new(
+            SemanticCore::new(CoreConfig {
+                max_node_size: 1024,
+                max_projection_size: 2048,
+                l0_storage_path: l0.to_str().unwrap().to_string(),
+                event_buffer_size: 10,
+                enable_metrics: false,
+                eviction_config: None,
+            })
+            .unwrap(),
+        );
+        let gateway = Arc::new(
+            crate::gateway::UnifiedGateway::new(&crate::config::GatewaySettings {
+                base_url: "http://localhost".into(),
+                api_key: String::new(),
+                default_model: "test-model".into(),
+                timeout_seconds: 30,
+                max_retries: 1,
+                model_mapping: std::collections::HashMap::new(),
+            })
+            .unwrap(),
+        );
+        let kg_store = Arc::new(oxigraph::store::Store::new().unwrap());
+        Arc::new(AppState {
+            core,
+            gateway,
+            kg_store,
+            config_info: Arc::new(tokio::sync::RwLock::new(serde_json::json!({}))),
+            agents_info: serde_json::json!({ "count": 0, "agents": [] }),
+            mcp_servers: Arc::new(tokio::sync::RwLock::new(vec![])),
+            user_agents: Arc::new(tokio::sync::RwLock::new(vec![])),
+            prompts: Arc::new(PromptRegistry::new()),
+            kb_categories: Arc::new(tokio::sync::RwLock::new(vec![])),
+            knowledge_bases: Arc::new(tokio::sync::RwLock::new(vec![])),
+            knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
+            vector_store: None,
+        })
+    }
+
+    fn sample_skill() -> SkillMeta {
+        SkillMeta {
+            skill_iri: "skill://test/hello".into(),
+            name: "Hello World".into(),
+            description: "测试技能".into(),
+            version: "1.0.0".into(),
+            category: "test".into(),
+            security_level: "standard".into(),
+            allowed_roles: vec!["DA".into()],
+            input_schema: serde_json::json!({"type": "object"}),
+            output_schema: serde_json::json!({"type": "object"}),
+            compiled_template: "{{x}}".into(),
+            signature: None,
+            signature_algorithm: None,
+            input_mapping: Default::default(),
+            output_mapping: Default::default(),
+            skill_types: vec![],
+        }
+    }
+
+    // ── 纯函数单元测试 ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_yaml_quote_plain() {
+        assert_eq!(yaml_quote("hello"), "\"hello\"");
+    }
+
+    #[test]
+    fn test_yaml_quote_with_quotes() {
+        // 双引号与反斜杠应被转义
+        assert_eq!(yaml_quote(r#"say "hi""#), r#""say \"hi\"""#);
+        assert_eq!(yaml_quote(r"back\slash"), r#""back\\slash""#);
+    }
+
+    #[test]
+    fn test_build_skill_yaml_contains_fields() {
+        let skill = sample_skill();
+        let yaml = build_skill_yaml(&skill, "unsigned");
+        assert!(yaml.contains("skill://test/hello"), "should contain IRI");
+        assert!(yaml.contains("Hello World"), "should contain name");
+        assert!(yaml.contains("1.0.0"), "should contain version");
+        assert!(yaml.contains("unsigned"), "should contain signature_status");
+        assert!(yaml.contains("allowed_roles:"), "should contain allowed_roles key");
+        assert!(yaml.contains("DA"), "should contain DA role");
+    }
+
+    #[test]
+    fn test_iri_from_git_url_https() {
+        assert_eq!(
+            iri_from_git_url("https://github.com/myorg/myrepo.git"),
+            "skill://myorg/myrepo"
+        );
+    }
+
+    #[test]
+    fn test_iri_from_git_url_https_no_git_suffix() {
+        assert_eq!(
+            iri_from_git_url("https://gitee.com/acme/demo-skill"),
+            "skill://acme/demo-skill"
+        );
+    }
+
+    #[test]
+    fn test_iri_from_git_url_ssh() {
+        assert_eq!(
+            iri_from_git_url("git@github.com:myorg/myrepo.git"),
+            "skill://myorg/myrepo"
+        );
+    }
+
+    #[test]
+    fn test_parse_skill_yaml_text_flat() {
+        let yaml = "\
+skill_iri: \"skill://test/demo\"\n\
+name: \"演示技能\"\n\
+version: \"2.0.0\"\n\
+";
+        let map = parse_skill_yaml_text(yaml);
+        assert_eq!(map.get("skill_iri").map(|s| s.as_str()), Some("skill://test/demo"));
+        assert_eq!(map.get("name").map(|s| s.as_str()), Some("演示技能"));
+        assert_eq!(map.get("version").map(|s| s.as_str()), Some("2.0.0"));
+    }
+
+    #[test]
+    fn test_parse_skill_yaml_text_nested() {
+        // 两级嵌套（metadata / spec），键应被扁平化为 "section.key"。
+        // 注意：用 concat! 保留缩进——字符串行尾 `\` 会连同下一行前导空格一并吞掉。
+        let yaml = concat!(
+            "metadata:\n",
+            "  iri: \"skill://test/nested\"\n",
+            "  name: \"嵌套技能\"\n",
+            "  version: \"3.1.0\"\n",
+            "  category: \"application\"\n",
+            "spec:\n",
+            "  description: \"支持嵌套解析\"\n",
+            "  security_level: \"normal\"\n",
+        );
+        let map = parse_skill_yaml_text(yaml);
+        assert_eq!(map.get("metadata.iri").map(|s| s.as_str()), Some("skill://test/nested"));
+        assert_eq!(map.get("metadata.name").map(|s| s.as_str()), Some("嵌套技能"));
+        assert_eq!(map.get("metadata.version").map(|s| s.as_str()), Some("3.1.0"));
+        assert_eq!(map.get("metadata.category").map(|s| s.as_str()), Some("application"));
+        assert_eq!(map.get("spec.description").map(|s| s.as_str()), Some("支持嵌套解析"));
+        assert_eq!(map.get("spec.security_level").map(|s| s.as_str()), Some("normal"));
+    }
+
+    // ── HTTP 集成测试 ─────────────────────────────────────────────────────────
+
+    /// GET /api/v1/skills/manifest?iri=skill://test/hello → 200 + application/x-yaml
+    #[tokio::test]
+    async fn test_manifest_200_known_skill() {
+        let tmp = std::env::temp_dir().join(format!("manifest_200_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("AGENTOS_DATA_DIR", &tmp);
+
+        let state = make_state(&tmp);
+        state.core.skills.register_skill(sample_skill());
+
+        let router = Router::new()
+            .route("/api/v1/skills/manifest", get(skill_manifest_handler))
+            .with_state(state);
+
+        let req = axum::http::Request::builder()
+            .uri("/api/v1/skills/manifest?iri=skill://test/hello")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("");
+        assert!(ct.contains("yaml"), "content-type should be yaml, got: {ct}");
+        let cd = resp.headers().get("content-disposition").and_then(|v| v.to_str().ok()).unwrap_or("");
+        assert!(cd.contains("attachment"), "should be an attachment download");
+
+        std::env::remove_var("AGENTOS_DATA_DIR");
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    /// GET /api/v1/skills/manifest?iri=skill://notfound/x → 404
+    #[tokio::test]
+    async fn test_manifest_404_unknown_skill() {
+        let tmp = std::env::temp_dir().join(format!("manifest_404_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("AGENTOS_DATA_DIR", &tmp);
+
+        let state = make_state(&tmp);
+
+        let router = Router::new()
+            .route("/api/v1/skills/manifest", get(skill_manifest_handler))
+            .with_state(state);
+
+        let req = axum::http::Request::builder()
+            .uri("/api/v1/skills/manifest?iri=skill://notfound/x")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        std::env::remove_var("AGENTOS_DATA_DIR");
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    /// POST /api/v1/skills/import-git 无 X-Identity 头 → 403（严格模式）
+    #[tokio::test]
+    async fn test_import_git_403_no_role() {
+        let tmp = std::env::temp_dir().join(format!("importgit_403_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("AGENTOS_DATA_DIR", &tmp);
+        std::env::set_var("AGENTOS_AUTH_STRICT", "true");
+
+        let state = make_state(&tmp);
+
+        let router = Router::new()
+            .route("/api/v1/skills/import-git", post(import_git_skill_handler))
+            .with_state(state);
+
+        let body = serde_json::json!({ "repo_url": "https://github.com/test/repo.git" }).to_string();
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/v1/skills/import-git")
+            .header("content-type", "application/json")
+            // 故意不带 X-Identity
+            .body(axum::body::Body::from(body))
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        std::env::remove_var("AGENTOS_DATA_DIR");
+        std::env::remove_var("AGENTOS_AUTH_STRICT");
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    /// POST /api/v1/skills/import-git 带 DA 角色但 repo_url 为空 → 400
+    #[tokio::test]
+    async fn test_import_git_400_empty_url() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let tmp = std::env::temp_dir().join(format!("importgit_400_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("AGENTOS_DATA_DIR", &tmp);
+
+        let state = make_state(&tmp);
+
+        let router = Router::new()
+            .route("/api/v1/skills/import-git", post(import_git_skill_handler))
+            .with_state(state);
+
+        let identity = STANDARD.encode(
+            serde_json::json!({"user_id": "admin", "tenant_id": "t-test", "roles": ["DA"]}).to_string(),
+        );
+        // repo_url 为空字符串
+        let body = serde_json::json!({ "repo_url": "" }).to_string();
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/v1/skills/import-git")
+            .header("content-type", "application/json")
+            .header("x-identity", identity)
+            .body(axum::body::Body::from(body))
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        std::env::remove_var("AGENTOS_DATA_DIR");
         let _ = std::fs::remove_dir_all(tmp);
     }
 }

@@ -195,6 +195,22 @@ pub struct KnowledgePack {
     /// 本体域 IRI 前缀。
     pub ontology_domain: String,
     pub stats: KnowledgePackStats,
+    /// 关联的知识库分类 id（1:N）。
+    #[serde(default)]
+    pub category_ids: Vec<String>,
+    /// 关联的图知识库 id（1:N）。
+    #[serde(default)]
+    pub graph_kb_ids: Vec<String>,
+    /// 关联的向量知识库 id（1:N）。
+    #[serde(default)]
+    pub vector_kb_ids: Vec<String>,
+    /// 是否可编辑（内置包亦可编辑，标记用于前端提示）。
+    #[serde(default)]
+    pub builtin: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 // ─── 种子构造辅助 ──────────────────────────────────────────
@@ -464,5 +480,11 @@ pub fn knowledge_packs() -> Vec<KnowledgePack> {
         vector_namespace: "vec:pack/ev-repair".into(),
         ontology_domain: "https://agentos.ontology/ev/".into(),
         stats,
+        category_ids: Vec::new(),
+        graph_kb_ids: Vec::new(),
+        vector_kb_ids: Vec::new(),
+        builtin: true,
+        created_at: None,
+        updated_at: None,
     }]
 }

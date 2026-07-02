@@ -294,13 +294,17 @@ impl AgentOSService {
             }).collect();
             serde_json::json!({ "count": agents.len(), "agents": agents })
         };
-        crate::api::http::build_router(core, self.gateway.clone(), self.unified_graph.store(), config_info, agents_info)
+        crate::api::http::build_router(core, self.gateway.clone(), self.unified_graph.store(), config_info, agents_info, self.settings.embedding.clone())
     }
 
     /// 构造已脱敏的运行期配置快照（不暴露 api_key 明文，仅暴露是否已配置）。
     /// 外部 LLM 网关字段与 GatewaySettings 对齐，供前端 Settings 页展示与对照。
     fn build_config_info(&self) -> serde_json::Value {
         let g = &self.settings.gateway;
+        // api_key_configured: 优先取 settings 中的 key（来自 config.yaml / config_override.json），
+        // 若为空则检查环境变量（AGENT_OS_GATEWAY_API_KEY）作为兜底，确保 ConfigMap/Secret 注入方式也能正确展示。
+        let api_key_configured = !g.api_key.is_empty()
+            || std::env::var("AGENT_OS_GATEWAY_API_KEY").map(|v| !v.is_empty()).unwrap_or(false);
         serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
             "gateway": {
@@ -309,7 +313,7 @@ impl AgentOSService {
                 "max_retries": g.max_retries,
                 "timeout_seconds": g.timeout_seconds,
                 "model_mapping": g.model_mapping,
-                "api_key_configured": !g.api_key.is_empty(),
+                "api_key_configured": api_key_configured,
             },
             "api": {
                 "grpc_addr": self.settings.api.grpc_addr,
