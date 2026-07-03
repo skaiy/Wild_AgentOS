@@ -438,7 +438,8 @@ pub fn build_router(
         .route("/api/v1/kb/categories/:id", put(update_kb_category_handler).delete(delete_kb_category_handler))
         // ── 知识库（向量/图）管理 ──
         .route("/api/v1/kb/bases", get(list_knowledge_bases_handler).post(create_knowledge_base_handler))
-        .route("/api/v1/kb/bases/:id", delete(delete_knowledge_base_handler))
+        .route("/api/v1/kb/bases/:id", put(update_knowledge_base_handler).delete(delete_knowledge_base_handler))
+        .route("/api/v1/kb/bases/:id/stats", get(knowledge_base_stats_handler))
         .route("/api/v1/kb/bases/:id/ingest", post(ingest_knowledge_base_handler))
         .route("/api/v1/kb/bases/:id/search", post(search_knowledge_base_handler))
         .route("/api/v1/agents", get(list_agents_handler).post(create_agent_handler))
@@ -2781,6 +2782,153 @@ async fn delete_knowledge_base_handler(
         }
     }
     (StatusCode::OK, Json(json!({ "status": "deleted", "id": id })))
+}
+
+#[derive(Deserialize)]
+pub struct KnowledgeBaseUpdateRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub category_id: Option<String>,
+}
+
+/// PUT /api/v1/kb/bases/:id — 更新知识库可变元数据（name/description/category_id）。
+/// 不改 kb_type/graph/vector_namespace/tenant；图类型改名时同步命名图 kbName 元三元组。
+async fn update_knowledge_base_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<KnowledgeBaseUpdateRequest>,
+) -> impl IntoResponse {
+    // 校验分类存在（若指定非空）
+    if let Some(cat_id) = req.category_id.as_deref().filter(|s| !s.is_empty()) {
+        let exists = state
+            .kb_categories
+            .read()
+            .await
+            .iter()
+            .any(|c| c.get("id").and_then(|v| v.as_str()) == Some(cat_id));
+        if !exists {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "category_id 不存在", "category_id": cat_id })));
+        }
+    }
+
+    let (updated, is_graph, graph_iri, name_changed) = {
+        let mut guard = state.knowledge_bases.write().await;
+        let kb = match guard
+            .iter_mut()
+            .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+        {
+            Some(k) => k,
+            None => {
+                return (StatusCode::NOT_FOUND, Json(json!({ "error": "knowledge base not found", "id": id })))
+            }
+        };
+        let mut name_changed: Option<String> = None;
+        if let Some(name) = req.name {
+            let name = name.trim().to_string();
+            if name.is_empty() {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name 不能为空" })));
+            }
+            kb["name"] = json!(name);
+            name_changed = Some(name);
+        }
+        if let Some(desc) = req.description {
+            kb["description"] = json!(desc);
+        }
+        if let Some(cat) = req.category_id {
+            kb["category_id"] = json!(cat);
+        }
+        kb["updated_at"] = json!(chrono::Utc::now().to_rfc3339());
+        let is_graph = kb.get("kb_type").and_then(|v| v.as_str()) == Some("graph");
+        let graph_iri = kb.get("graph").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let updated = kb.clone();
+        let _ = save_knowledge_bases(&guard);
+        (updated, is_graph, graph_iri, name_changed)
+    };
+
+    // 图类型改名：同步命名图 kbName 元三元组
+    if is_graph && !graph_iri.is_empty() {
+        if let Some(new_name) = name_changed {
+            let sparql = format!(
+                "DELETE {{ GRAPH <{g}> {{ <{g}> <https://agentos.ontology/meta/kbName> ?o }} }} \
+                 INSERT {{ GRAPH <{g}> {{ <{g}> <https://agentos.ontology/meta/kbName> \"{n}\" }} }} \
+                 WHERE {{ OPTIONAL {{ GRAPH <{g}> {{ <{g}> <https://agentos.ontology/meta/kbName> ?o }} }} }}",
+                g = graph_iri,
+                n = sparql_literal(&new_name),
+            );
+            if let Err(e) = state.kg_store.update(&sparql) {
+                tracing::warn!(graph = %graph_iri, "KB rename meta sync skipped: {}", e);
+            } else {
+                let _ = state.kg_store.flush();
+            }
+        }
+    }
+
+    (StatusCode::OK, Json(json!({ "status": "updated", "id": id, "base": updated })))
+}
+
+/// GET /api/v1/kb/bases/:id/stats — 单个知识库统计。
+/// 图类型：命名图三元组精确计数（含 kbName/kbType 2 条元三元组）；
+/// 向量类型：返回 namespace；chunks 暂无按命名空间枚举接口，返回 null 并附说明。
+async fn knowledge_base_stats_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let kb = {
+        let guard = state.knowledge_bases.read().await;
+        guard
+            .iter()
+            .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .cloned()
+    };
+    let kb = match kb {
+        Some(k) => k,
+        None => return (StatusCode::NOT_FOUND, Json(json!({ "error": "knowledge base not found", "id": id }))),
+    };
+    let kb_type = kb.get("kb_type").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let mut stats = json!({
+        "id": id,
+        "name": kb.get("name").cloned().unwrap_or(Value::Null),
+        "kb_type": kb_type,
+        "category_id": kb.get("category_id").cloned().unwrap_or(Value::Null),
+        "created_at": kb.get("created_at").cloned().unwrap_or(Value::Null),
+        "updated_at": kb.get("updated_at").cloned().unwrap_or(Value::Null),
+    });
+    if kb_type == "graph" {
+        let graph_iri = kb.get("graph").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let triples = if graph_iri.is_empty() {
+            json!(0)
+        } else {
+            match KnowledgeGraphStore::with_shared_store(state.kg_store.clone()) {
+                Ok(kg) => {
+                    let q = format!("SELECT (COUNT(*) AS ?c) WHERE {{ GRAPH <{g}> {{ ?s ?p ?o }} }}", g = graph_iri);
+                    match kg.query_sparql(&q, None) {
+                        Ok(rows) => rows
+                            .first()
+                            .and_then(|r| r.get("c"))
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .map(|n| json!(n))
+                            .unwrap_or(json!(0)),
+                        Err(e) => {
+                            tracing::warn!("KB stats graph count failed: {}", e);
+                            json!(null)
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("KB stats KG store failed: {}", e);
+                    json!(null)
+                }
+            }
+        };
+        stats["graph"] = json!(graph_iri);
+        stats["triples"] = triples;
+    } else {
+        stats["vector_namespace"] = kb.get("vector_namespace").cloned().unwrap_or(Value::Null);
+        stats["chunks"] = json!(null);
+        stats["note"] = json!("按命名空间的向量条目计数暂未开放枚举接口");
+    }
+    (StatusCode::OK, Json(stats))
 }
 
 #[derive(Deserialize)]
