@@ -195,6 +195,10 @@ impl BatchAgentManager {
         self.agents.get(name).map(|a| a.metrics.clone())
     }
 
+    pub fn get_config(&self, name: &str) -> Option<&BatchAgentConfig> {
+        self.agents.get(name).map(|a| &a.config)
+    }
+
     pub fn push_message(&mut self, agent_name: &str, entry: crate::batch::types::WindowEntry) -> Result<(), BatchError> {
         let instance = self.agents.get_mut(agent_name).ok_or_else(|| {
             BatchError::AgentNotFound { name: agent_name.into() }

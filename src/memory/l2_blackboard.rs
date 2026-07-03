@@ -50,6 +50,17 @@ pub struct TaskTreeNode {
     pub node_iris: Vec<String>,
 }
 
+/// Platform-level task overview row for the admin Blackboard browser.
+/// Aggregates task_nodes (node count) with task_tree (status/hierarchy).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TaskSummary {
+    pub task_iri: String,
+    pub status: String,
+    pub node_count: usize,
+    pub parent: Option<String>,
+    pub children: usize,
+}
+
 pub struct Blackboard {
     store: Arc<Store>,
     node_cache: DashMap<String, Arc<Node>>,
@@ -1490,6 +1501,39 @@ impl Blackboard {
             Ok(None) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    /// List all known tasks on the blackboard (platform/task-scope, cross-tenant).
+    /// Unions keys from `task_nodes` (any task that ever had nodes written) and
+    /// `task_tree` (any task registered in the hierarchy), sorted by task_iri.
+    pub fn list_task_summaries(&self) -> Vec<TaskSummary> {
+        use std::collections::BTreeSet;
+        let mut task_iris: BTreeSet<String> = BTreeSet::new();
+        {
+            let nodes = self.task_nodes.read();
+            for k in nodes.keys() {
+                task_iris.insert(k.clone());
+            }
+        }
+        {
+            let tree = self.task_tree.read();
+            for k in tree.keys() {
+                task_iris.insert(k.clone());
+            }
+        }
+        let nodes = self.task_nodes.read();
+        let tree = self.task_tree.read();
+        task_iris
+            .into_iter()
+            .map(|iri| {
+                let node_count = nodes.get(&iri).map(|v| v.len()).unwrap_or(0);
+                let (status, parent, children) = match tree.get(&iri) {
+                    Some(t) => (t.status.clone(), t.parent.clone(), t.children.len()),
+                    None => ("unknown".to_string(), None, 0),
+                };
+                TaskSummary { task_iri: iri, status, node_count, parent, children }
+            })
+            .collect()
     }
 }
 

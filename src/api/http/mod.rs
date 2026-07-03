@@ -24,6 +24,12 @@ use crate::tools::tool_guard::{GuardAuditEntry, GUARD_AUDIT_LOG};
 use crate::tools::prompt_registry::{PromptRegistry, PromptVersion};
 use crate::tools::skill_registry::SkillMeta;
 use crate::memory::hyperspace_store::{HybridSearchFilter, HyperspaceStore};
+use crate::batch::manager::BatchAgentManager;
+use crate::memory::l2_blackboard::QueryFilter;
+
+/// Shared handle to the platform Batch Agent manager (Option<..> allows tests to omit it,
+/// inner Option matches the gRPC server's take-on-shutdown lifecycle).
+pub type SharedBatchManager = Arc<tokio::sync::Mutex<Option<BatchAgentManager>>>;
 
 pub mod iam;
 use iam::UserIdentity;
@@ -54,6 +60,8 @@ pub struct AppState {
     /// 任务执行器（productized 抽象）：由 build_http_router 注入，驱动 SA 跑 PDCA 管线并向共享事件总线推送执行事件。
     /// 为 None 时（仅测试态）流式任务不会真正执行，处理器会即时推送 TASK_FAILED 以避免前端卡在「启动中」。
     pub task_executor: Option<Arc<dyn TaskExecutor>>,
+    /// 平台级批处理 Agent 管理器（方案A 运维态）：由 build_http_router 注入，None 表示测试态或未启用。
+    pub batch_manager: Option<SharedBatchManager>,
 }
 
 /// 流式任务执行规格：由 HTTP 流处理器构造并传入执行器。
@@ -368,6 +376,7 @@ pub fn build_router(
     agents_info: Value,
     vector_store: Option<Arc<HyperspaceStore>>,
     task_executor: Option<Arc<dyn TaskExecutor>>,
+    batch_manager: Option<SharedBatchManager>,
 ) -> Router {
     // 启动时加载用户态注册的技能并重新注册到内存技能表（默认技能由 SemanticCore 播种）。
     for skill in load_user_skills() {
@@ -388,6 +397,7 @@ pub fn build_router(
         knowledge_packs: Arc::new(tokio::sync::RwLock::new(load_knowledge_packs())),
         vector_store,
         task_executor,
+        batch_manager,
     });
 
     Router::new()
@@ -404,6 +414,11 @@ pub fn build_router(
         .route("/api/v1/projections", post(get_projection_handler))
         .route("/api/v1/events", post(emit_event_handler))
         .route("/api/v1/batch/events", get(stream_batch_events_handler))
+        // ── 方案A 平台运维态：L2 黑板浏览器（只读）+ 批处理 Agent 运维台 ──
+        .route("/api/v1/blackboard/tasks", get(list_blackboard_tasks_handler))
+        .route("/api/v1/blackboard/nodes", get(list_blackboard_nodes_handler))
+        .route("/api/v1/batch/agents", get(list_batch_agents_handler))
+        .route("/api/v1/batch/agents/:name/control", post(control_batch_agent_handler))
         .route("/api/v1/skills", get(list_skills_handler).post(register_skill_handler))
         .route("/api/v1/skills/manifest", get(skill_manifest_handler))
         .route("/api/v1/skills/import-git", post(import_git_skill_handler))
@@ -1734,6 +1749,147 @@ async fn stream_batch_events_handler(
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response()
+}
+
+// ============================================================
+// 方案A 平台运维态：L2 黑板浏览器（只读）+ 批处理 Agent 运维台
+// ============================================================
+
+/// GET /api/v1/blackboard/tasks — 列出黑板上所有任务（平台/任务态，跨租户）。
+async fn list_blackboard_tasks_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let tasks = state.core.blackboard.list_task_summaries();
+    Json(json!({ "count": tasks.len(), "tasks": tasks }))
+}
+
+#[derive(Debug, Deserialize)]
+struct BlackboardNodesQuery {
+    task_iri: String,
+    role: Option<String>,
+    node_type: Option<String>,
+    cycle_id: Option<String>,
+}
+
+/// GET /api/v1/blackboard/nodes?task_iri=..&role=..&node_type=..&cycle_id=..
+/// 读取指定任务下的节点（只读），支持角色/类型/周期多维过滤。task_iri 以查询参数传入以规避 IRI 内含斜杠。
+async fn list_blackboard_nodes_handler(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<BlackboardNodesQuery>,
+) -> impl IntoResponse {
+    let task_iri = q.task_iri.trim().to_string();
+    if task_iri.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "task_iri 不能为空" })));
+    }
+    let filter = QueryFilter {
+        role: q.role.as_deref().and_then(|r| r.parse().ok()),
+        cycle_id: q.cycle_id.clone().filter(|s| !s.is_empty()),
+        node_type: q.node_type.clone().filter(|s| !s.is_empty()),
+    };
+    match state.core.blackboard.query_nodes_filtered(&task_iri, &filter) {
+        Ok(nodes) => {
+            let items: Vec<&crate::memory::l2_blackboard::Node> =
+                nodes.iter().map(|n| n.as_ref()).collect();
+            (
+                StatusCode::OK,
+                Json(json!({ "task_iri": task_iri, "count": items.len(), "nodes": items })),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("读取节点失败: {e}") })),
+        ),
+    }
+}
+
+/// GET /api/v1/batch/agents — 列出所有批处理 Agent 及其状态/窗口/指标/配置摘要（平台运维态）。
+async fn list_batch_agents_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mgr_arc = match &state.batch_manager {
+        Some(m) => m.clone(),
+        None => {
+            return Json(json!({ "running": false, "count": 0, "agents": [] }));
+        }
+    };
+    let guard = mgr_arc.lock().await;
+    let mgr = match guard.as_ref() {
+        Some(m) => m,
+        None => return Json(json!({ "running": false, "count": 0, "agents": [] })),
+    };
+    let names: Vec<String> = mgr.list_agents().iter().map(|s| s.to_string()).collect();
+    let agents: Vec<Value> = names
+        .iter()
+        .map(|name| {
+            let status = mgr.get_status(name);
+            let window = mgr.get_window_status(name);
+            let metrics = mgr.get_metrics(name);
+            let cfg = mgr.get_config(name).map(|c| {
+                json!({
+                    "description": c.description,
+                    "enabled": c.enabled,
+                    "business_domain": c.business_domain,
+                    "model": c.model,
+                })
+            });
+            json!({
+                "name": name,
+                "status": status,
+                "window": window,
+                "metrics": metrics,
+                "config": cfg,
+            })
+        })
+        .collect();
+    Json(json!({ "running": mgr.is_running(), "count": agents.len(), "agents": agents }))
+}
+
+#[derive(Debug, Deserialize)]
+struct BatchControlRequest {
+    action: String,
+}
+
+/// POST /api/v1/batch/agents/:name/control — 启停指定批处理 Agent（action: start|stop）。
+async fn control_batch_agent_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(req): Json<BatchControlRequest>,
+) -> impl IntoResponse {
+    let mgr_arc = match &state.batch_manager {
+        Some(m) => m.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "批处理系统未启用" })),
+            )
+        }
+    };
+    let mut guard = mgr_arc.lock().await;
+    let mgr = match guard.as_mut() {
+        Some(m) => m,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "批处理系统未初始化" })),
+            )
+        }
+    };
+    let result = match req.action.as_str() {
+        "start" => mgr.start(Some(&name)).await,
+        "stop" => mgr.stop(Some(&name)).await,
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("不支持的操作: {other}（仅支持 start|stop）") })),
+            )
+        }
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "name": name, "action": req.action, "status": mgr.get_status(&name) })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("{:?}", e) })),
+        ),
+    }
 }
 
 /// Expand short namespace prefixes to absolute IRIs for Oxigraph.
@@ -3072,6 +3228,7 @@ mod tests {
             knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
             vector_store: None,
             task_executor: None,
+            batch_manager: None,
         });
 
         // 构造 Router 并发起 GET /api/v1/config 请求
@@ -3144,6 +3301,7 @@ mod tests {
             knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
             vector_store: None,
             task_executor: None,
+            batch_manager: None,
         });
 
         let router = Router::new()
@@ -3366,6 +3524,7 @@ mod skill_manifest_tests {
             knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
             vector_store: None,
             task_executor: None,
+            batch_manager: None,
         })
     }
 

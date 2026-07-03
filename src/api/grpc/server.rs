@@ -58,8 +58,9 @@ pub struct AgentOSService {
     /// 向量知识库（HyperspaceStore）：由 HTTP 路由、任务执行器与 SA 工具链共享的同一实例。
     vector_store: Option<Arc<HyperspaceStore>>,
     execution_states: Arc<RwLock<HashMap<String, ExecutionState>>>,
-    /// Batch Agent manager, post-new async initialization
-    batch_manager: tokio::sync::Mutex<Option<BatchAgentManager>>,
+    /// Batch Agent manager, post-new async initialization.
+    /// Arc 包裹以便与 HTTP 路由共享同一实例（方案A 平台运维台）。
+    batch_manager: Arc<tokio::sync::Mutex<Option<BatchAgentManager>>>,
 }
 
 impl AgentOSService {
@@ -266,7 +267,7 @@ impl AgentOSService {
             unified_graph,
             vector_store,
             execution_states: Arc::new(RwLock::new(HashMap::new())),
-            batch_manager: tokio::sync::Mutex::new(Some(batch_mgr)),
+            batch_manager: Arc::new(tokio::sync::Mutex::new(Some(batch_mgr))),
         };
 
         Ok(s)
@@ -316,7 +317,7 @@ impl AgentOSService {
             vector_store: self.vector_store.clone(),
             settings: self.settings.clone(),
         }));
-        crate::api::http::build_router(core, self.gateway.clone(), self.unified_graph.store(), config_info, agents_info, self.vector_store.clone(), task_executor)
+        crate::api::http::build_router(core, self.gateway.clone(), self.unified_graph.store(), config_info, agents_info, self.vector_store.clone(), task_executor, Some(self.batch_manager.clone()))
     }
 
     /// 构造已脱敏的运行期配置快照（不暴露 api_key 明文，仅暴露是否已配置）。
