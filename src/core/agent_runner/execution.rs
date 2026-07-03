@@ -440,6 +440,151 @@ Output the summary report directly, not in JSON format."#,
     }
 
 
+    /// 以流式方式调用 LLM：逐 token 将增量正文/推理内容作为 LLM_CONTENT 事件推送到
+    /// 事件总线（供任务控制台实时「逐字输出」），流结束后聚合为与非流式一致的
+    /// ChatCompletionResponse，使 ReAct 主循环后续逻辑保持不变。
+    /// 流式失败或产出为空时回退非流式 chat_with_params，保证稳定性。
+    async fn chat_stream_collecting(
+        &self,
+        model: &str,
+        messages: Vec<ChatMessage>,
+        tools: Option<Vec<Value>>,
+        ctx: &TaskContext,
+        agent: &AgentInstance,
+    ) -> Result<crate::gateway::unified_gateway::ChatCompletionResponse, CoreError> {
+        match self
+            .try_chat_stream_collecting(model, messages.clone(), tools.clone(), ctx, agent)
+            .await
+        {
+            Ok(resp) => Ok(resp),
+            Err(e) => {
+                warn!("[stream] streaming LLM failed ({}), falling back to non-streaming", e);
+                self.gateway
+                    .chat_with_params(model, messages, None, None, tools, None)
+                    .await
+                    .map_err(|e| CoreError::Internal { message: e.to_string() })
+            }
+        }
+    }
+
+    async fn try_chat_stream_collecting(
+        &self,
+        model: &str,
+        messages: Vec<ChatMessage>,
+        tools: Option<Vec<Value>>,
+        ctx: &TaskContext,
+        agent: &AgentInstance,
+    ) -> Result<crate::gateway::unified_gateway::ChatCompletionResponse, CoreError> {
+        use crate::llm::stream_types::{ContentBlockDelta, StreamEvent};
+
+        let mut stream = self
+            .gateway
+            .stream_chat_with_params(model, messages, None, None, tools, None)
+            .await
+            .map_err(|e| CoreError::Internal { message: e.to_string() })?;
+
+        let role_str = agent.role.to_string();
+        let mut token_seq: u32 = 0;
+        while let Some(ev) = stream
+            .next_event()
+            .await
+            .map_err(|e| CoreError::Internal { message: format!("stream error: {}", e) })?
+        {
+            if let StreamEvent::ContentBlockDelta(d) = &ev {
+                let delta = match &d.delta {
+                    ContentBlockDelta::TextDelta { text } => Some((text.clone(), false)),
+                    ContentBlockDelta::ThinkingDelta { thinking } => Some((thinking.clone(), true)),
+                    _ => None,
+                };
+                if let (Some((text, is_reasoning)), Some(event_bus)) =
+                    (delta, self.event_bus.as_ref())
+                {
+                    if !text.is_empty() {
+                        token_seq += 1;
+                        let lc = ExecutionEvent {
+                            event_id: format!("evt_{}", uuid::Uuid::new_v4().hyphenated()),
+                            task_iri: ctx.task_iri.clone(),
+                            timestamp: chrono::Utc::now().timestamp_millis(),
+                            event: ExecutionEventKind::LlmContent(
+                                crate::core::execution_event::LlmContent {
+                                    agent_id: agent.agent_id.clone(),
+                                    role: role_str.clone(),
+                                    content_delta: text,
+                                    is_reasoning,
+                                    token_count: token_seq,
+                                },
+                            ),
+                        };
+                        let _ = event_bus
+                            .emit(
+                                &ctx.task_iri,
+                                "LLM_CONTENT",
+                                &agent.agent_id,
+                                &serde_json::to_string(&lc).unwrap_or_default(),
+                            )
+                            .await;
+                    }
+                }
+            }
+        }
+
+        // 聚合流式增量为与非流式一致的响应结构（复用已测试的 StreamAccumulator）。
+        let acc = stream.accumulator();
+        let content = acc.get_text();
+        let thinking = acc.thinking.clone();
+        let tool_calls: Vec<crate::gateway::unified_gateway::ResponseToolCall> = acc
+            .tool_calls
+            .iter()
+            .filter(|tc| !tc.name.is_empty())
+            .map(|tc| crate::gateway::unified_gateway::ResponseToolCall {
+                id: if tc.id.is_empty() {
+                    format!("call_{}", uuid::Uuid::new_v4().hyphenated())
+                } else {
+                    tc.id.clone()
+                },
+                call_type: "function".to_string(),
+                function: crate::gateway::unified_gateway::ResponseToolCallFunction {
+                    name: tc.name.clone(),
+                    arguments: tc.arguments.clone(),
+                },
+            })
+            .collect();
+
+        // 流式产出为空（无正文/推理/工具调用）视为异常，交由上层回退非流式。
+        if content.is_empty() && thinking.is_empty() && tool_calls.is_empty() {
+            return Err(CoreError::Internal {
+                message: "empty streaming response".to_string(),
+            });
+        }
+
+        let finish_reason = acc.finish_reason.clone().or_else(|| {
+            Some(if tool_calls.is_empty() { "stop" } else { "tool_calls" }.to_string())
+        });
+        let usage = acc
+            .usage
+            .as_ref()
+            .map(|u| crate::gateway::unified_gateway::Usage {
+                prompt_tokens: u.prompt_tokens,
+                completion_tokens: u.completion_tokens,
+                total_tokens: u.total_tokens,
+            });
+
+        Ok(crate::gateway::unified_gateway::ChatCompletionResponse {
+            id: None,
+            choices: vec![crate::gateway::unified_gateway::Choice {
+                index: 0,
+                message: crate::gateway::unified_gateway::ResponseMessage {
+                    role: "assistant".to_string(),
+                    content: Some(content),
+                    reasoning_content: if thinking.is_empty() { None } else { Some(thinking) },
+                    tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+                },
+                finish_reason,
+            }],
+            usage,
+        })
+    }
+
     async fn exec(
         &self,
         agent: &AgentInstance,
@@ -1088,28 +1233,20 @@ Output the summary report directly, not in JSON format."#,
                 tools.len()
             );
 
-            let response = self
-                .gateway
-                .chat_with_params(
-                    &model,
-                    messages.clone(),
-                    None,
-                    None,
-                    {
-                        // Refresh tools list before each call to ensure newly registered micro-tools (e.g. read_full_result_*) are included
-                        let current_tools = self
-                            .tool_executor
-                            .read()
-                            .expect("tool_executor RwLock poisoned")
-                            .tool_definitions_for_role(&agent.role.to_string());
-                        if current_tools.is_empty() { None } else { Some(current_tools) }
-                    },
-                    None,
-                )
-                .await
-                .map_err(|e| CoreError::Internal {
-                    message: e.to_string(),
-                })?;
+            let response = {
+                // Refresh tools list before each call to ensure newly registered
+                // micro-tools (e.g. read_full_result_*) are included.
+                let current_tools = self
+                    .tool_executor
+                    .read()
+                    .expect("tool_executor RwLock poisoned")
+                    .tool_definitions_for_role(&agent.role.to_string());
+                let tools = if current_tools.is_empty() { None } else { Some(current_tools) };
+                // 流式调用：逐 token 推送 LLM_CONTENT 供任务控制台「逐字输出」，
+                // 聚合回完整响应后主循环逻辑保持不变；失败自动回退非流式。
+                self.chat_stream_collecting(&model, messages.clone(), tools, &ctx, agent)
+                    .await?
+            };
 
             // Accumulate token usage
             if let Some(ref usage) = response.usage {

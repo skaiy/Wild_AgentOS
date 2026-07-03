@@ -253,6 +253,13 @@ impl MessageStream {
         }
         Ok(std::mem::take(&mut self.processor).into_response())
     }
+
+    /// Expose the internal accumulator so callers that drive a manual
+    /// `next_event()` loop (e.g. for real-time per-token side effects) can build
+    /// the aggregated result afterwards without post-processing.
+    pub fn accumulator(&self) -> &crate::llm::stream_types::StreamAccumulator {
+        self.processor.get_accumulator()
+    }
 }
 
 pub struct StreamingResponseBuilder {

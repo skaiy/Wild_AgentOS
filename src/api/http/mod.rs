@@ -2568,8 +2568,101 @@ async fn ingest_knowledge_base_handler(
     (StatusCode::OK, Json(json!({ "status": "ingested", "chunks": count, "namespace": namespace })))
 }
 
+/// 从序列化后的 ExecutionEvent payload 中取出内层某一 kind 的字段对象。
+fn exec_event_inner(payload: &str, kind: &str) -> Option<Value> {
+    let v: Value = serde_json::from_str(payload).ok()?;
+    v.get("event")?.get(kind).cloned()
+}
+
 fn convert_event_to_sse(event: &crate::core::event_bus::Event) -> Option<Event> {
     use crate::core::event_bus::EventType;
+
+    // 富执行事件（由 AgentRunner 内联发布到总线，payload 为序列化后的 ExecutionEvent）：
+    // 解析内层字段，映射为任务控制台可直接消费的干净 SSE 事件（思考/工具调用/逐字输出）。
+    match event.event_type.as_str() {
+        "THOUGHT" => {
+            let inner = exec_event_inner(&event.payload, "Thought")?;
+            return Some(Event::default().event("thought").data(json!({
+                "agent_id": inner.get("agent_id"),
+                "thought": inner.get("thought"),
+                "action": inner.get("action"),
+                "emphasis": inner.get("emphasis"),
+            }).to_string()));
+        }
+        "TOOL_CALL" => {
+            let inner = exec_event_inner(&event.payload, "ToolCall")?;
+            let args_raw = inner.get("arguments_json").and_then(|v| v.as_str()).unwrap_or("");
+            let arguments = serde_json::from_str::<Value>(args_raw)
+                .unwrap_or_else(|_| Value::String(args_raw.to_string()));
+            return Some(Event::default().event("tool_call").data(json!({
+                "call_id": inner.get("call_id"),
+                "tool_name": inner.get("tool_name"),
+                "arguments": arguments,
+                "agent_id": inner.get("agent_id"),
+                "sequence": inner.get("sequence"),
+            }).to_string()));
+        }
+        "TOOL_RESULT" => {
+            let inner = exec_event_inner(&event.payload, "ToolResult")?;
+            return Some(Event::default().event("tool_result").data(json!({
+                "call_id": inner.get("call_id"),
+                "tool_name": inner.get("tool_name"),
+                "result": inner.get("result"),
+                "success": inner.get("success"),
+                "agent_id": inner.get("agent_id"),
+            }).to_string()));
+        }
+        "LLM_CONTENT" => {
+            let inner = exec_event_inner(&event.payload, "LlmContent")?;
+            return Some(Event::default().event("llm_content").data(json!({
+                "agent_id": inner.get("agent_id"),
+                "role": inner.get("role"),
+                "delta": inner.get("content_delta"),
+                "is_reasoning": inner.get("is_reasoning"),
+            }).to_string()));
+        }
+        "PHASE_CHANGE" => {
+            let inner = exec_event_inner(&event.payload, "PhaseChange")?;
+            return Some(Event::default().event("phase_change").data(json!({
+                "from_phase": inner.get("from_phase"),
+                "to_phase": inner.get("to_phase"),
+                "agent_role": inner.get("agent_role"),
+                "reason": inner.get("reason"),
+            }).to_string()));
+        }
+        "AGENT_STATUS" => {
+            let inner = exec_event_inner(&event.payload, "AgentStatus")?;
+            return Some(Event::default().event("agent_status").data(json!({
+                "agent_id": inner.get("agent_id"),
+                "role": inner.get("role"),
+                "status": inner.get("status"),
+                "turn": inner.get("turn"),
+                "iteration": inner.get("iteration"),
+            }).to_string()));
+        }
+        "EXECUTION_ERROR" => {
+            let inner = exec_event_inner(&event.payload, "Error")?;
+            return Some(Event::default().event("error").data(json!({
+                "error_type": inner.get("error_type"),
+                "message": inner.get("message"),
+                "agent_id": inner.get("agent_id"),
+            }).to_string()));
+        }
+        // SA 逐阶段派发事件（Debug 角色名，如 "Plan_STARTED"）→ 相位指示。
+        "Plan_STARTED" | "Do_STARTED" | "Check_STARTED" | "Act_STARTED" => {
+            let (to_phase, role) = match event.event_type.as_str() {
+                "Plan_STARTED" => ("plan", "PA"),
+                "Do_STARTED" => ("do", "DA"),
+                "Check_STARTED" => ("check", "CA"),
+                _ => ("act", "AA"),
+            };
+            return Some(Event::default().event("phase_change").data(json!({
+                "to_phase": to_phase,
+                "agent_role": role,
+            }).to_string()));
+        }
+        _ => {}
+    }
 
     let event_type = EventType::from_str(&event.event_type);
     let (event_name, data) = match event_type {
