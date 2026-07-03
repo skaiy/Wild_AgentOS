@@ -118,6 +118,8 @@ pub struct ToolExecutor {
     hook_runner: Option<HookRunner>,
     tool_group_manager: Option<ToolGroupManager>,
     workspace_monitor: Arc<std::sync::RwLock<Option<Arc<WorkspaceMonitor>>>>,
+    /// 向量知识库（HyperspaceStore）：注入后 `kb_vector_search` 工具可做语义召回；None 时该工具返回空。
+    vector_store: Arc<std::sync::RwLock<Option<Arc<crate::memory::HyperspaceStore>>>>,
 }
 
 // Max micro-tool descriptions cap — removes oldest entries when exceeded.
@@ -156,6 +158,7 @@ impl ToolExecutor {
             hook_runner: None,
             tool_group_manager: None,
             workspace_monitor: Arc::new(std::sync::RwLock::new(None)),
+            vector_store: Arc::new(std::sync::RwLock::new(None)),
         };
         exe.register_builtins();
         exe
@@ -198,6 +201,13 @@ impl ToolExecutor {
 
     pub fn get_workspace_monitor(&self) -> Option<Arc<WorkspaceMonitor>> {
         self.workspace_monitor.read().ok().and_then(|g| g.clone())
+    }
+
+    /// 注入向量知识库，使 `kb_vector_search` 工具可对向量库做语义检索。
+    pub fn set_vector_store(&mut self, store: Arc<crate::memory::HyperspaceStore>) {
+        if let Ok(mut vs) = self.vector_store.write() {
+            *vs = Some(store);
+        }
     }
 
     /// Notify workspace_monitor that a file was read externally (e.g., via read_full_result).
@@ -617,6 +627,19 @@ impl ToolExecutor {
         }), Arc::new(move |input: Value| {
             let kg_store = kg_store_for_search.clone();
             Box::pin(async move { builtins::execute_knowledge_search(input, kg_store).await })
+        }), all);
+
+        let vector_store_for_search = self.vector_store.clone();
+        self.register("kb_vector_search", "Semantic (vector) retrieval over ingested knowledge bases. Use for natural-language questions where keyword matching fails (e.g. maintenance manuals, domain documents). Returns text chunks ranked by semantic similarity.", json!({
+            "properties": {
+                "query": {"type":"string","description":"Natural-language query for semantic retrieval."},
+                "namespace": {"type":"string","description":"Vector namespace to restrict search to a specific knowledge base (optional)."},
+                "limit": {"type":"integer","description":"Max number of results (1-20, default 5)."}
+            },
+            "required": ["query"]
+        }), Arc::new(move |input: Value| {
+            let vstore = vector_store_for_search.read().ok().and_then(|g| g.clone());
+            Box::pin(async move { builtins::execute_kb_vector_search(input, vstore).await })
         }), all);
 
         let kg_store_for_neighbors = self.kg_store.clone();

@@ -344,32 +344,35 @@ pub struct StreamEventResponse {
     pub data: Value,
 }
 
+/// 按 embedding 配置打开向量库（HyperspaceStore）。失败则返回 None（向量检索禁用，不影响图检索）。
+/// 供 build_router 与 gRPC 服务共用，确保 HTTP 路由、任务执行器与 SA 工具链共享**同一个**向量库实例。
+pub fn open_vector_store(
+    embedding: &crate::config::settings::EmbeddingSettings,
+) -> Option<Arc<HyperspaceStore>> {
+    let embed = crate::memory::embedding_service::create_embedding_service_from_config(embedding);
+    let vdir = data_dir().join("vector_store");
+    match HyperspaceStore::open(&vdir, embed) {
+        Ok(s) => Some(Arc::new(s)),
+        Err(e) => {
+            tracing::warn!("向量库初始化失败，向量检索禁用: {}", e);
+            None
+        }
+    }
+}
+
 pub fn build_router(
     core: Arc<SemanticCore>,
     gateway: Arc<UnifiedGateway>,
     kg_store: Arc<oxigraph::store::Store>,
     config_info: Value,
     agents_info: Value,
-    embedding: crate::config::settings::EmbeddingSettings,
+    vector_store: Option<Arc<HyperspaceStore>>,
     task_executor: Option<Arc<dyn TaskExecutor>>,
 ) -> Router {
     // 启动时加载用户态注册的技能并重新注册到内存技能表（默认技能由 SemanticCore 播种）。
     for skill in load_user_skills() {
         core.skills.register_skill(skill);
     }
-
-    // 向量库：按 embedding 配置初始化 HyperspaceStore；失败则禁用向量检索（不影响图检索）。
-    let vector_store: Option<Arc<HyperspaceStore>> = {
-        let embed = crate::memory::embedding_service::create_embedding_service_from_config(&embedding);
-        let vdir = data_dir().join("vector_store");
-        match HyperspaceStore::open(&vdir, embed) {
-            Ok(s) => Some(Arc::new(s)),
-            Err(e) => {
-                tracing::warn!("向量库初始化失败，向量检索禁用: {}", e);
-                None
-            }
-        }
-    };
 
     let state = Arc::new(AppState {
         core,
@@ -420,6 +423,7 @@ pub fn build_router(
         .route("/api/v1/kb/bases", get(list_knowledge_bases_handler).post(create_knowledge_base_handler))
         .route("/api/v1/kb/bases/:id", delete(delete_knowledge_base_handler))
         .route("/api/v1/kb/bases/:id/ingest", post(ingest_knowledge_base_handler))
+        .route("/api/v1/kb/bases/:id/search", post(search_knowledge_base_handler))
         .route("/api/v1/agents", get(list_agents_handler).post(create_agent_handler))
         .route("/api/v1/agents/:id", put(update_agent_handler).delete(delete_agent_handler))
         .route("/api/v1/agents/:id/graph", post(bind_agent_graph_handler))
@@ -2566,6 +2570,74 @@ async fn ingest_knowledge_base_handler(
         }
     }
     (StatusCode::OK, Json(json!({ "status": "ingested", "chunks": count, "namespace": namespace })))
+}
+
+#[derive(Deserialize)]
+pub struct SearchRequest {
+    pub query: String,
+    #[serde(default)]
+    pub limit: Option<u64>,
+}
+
+/// POST /api/v1/kb/bases/:id/search — 对向量知识库做语义相似检索（供 admin/QA 直接验证召回）。
+async fn search_knowledge_base_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<SearchRequest>,
+) -> impl IntoResponse {
+    let query = req.query.trim().to_string();
+    if query.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "query 不能为空" })));
+    }
+    let kb = {
+        let guard = state.knowledge_bases.read().await;
+        guard
+            .iter()
+            .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .cloned()
+    };
+    let kb = match kb {
+        Some(k) => k,
+        None => return (StatusCode::NOT_FOUND, Json(json!({ "error": "knowledge base not found", "id": id }))),
+    };
+    if kb.get("kb_type").and_then(|v| v.as_str()) != Some("vector") {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "仅向量知识库支持 search" })));
+    }
+    let namespace = kb
+        .get("vector_namespace")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if namespace.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "该向量库缺少 vector_namespace" })));
+    }
+    let store = match &state.vector_store {
+        Some(s) => s.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "向量库未启用（embedding 初始化失败）" })),
+            )
+        }
+    };
+    let limit = req.limit.unwrap_or(5).clamp(1, 20);
+    let filter = HybridSearchFilter::new().with_named_graph(namespace.clone());
+    match store.search_with_filter(&query, &filter, limit).await {
+        Ok(hits) => {
+            let results: Vec<Value> = hits
+                .iter()
+                .map(|h| json!({ "text": h.text, "score": h.score, "iri": h.iri, "tags": h.tags }))
+                .collect();
+            (
+                StatusCode::OK,
+                Json(json!({ "count": results.len(), "namespace": namespace, "results": results })),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("检索失败: {e}") })),
+        ),
+    }
 }
 
 /// 从序列化后的 ExecutionEvent payload 中取出内层某一 kind 的字段对象。

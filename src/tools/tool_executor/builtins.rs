@@ -13,12 +13,71 @@ use crate::knowledge_graph::extractor::KnowledgeExtractor;
 use crate::knowledge_graph::ontology::OntologyManager;
 use crate::knowledge_graph::rdf_mapper::RdfMapper;
 use crate::knowledge_graph::store::KnowledgeGraphStore;
+use crate::memory::{HybridSearchFilter, HyperspaceStore};
 use crate::knowledge_graph::types::{BridgeRelationType, NodeDef, EdgeDef, RdfQuad, RdfValue};
 use crate::utils::text::safe_truncate;
 
 use super::{GlobSearchInput, GrepSearchInput, ToolSearchInput, WebFetchInput, WebSearchInput};
 
 // ========== Tool implementations ==========
+
+/// `kb_vector_search`：对向量知识库做语义相似检索。store 为 None（向量库未启用）时返回空结果。
+pub(super) async fn execute_kb_vector_search(
+    input: Value,
+    store: Option<Arc<HyperspaceStore>>,
+) -> Result<Value, String> {
+    let query = input
+        .get("query")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if query.is_empty() {
+        return Err("query 不能为空".to_string());
+    }
+    let limit = input
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5)
+        .clamp(1, 20);
+    let namespace = input
+        .get("namespace")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty());
+
+    let store = match store {
+        Some(s) => s,
+        None => {
+            return Ok(json!({
+                "count": 0,
+                "results": [],
+                "note": "向量库未启用（embedding 初始化失败或未配置）"
+            }))
+        }
+    };
+
+    let filter = match &namespace {
+        Some(ns) => HybridSearchFilter::new().with_named_graph(ns.clone()),
+        None => HybridSearchFilter::new(),
+    };
+    let hits = store
+        .search_with_filter(&query, &filter, limit)
+        .await
+        .map_err(|e| format!("向量检索失败: {e}"))?;
+    let results: Vec<Value> = hits
+        .iter()
+        .map(|h| {
+            json!({
+                "text": h.text,
+                "score": h.score,
+                "iri": h.iri,
+                "tags": h.tags,
+            })
+        })
+        .collect();
+    Ok(json!({ "count": results.len(), "results": results }))
+}
 
 pub(super) async fn execute_glob_search(input: Value) -> Result<Value, String> {
     let params: GlobSearchInput =

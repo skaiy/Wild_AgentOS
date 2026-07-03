@@ -25,6 +25,7 @@ use crate::memory::memory_manager::MemoryManager;
 use crate::memory::prefetch_engine::PrefetchEngine;
 use crate::memory::scheduler::MemoryScheduler;
 use crate::memory::unified_graph::UnifiedGraphStore;
+use crate::memory::HyperspaceStore;
 use crate::skill_graph::graph_store::SkillGraphStore;
 use crate::templates::template_engine::TemplateEngine;
 use crate::tools::skill_registry::SkillRegistry;
@@ -54,6 +55,8 @@ pub struct AgentOSService {
     scheduler: Arc<MemoryScheduler>,
     prefetch: Arc<PrefetchEngine>,
     unified_graph: Arc<UnifiedGraphStore>,
+    /// 向量知识库（HyperspaceStore）：由 HTTP 路由、任务执行器与 SA 工具链共享的同一实例。
+    vector_store: Option<Arc<HyperspaceStore>>,
     execution_states: Arc<RwLock<HashMap<String, ExecutionState>>>,
     /// Batch Agent manager, post-new async initialization
     batch_manager: tokio::sync::Mutex<Option<BatchAgentManager>>,
@@ -244,6 +247,9 @@ impl AgentOSService {
             mgr
         };
 
+        // 向量库：与 HTTP 路由共用同一实例，避免对同一目录打开两个 HyperspaceStore 句柄。
+        let vector_store = crate::api::http::open_vector_store(&settings.embedding);
+
         let s = Self {
             settings,
             gateway,
@@ -258,6 +264,7 @@ impl AgentOSService {
             scheduler,
             prefetch,
             unified_graph,
+            vector_store,
             execution_states: Arc::new(RwLock::new(HashMap::new())),
             batch_manager: tokio::sync::Mutex::new(Some(batch_mgr)),
         };
@@ -306,9 +313,10 @@ impl AgentOSService {
             prefetch: self.prefetch.clone(),
             unified_graph: self.unified_graph.clone(),
             event_bus: self.event_bus.clone(),
+            vector_store: self.vector_store.clone(),
             settings: self.settings.clone(),
         }));
-        crate::api::http::build_router(core, self.gateway.clone(), self.unified_graph.store(), config_info, agents_info, self.settings.embedding.clone(), task_executor)
+        crate::api::http::build_router(core, self.gateway.clone(), self.unified_graph.store(), config_info, agents_info, self.vector_store.clone(), task_executor)
     }
 
     /// 构造已脱敏的运行期配置快照（不暴露 api_key 明文，仅暴露是否已配置）。
@@ -370,6 +378,7 @@ impl AgentOSService {
             self.prefetch.clone(),
             self.unified_graph.clone(),
             self.event_bus.clone(),
+            self.vector_store.clone(),
             settings,
         )
     }
@@ -397,6 +406,7 @@ fn build_supervisor_agent(
     prefetch: Arc<PrefetchEngine>,
     unified_graph: Arc<UnifiedGraphStore>,
     event_bus: Arc<EventBus>,
+    vector_store: Option<Arc<HyperspaceStore>>,
     settings: &Settings,
 ) -> SupervisorAgent {
     // initialize WorkspaceMonitor (if workspace root is configured)
@@ -449,6 +459,10 @@ fn build_supervisor_agent(
         if let Some(ref wm) = workspace_monitor_opt {
             executor.set_workspace_monitor(wm.clone());
         }
+        // 注入向量库，使 SA 工具链的 kb_vector_search 可做语义召回
+        if let Some(ref vs) = vector_store {
+            executor.set_vector_store(vs.clone());
+        }
     }
 
     // register WorkspaceMonitor hooks into AgentRunner's hook_manager
@@ -485,6 +499,7 @@ pub struct HttpTaskExecutor {
     prefetch: Arc<PrefetchEngine>,
     unified_graph: Arc<UnifiedGraphStore>,
     event_bus: Arc<EventBus>,
+    vector_store: Option<Arc<HyperspaceStore>>,
     settings: Settings,
 }
 
@@ -502,6 +517,7 @@ impl crate::api::http::TaskExecutor for HttpTaskExecutor {
             self.prefetch.clone(),
             self.unified_graph.clone(),
             self.event_bus.clone(),
+            self.vector_store.clone(),
             &self.settings,
         );
 
