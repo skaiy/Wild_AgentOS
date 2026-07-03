@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![gRPC](https://img.shields.io/badge/gRPC-Protocol-green.svg)](https://grpc.io/)
 [![Knowledge Graph](https://img.shields.io/badge/Knowledge%20Graph-Oxigraph-purple.svg)](https://oxigraph.org/)
-[![Release](https://img.shields.io/badge/release-v0.1.2-blue)](https://github.com/doiito/gliding_horse/releases)
+[![Release](https://img.shields.io/badge/release-v0.1.3-blue)](https://github.com/doiito/gliding_horse/releases)
 
 ---
 
@@ -26,11 +26,28 @@
 
 ---
 
+## 🎉 v0.1.3 正式发布
+
+我们自豪地宣布 **流马智能体操作系统 v0.1.3 正式发布**。
+
+**v0.1.3 新增核心特性：**
+
+| 特性 | 说明 |
+|------|------|
+| **因果引擎 (Causal Engine)** | 全新独立因果分析子系统，包含 `CausalEngine`、`FusionEngine`、`CausalStore` 和类型化 `CausalFactor`。支持跨智能体操作的因果推理，融合多因子分析——识别根因、传播故障链、计算智能体决策的因果图。 |
+| **统一图后端 (Graph Backend)** | 整合的 `GraphBackend`（约 1200 行）替代碎片化的图存储——提供统一的节点/边 CRUD 优化接口，支持批量操作、子图提取和跨知识层的路径查找。 |
+| **图特征计算 (Graph Features)** | 新增 `graph_features` 模块，计算结构特征向量（度中心性、聚类系数、PageRank、介数中心性），并通过特征距离比较实现图相似度评分。支持跨认知快照的定量图分析。 |
+| **快照时间线 (Snapshot Timeline)** | 基于时间线的会话状态快照管理。`SnapshotTimeline` 支持时序查询、时间点恢复和基于差异的回滚——完整历史遍历的防崩溃恢复。 |
+| **自我意识模块重构** | 自我意识（SA）模块重大重写（+410 行），增强智能体状态监控、环境感知和自适应行为。与因果引擎集成实现自动自我诊断。 |
+| **5W2H 维度审计增强** | 扩展了维度级审计功能，每个维度增加了更深层的因果归因。What/Why 失败现可链入因果引擎进行自动根因分析。 |
+| **高级特性设计文档** | 新增全面的 [`ADVANCED_FEATURES_DESIGN.md`](docs/ADVANCED_FEATURES_DESIGN.md)，涵盖图后端架构、因果推理设计、时间线快照语义和性能基准。 |
+| **图后端基准测试** | 新增基准测试套件（`benches/bench_graph_backend.rs`），涵盖节点/边读写、子图提取和路径查找吞吐量。 |
+| **Gliding Code TUI 优化** | 终端客户端的引擎和 TUI 改进——更好的 Markdown 渲染、增强的 MCP 服务器生命周期管理、内部重构以提升可维护性。 |
+| **Bug 修复** | 修复了 L2 `write_node` 中的重复二级索引更新问题，该问题在并发写入时会导致索引不一致。 |
+
+---
+
 ## 🎉 v0.1.2 正式发布
-
-我们自豪地宣布 **Gliding Horse Agent OS v0.1.2 正式版** 发布。
-
-**v0.1.2 新增核心特性：**
 
 | 特性 | 说明 |
 |------|------|

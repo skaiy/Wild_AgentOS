@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![gRPC](https://img.shields.io/badge/gRPC-Protocol-green.svg)](https://grpc.io/)
 [![Knowledge Graph](https://img.shields.io/badge/Knowledge%20Graph-Oxigraph-purple.svg)](https://oxigraph.org/)
-[![Release](https://img.shields.io/badge/release-v0.1.2-blue)](https://github.com/doiito/gliding_horse/releases)
+[![Release](https://img.shields.io/badge/release-v0.1.3-blue)](https://github.com/doiito/gliding_horse/releases)
 
 ---
 
@@ -23,6 +23,27 @@
 [**B站播客**](https://space.bilibili.com/1547455799/lists)
 
 </div>
+
+---
+
+## 🎉 v0.1.3 Release
+
+We are proud to announce the **v0.1.3 release** of Gliding Horse Agent OS.
+
+**What's new in v0.1.3:**
+
+| Feature | Description |
+|---------|-------------|
+| **Causal Engine** | New standalone causal analysis subsystem with `CausalEngine`, `FusionEngine`, `CausalStore`, and typed `CausalFactor`. Enables causal reasoning across agent operations with fused multi-factor analysis — identifies root causes, propagates failure chains, and computes causal graphs for agent decisions. |
+| **Unified Graph Backend** | Consolidated `GraphBackend` (~1,200 LOC) replacing fragmented graph storage — provides a single, optimized interface for node/edge CRUD with batch operations, subgraph extraction, and path-finding across all knowledge layers. |
+| **Graph Features Computation** | New `graph_features` module computing structural feature vectors (degree centrality, clustering coefficient, PageRank, betweenness) and graph similarity scoring via feature-distance comparison. Enables quantitative graph analysis and comparison across cognitive snapshots. |
+| **Snapshot Timeline** | Session state snapshots with timeline-based version management. `SnapshotTimeline` enables temporal queries, point-in-time restoration, and diff-based rollback — crash-proof recovery with full history traversal. |
+| **Self-Awareness (SA) Overhaul** | Major rewrite of the self-awareness module (+410 lines) with enhanced monitoring of agent state, environment perception, and adaptive behavior. Integrated with the causal engine for self-diagnosis. |
+| **5W2H Dimension Audit Enhancement** | Expanded dimension-level audit in `src/core/five_w2h.rs` with deeper causal attribution per dimension. What/Why failures now chain into the causal engine for automated root-cause analysis. |
+| **Advanced Features Design** | Comprehensive [`ADVANCED_FEATURES_DESIGN.md`](docs/ADVANCED_FEATURES_DESIGN.md) document covering graph backend architecture, causal reasoning design, timeline-based snapshot semantics, and performance benchmarks. |
+| **Graph Backend Benchmarks** | New benchmark suite (`benches/bench_graph_backend.rs`) measuring node/edge R/W, subgraph extraction, and path-finding throughput. |
+| **Gliding Code TUI Refinements** | Engine and TUI improvements in the terminal client — better Markdown rendering, enhanced MCP server lifecycle, and internal refactoring for maintainability. |
+| **Bug Fixes** | Fixed duplicate secondary-index update in L2 `write_node` that caused inconsistent indexing under concurrent writes. |
 
 ---
 
