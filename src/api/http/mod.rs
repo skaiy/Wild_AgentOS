@@ -51,6 +51,28 @@ pub struct AppState {
     pub knowledge_packs: Arc<tokio::sync::RwLock<Vec<Value>>>,
     /// 向量库（HyperspaceStore，按 embedding 配置初始化；初始化失败则为 None，向量检索禁用）。
     pub vector_store: Option<Arc<HyperspaceStore>>,
+    /// 任务执行器（productized 抽象）：由 build_http_router 注入，驱动 SA 跑 PDCA 管线并向共享事件总线推送执行事件。
+    /// 为 None 时（仅测试态）流式任务不会真正执行，处理器会即时推送 TASK_FAILED 以避免前端卡在「启动中」。
+    pub task_executor: Option<Arc<dyn TaskExecutor>>,
+}
+
+/// 流式任务执行规格：由 HTTP 流处理器构造并传入执行器。
+#[derive(Clone)]
+pub struct TaskExecSpec {
+    pub prompt: String,
+    pub task_iri: String,
+    pub include_thought: bool,
+    pub include_tool_calls: bool,
+}
+
+/// 任务执行器抽象：把「触发并驱动一次任务端到端执行」与 HTTP 传输层解耦。
+///
+/// 实现方（`api::grpc::server::HttpTaskExecutor`）持有已运行服务的共享运行态
+/// （EventBus / Blackboard / Gateway / 内存分层等），在后台跑 SA 的 PDCA 管线，
+/// 并把执行事件发布到**同一条**共享事件总线，供 `stream_task_handler` 的 SSE 循环转发给前端。
+#[async_trait::async_trait]
+pub trait TaskExecutor: Send + Sync {
+    async fn execute(&self, spec: TaskExecSpec);
 }
 
 /// 持久化数据目录；可由 AGENTOS_DATA_DIR 覆盖（便于测试隔离），缺省为 "data"。
@@ -329,6 +351,7 @@ pub fn build_router(
     config_info: Value,
     agents_info: Value,
     embedding: crate::config::settings::EmbeddingSettings,
+    task_executor: Option<Arc<dyn TaskExecutor>>,
 ) -> Router {
     // 启动时加载用户态注册的技能并重新注册到内存技能表（默认技能由 SemanticCore 播种）。
     for skill in load_user_skills() {
@@ -361,6 +384,7 @@ pub fn build_router(
         knowledge_bases: Arc::new(tokio::sync::RwLock::new(load_knowledge_bases())),
         knowledge_packs: Arc::new(tokio::sync::RwLock::new(load_knowledge_packs())),
         vector_store,
+        task_executor,
     });
 
     Router::new()
@@ -1096,7 +1120,38 @@ async fn stream_task_handler(
 
     let event_bus = state.core.events.clone();
     let task_iri_clone = task_iri.clone();
+    // 订阅必须早于触发执行，避免执行器早期推送的事件在订阅前丢失。
     let mut rx = event_bus.subscribe();
+
+    // 触发实际执行：经注入的 TaskExecutor 在后台驱动 SA PDCA 管线，
+    // 执行事件会发布到同一条共享事件总线，由下方 SSE 循环转发给前端。
+    match state.task_executor.clone() {
+        Some(executor) => {
+            let spec = TaskExecSpec {
+                prompt: req.prompt.clone(),
+                task_iri: task_iri.clone(),
+                include_thought: req.include_thought.unwrap_or(true),
+                include_tool_calls: req.include_tool_calls.unwrap_or(true),
+            };
+            tokio::spawn(async move {
+                executor.execute(spec).await;
+            });
+        }
+        None => {
+            // 未注入执行器（仅测试态）：即时推送失败事件，避免前端卡在「启动中」。
+            let bus = event_bus.clone();
+            let ti = task_iri.clone();
+            tokio::spawn(async move {
+                bus.emit(
+                    &ti,
+                    "TASK_FAILED",
+                    "http",
+                    &json!({"status": "failed", "summary": "task executor not configured"}).to_string(),
+                )
+                .await;
+            });
+        }
+    }
 
     let stream = async_stream::stream! {
         yield Ok::<axum::response::sse::Event, std::convert::Infallible>(Event::default().event("task_started").data(json!({
@@ -2851,6 +2906,7 @@ mod tests {
             knowledge_bases: Arc::new(tokio::sync::RwLock::new(vec![])),
             knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
             vector_store: None,
+            task_executor: None,
         });
 
         // 构造 Router 并发起 GET /api/v1/config 请求
@@ -2922,6 +2978,7 @@ mod tests {
             knowledge_bases: Arc::new(tokio::sync::RwLock::new(vec![])),
             knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
             vector_store: None,
+            task_executor: None,
         });
 
         let router = Router::new()
@@ -3143,6 +3200,7 @@ mod skill_manifest_tests {
             knowledge_bases: Arc::new(tokio::sync::RwLock::new(vec![])),
             knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
             vector_store: None,
+            task_executor: None,
         })
     }
 

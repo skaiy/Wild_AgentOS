@@ -294,7 +294,21 @@ impl AgentOSService {
             }).collect();
             serde_json::json!({ "count": agents.len(), "agents": agents })
         };
-        crate::api::http::build_router(core, self.gateway.clone(), self.unified_graph.store(), config_info, agents_info, self.settings.embedding.clone())
+        // 注入任务执行器：复用服务的共享运行态，使 HTTP `/api/v1/tasks/stream` 能真正触发 SA 执行。
+        let task_executor: Option<Arc<dyn crate::api::http::TaskExecutor>> = Some(Arc::new(HttpTaskExecutor {
+            gateway: self.gateway.clone(),
+            skills: self.skills.clone(),
+            blackboard: self.blackboard.clone(),
+            l0: self.l0.clone(),
+            memory_manager: self.memory_manager.clone(),
+            templates: self.templates.clone(),
+            scheduler: self.scheduler.clone(),
+            prefetch: self.prefetch.clone(),
+            unified_graph: self.unified_graph.clone(),
+            event_bus: self.event_bus.clone(),
+            settings: self.settings.clone(),
+        }));
+        crate::api::http::build_router(core, self.gateway.clone(), self.unified_graph.store(), config_info, agents_info, self.settings.embedding.clone(), task_executor)
     }
 
     /// 构造已脱敏的运行期配置快照（不暴露 api_key 明文，仅暴露是否已配置）。
@@ -345,83 +359,188 @@ impl AgentOSService {
     }
 
     fn create_sa(&self, settings: &Settings) -> SupervisorAgent {
-        // initialize WorkspaceMonitor (if workspace root is configured)
-        let workspace_root_path: Option<std::path::PathBuf> = settings.workspace.root.as_ref().map(|s| std::path::PathBuf::from(s));
-        let workspace_monitor_opt: Option<Arc<WorkspaceMonitor>> = if let Some(ref ws_root) = workspace_root_path {
-            let ws_config = WorkspaceMonitorConfig {
-                workspace_root: ws_root.clone(),
-                exclude_patterns: settings.workspace.exclude_patterns.clone(),
-                watch_enabled: settings.workspace.watch_enabled,
-                content_store_max_bytes: settings.workspace.content_store_max_bytes,
-                ..Default::default()
-            };
-            match WorkspaceMonitor::initialize(ws_config, Some(self.blackboard.clone()), Some(self.event_bus.clone())) {
-                Ok(ws) => {
-                    tracing::info!(root = %ws_root.display(), "WorkspaceMonitor initialized");
-                    Some(Arc::new(ws))
-                }
-                Err(e) => {
-                    tracing::warn!("WorkspaceMonitor init failed: {}, using default workspace settings", e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        let mut runner_builder = AgentRunner::new(
+        build_supervisor_agent(
             self.gateway.clone(),
             self.skills.clone(),
             self.blackboard.clone(),
             self.l0.clone(),
             self.memory_manager.clone(),
             self.templates.clone(),
-            settings.agents.clone(),
-        )
-        .with_scheduler(self.scheduler.clone())
-        .with_prefetch_engine(self.prefetch.clone())
-        .with_unified_graph_store(self.unified_graph.store());
-        if let Some(ref ws_root) = workspace_root_path {
-            runner_builder = runner_builder.with_workspace_root(ws_root.clone());
-        }
-
-        let runner = Arc::new(runner_builder);
-
-        {
-            let ug_store = self.unified_graph.store();
-            let mut executor = runner.tool_executor.write().expect("tool_executor RwLock poisoned");
-            executor.set_unified_kg_store(ug_store);
-            // set workspace_monitor on ToolExecutor
-            if let Some(ref wm) = workspace_monitor_opt {
-                executor.set_workspace_monitor(wm.clone());
-            }
-        }
-
-        // register WorkspaceMonitor hooks into AgentRunner's hook_manager
-        if let Some(ref wm) = workspace_monitor_opt {
-            wm.register_hooks(&runner.hook_manager);
-        }
-
-        // complete AgentRunner init wiring: perception_store → WorkspaceMonitor
-        runner.finalize_setup();
-
-        let mut sa = SupervisorAgent::with_pdca_cycles(
-            runner,
-            self.templates.clone(),
-            self.skills.clone(),
+            self.scheduler.clone(),
+            self.prefetch.clone(),
+            self.unified_graph.clone(),
             self.event_bus.clone(),
-            settings.agents.max_iterations,
-            settings.agents.max_pdca_cycles,
-        );
-
-        sa = sa.with_memory(Some(self.blackboard.clone()), Some(self.prefetch.clone()), Some(self.scheduler.clone()));
-        sa
+            settings,
+        )
     }
 
     fn apply_request_settings(&self, req: &impl RequestSettings) -> Settings {
         let mut settings = self.settings.clone();
         req.apply_to(&mut settings);
         settings
+    }
+}
+
+/// 从共享运行态组件装配一个 SupervisorAgent（PDCA 管线）。
+///
+/// gRPC 的 `create_sa` 与 HTTP 的 `HttpTaskExecutor` 共用此函数，避免重复装配逻辑，
+/// 并确保两条入口用的是**同一套**共享运行态（EventBus / Blackboard / 内存分层 / KG）。
+#[allow(clippy::too_many_arguments)]
+fn build_supervisor_agent(
+    gateway: Arc<UnifiedGateway>,
+    skills: Arc<SkillRegistry>,
+    blackboard: Arc<Blackboard>,
+    l0: Arc<L0Store>,
+    memory_manager: Arc<tokio::sync::Mutex<MemoryManager>>,
+    templates: Arc<TemplateEngine>,
+    scheduler: Arc<MemoryScheduler>,
+    prefetch: Arc<PrefetchEngine>,
+    unified_graph: Arc<UnifiedGraphStore>,
+    event_bus: Arc<EventBus>,
+    settings: &Settings,
+) -> SupervisorAgent {
+    // initialize WorkspaceMonitor (if workspace root is configured)
+    let workspace_root_path: Option<std::path::PathBuf> = settings.workspace.root.as_ref().map(|s| std::path::PathBuf::from(s));
+    let workspace_monitor_opt: Option<Arc<WorkspaceMonitor>> = if let Some(ref ws_root) = workspace_root_path {
+        let ws_config = WorkspaceMonitorConfig {
+            workspace_root: ws_root.clone(),
+            exclude_patterns: settings.workspace.exclude_patterns.clone(),
+            watch_enabled: settings.workspace.watch_enabled,
+            content_store_max_bytes: settings.workspace.content_store_max_bytes,
+            ..Default::default()
+        };
+        match WorkspaceMonitor::initialize(ws_config, Some(blackboard.clone()), Some(event_bus.clone())) {
+            Ok(ws) => {
+                tracing::info!(root = %ws_root.display(), "WorkspaceMonitor initialized");
+                Some(Arc::new(ws))
+            }
+            Err(e) => {
+                tracing::warn!("WorkspaceMonitor init failed: {}, using default workspace settings", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut runner_builder = AgentRunner::new(
+        gateway.clone(),
+        skills.clone(),
+        blackboard.clone(),
+        l0.clone(),
+        memory_manager.clone(),
+        templates.clone(),
+        settings.agents.clone(),
+    )
+    .with_scheduler(scheduler.clone())
+    .with_prefetch_engine(prefetch.clone())
+    .with_unified_graph_store(unified_graph.store());
+    if let Some(ref ws_root) = workspace_root_path {
+        runner_builder = runner_builder.with_workspace_root(ws_root.clone());
+    }
+
+    let runner = Arc::new(runner_builder);
+
+    {
+        let ug_store = unified_graph.store();
+        let mut executor = runner.tool_executor.write().expect("tool_executor RwLock poisoned");
+        executor.set_unified_kg_store(ug_store);
+        // set workspace_monitor on ToolExecutor
+        if let Some(ref wm) = workspace_monitor_opt {
+            executor.set_workspace_monitor(wm.clone());
+        }
+    }
+
+    // register WorkspaceMonitor hooks into AgentRunner's hook_manager
+    if let Some(ref wm) = workspace_monitor_opt {
+        wm.register_hooks(&runner.hook_manager);
+    }
+
+    // complete AgentRunner init wiring: perception_store → WorkspaceMonitor
+    runner.finalize_setup();
+
+    let mut sa = SupervisorAgent::with_pdca_cycles(
+        runner,
+        templates.clone(),
+        skills.clone(),
+        event_bus.clone(),
+        settings.agents.max_iterations,
+        settings.agents.max_pdca_cycles,
+    );
+
+    sa = sa.with_memory(Some(blackboard.clone()), Some(prefetch.clone()), Some(scheduler.clone()));
+    sa
+}
+
+/// HTTP/SSE 任务执行器：持有已运行服务的共享运行态，在后台驱动 SA PDCA 管线，
+/// 并把执行事件（phase / completion）发布到共享事件总线，供 SSE 流转发给前端。
+pub struct HttpTaskExecutor {
+    gateway: Arc<UnifiedGateway>,
+    skills: Arc<SkillRegistry>,
+    blackboard: Arc<Blackboard>,
+    l0: Arc<L0Store>,
+    memory_manager: Arc<tokio::sync::Mutex<MemoryManager>>,
+    templates: Arc<TemplateEngine>,
+    scheduler: Arc<MemoryScheduler>,
+    prefetch: Arc<PrefetchEngine>,
+    unified_graph: Arc<UnifiedGraphStore>,
+    event_bus: Arc<EventBus>,
+    settings: Settings,
+}
+
+#[async_trait::async_trait]
+impl crate::api::http::TaskExecutor for HttpTaskExecutor {
+    async fn execute(&self, spec: crate::api::http::TaskExecSpec) {
+        let mut sa = build_supervisor_agent(
+            self.gateway.clone(),
+            self.skills.clone(),
+            self.blackboard.clone(),
+            self.l0.clone(),
+            self.memory_manager.clone(),
+            self.templates.clone(),
+            self.scheduler.clone(),
+            self.prefetch.clone(),
+            self.unified_graph.clone(),
+            self.event_bus.clone(),
+            &self.settings,
+        );
+
+        let emitter = ExecutionEventEmitter::with_options(
+            &spec.task_iri,
+            None,
+            Some(self.event_bus.clone()),
+            spec.include_thought,
+            spec.include_tool_calls,
+        );
+        emitter.emit_phase_change("idle", "plan", "PA", "Task started");
+
+        match sa.process_task(&spec.prompt, &spec.task_iri).await {
+            Ok(result) => {
+                emitter.emit_completion(&result.status, &result.summary, result.output.clone());
+                // 显式在共享总线上推送终态，供 SSE 循环终止并转发 completion 给前端。
+                let event_type = if result.status == "failed" { "TASK_FAILED" } else { "TASK_COMPLETED" };
+                self.event_bus
+                    .emit(
+                        &spec.task_iri,
+                        event_type,
+                        "SA",
+                        &serde_json::json!({"status": result.status, "summary": result.summary}).to_string(),
+                    )
+                    .await;
+            }
+            Err(e) => {
+                emitter.emit_error("ExecutionError", &e.to_string(), "SA", false);
+                emitter.emit_completion("failed", &e.to_string(), None);
+                self.event_bus
+                    .emit(
+                        &spec.task_iri,
+                        "TASK_FAILED",
+                        "SA",
+                        &serde_json::json!({"status": "failed", "summary": e.to_string()}).to_string(),
+                    )
+                    .await;
+            }
+        }
     }
 }
 
