@@ -403,10 +403,12 @@ pub fn build_router(
     Router::new()
         .route("/health", get(health_handler))
         .route("/metrics", get(metrics_handler))
+        .route("/api/v1/memory/unified-stats", get(unified_stats_handler))
         .route("/api/v1/config", get(config_handler).put(update_config_handler))
         .route("/api/v1/tasks", post(create_task_handler))
         .route("/api/v1/tasks/:task_iri", get(get_task_handler))
         .route("/api/v1/tasks/stream", post(stream_task_handler))
+        .route("/api/v1/tasks/trends", get(list_task_trends_handler))
         .route("/api/v1/tasks/:task_iri/status", get(get_realtime_status_handler))
         .route("/api/v1/tasks/:task_iri/details", get(get_execution_details_handler))
         .route("/api/v1/nodes", post(write_node_handler))
@@ -468,6 +470,87 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
         "subscribers": state.core.events.subscriber_count(),
         "skills": state.core.skills.skill_count(),
         "checkpoints": state.core.checkpoints.checkpoint_count(),
+    }))
+}
+
+/// GET /api/v1/memory/unified-stats — 记忆与知识运维中心的薄聚合只读端点。
+/// 一次性返回系统记忆四层(L0-L3) + 业务知识(知识库/知识包/本体) + 运行时的真实规模，
+/// 供记忆中心/知识中心顶部 Dashboard 消费。L1/L3 当前无枚举接口，返回 null 并附说明。
+async fn unified_stats_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    // ── L0 长期记忆 ──
+    let l0_entries = match state.core.l0_store.count() {
+        Ok(c) => json!(c),
+        Err(e) => {
+            tracing::warn!("unified-stats: L0 count failed: {}", e);
+            json!(null)
+        }
+    };
+
+    // ── L2 黑板 ──
+    let l2_nodes = state.core.blackboard.node_count();
+    let l2_bytes = state.core.blackboard.total_bytes();
+    let l2_tasks = state.core.blackboard.list_task_summaries().len() as u64;
+
+    // ── 业务知识：知识库（按类型分桶）+ 知识包 ──
+    let (kb_total, kb_vector, kb_graph) = {
+        let bases = state.knowledge_bases.read().await;
+        let vector = bases
+            .iter()
+            .filter(|b| b.get("kb_type").and_then(|v| v.as_str()) == Some("vector"))
+            .count() as u64;
+        let graph = bases
+            .iter()
+            .filter(|b| b.get("kb_type").and_then(|v| v.as_str()) == Some("graph"))
+            .count() as u64;
+        (bases.len() as u64, vector, graph)
+    };
+    let kb_packs = state.knowledge_packs.read().await.len() as u64;
+
+    // ── 本体层 ──
+    let ont = crate::knowledge_graph::ontology_layer::ev_repair_ontology();
+
+    Json(json!({
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "memory_tiers": {
+            "l0_longterm": {
+                "entries": l0_entries,
+                "description": "Persistent long-term store (redb)"
+            },
+            "l1_session": {
+                "sessions": null,
+                "description": "In-memory session storage (not enumerable)"
+            },
+            "l2_blackboard": {
+                "nodes": l2_nodes,
+                "bytes": l2_bytes,
+                "tasks": l2_tasks,
+                "description": "Shared cross-agent blackboard (Oxigraph)"
+            },
+            "l3_projection": {
+                "projections": null,
+                "description": "Derived projection cache (stats not exposed)"
+            }
+        },
+        "knowledge_bases": {
+            "total": kb_total,
+            "by_type": { "vector": kb_vector, "graph": kb_graph }
+        },
+        "knowledge_packs": kb_packs,
+        "ontology": {
+            "domain": ont.domain,
+            "object_types": ont.object_types.len() as u64,
+            "link_types": ont.link_types.len() as u64,
+            "action_types": ont.action_types.len() as u64,
+            "functions": ont.functions.len() as u64
+        },
+        "runtime": {
+            "events": {
+                "total_emitted": state.core.events.event_count(),
+                "active_subscribers": state.core.events.subscriber_count()
+            },
+            "checkpoints": state.core.checkpoints.checkpoint_count(),
+            "skills_registered": state.core.skills.skill_count()
+        }
     }))
 }
 
@@ -1754,6 +1837,68 @@ async fn stream_batch_events_handler(
 // ============================================================
 // 方案A 平台运维态：L2 黑板浏览器（只读）+ 批处理 Agent 运维台
 // ============================================================
+
+#[derive(Debug, Deserialize)]
+struct TaskTrendsQuery {
+    days: Option<i64>,
+}
+
+/// GET /api/v1/tasks/trends?days=N — 任务执行时序趋势（真实持久化数据）。
+/// 扫描 L0Store 中 `iri://checkpoint/` 前缀的持久化检查点（跨进程/PVC 存活），按天聚合：
+/// 活跃任务数（去重 task_iri）/ 检查点数（执行步）/ 完成阶段数（finish_/step_complete_）。
+/// 预置最近 N 天的空桶以保证图表时间轴连续（默认 7 天，范围 1..=90）。
+async fn list_task_trends_handler(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<TaskTrendsQuery>,
+) -> impl IntoResponse {
+    let days = q.days.unwrap_or(7).clamp(1, 90);
+    let today = chrono::Utc::now().date_naive();
+    let start = today - chrono::Duration::days(days - 1);
+
+    // 每桶：(去重任务集合, 检查点计数, 完成阶段计数)
+    let mut buckets: std::collections::BTreeMap<
+        chrono::NaiveDate,
+        (std::collections::HashSet<String>, u64, u64),
+    > = std::collections::BTreeMap::new();
+    for i in 0..days {
+        buckets.insert(
+            start + chrono::Duration::days(i),
+            (std::collections::HashSet::new(), 0, 0),
+        );
+    }
+
+    if let Ok(entries) = state.core.l0_store.scan_iri_prefix("iri://checkpoint/", 5000) {
+        for e in entries {
+            let cp: crate::core::checkpoint::CheckpointData = match serde_json::from_str(&e.content) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let d = cp.created_at.date_naive();
+            if let Some(bucket) = buckets.get_mut(&d) {
+                bucket.0.insert(cp.task_iri.clone());
+                bucket.1 += 1;
+                let phase = crate::core::checkpoint::parse_checkpoint_phase(&cp.name);
+                if phase.starts_with("finish_") || phase.starts_with("step_complete_") {
+                    bucket.2 += 1;
+                }
+            }
+        }
+    }
+
+    let trends: Vec<Value> = buckets
+        .into_iter()
+        .map(|(date, (tasks, checkpoints, completed))| {
+            json!({
+                "date": date.format("%Y-%m-%d").to_string(),
+                "tasks": tasks.len(),
+                "checkpoints": checkpoints,
+                "completed": completed,
+            })
+        })
+        .collect();
+
+    Json(json!({ "days": days, "trends": trends }))
+}
 
 /// GET /api/v1/blackboard/tasks — 列出黑板上所有任务（平台/任务态，跨租户）。
 async fn list_blackboard_tasks_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
