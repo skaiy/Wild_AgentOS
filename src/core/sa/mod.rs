@@ -1766,11 +1766,6 @@ Complexity definitions:
                     });
                 }
 
-                // Propagate this agent's output summary to the next agent in the DAG pipeline.
-                // Without this, the next agent sees stale prev_summary (None or old cycle_feedback)
-                // instead of the previous agent's actual plan/result — breaking cross-cycle PDCA.
-                prev_summary = Some(result.summary.clone());
-
                 if let Some(ref updates) = result.five_w2h_updates {
                     if let Ok(Some(snapshot)) = self.runner.l0_store.retrieve(&five_w2h_iri) {
                         if let Ok(mut node) = serde_json::from_str::<serde_json::Value>(&snapshot.content) {
