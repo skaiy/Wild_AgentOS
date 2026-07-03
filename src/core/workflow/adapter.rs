@@ -161,6 +161,8 @@ pub fn dag_to_execution_plan(
         max_recursion_depth: 0,
         sub_tasks: vec![],
         dag_jsonld: None,
+        verify_first: false,
+        fallback_steps: vec![],
     }
 }
 
@@ -202,6 +204,8 @@ mod tests {
             max_recursion_depth: 0,
             sub_tasks: vec![],
             dag_jsonld: None,
+            verify_first: false,
+            fallback_steps: vec![],
         };
 
         let wf = plan_to_workflow(&plan, "iri://task/test_task");
@@ -244,6 +248,8 @@ mod tests {
             max_recursion_depth: 0,
             sub_tasks: vec![],
             dag_jsonld: None,
+            verify_first: false,
+            fallback_steps: vec![],
         };
 
         let wf = plan_to_workflow(&plan, "iri://task/test2");

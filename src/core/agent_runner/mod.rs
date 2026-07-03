@@ -92,6 +92,9 @@ pub struct TaskContext {
     pub success_criteria: String,
     /// PDCA cycle identifier for L2 blackboard filtered queries
     pub cycle_id: String,
+    /// Summary of workspace file inventory (set by CodeCliEngine before passing to SA).
+    /// Used by SA to decide verification-first routing when workspace has existing files.
+    pub workspace_file_summary: Option<String>,
 }
 
 impl TaskContext {
@@ -116,6 +119,7 @@ impl TaskContext {
             expected_output: String::new(),
             success_criteria: String::new(),
             cycle_id: String::new(),
+            workspace_file_summary: None,
         }
     }
 
@@ -175,6 +179,12 @@ impl TaskContext {
             self.pending_steps.remove(pos);
         }
     }
+
+    /// Set workspace file inventory summary (from WorkspaceMonitor)
+    pub fn with_workspace_summary(mut self, summary: &str) -> Self {
+        self.workspace_file_summary = Some(summary.to_string());
+        self
+    }
 }
 
 impl Default for TaskContext {
@@ -199,6 +209,7 @@ impl Default for TaskContext {
             expected_output: String::new(),
             success_criteria: String::new(),
             cycle_id: String::new(),
+            workspace_file_summary: None,
         }
     }
 }

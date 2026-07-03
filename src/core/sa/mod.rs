@@ -248,6 +248,11 @@ pub struct ExecutionPlan {
     /// Original JSON-LD DAG definition (set when loading from --workflow file)
     /// Used in execute_plan() to preserve DAG features (conditional branching, retry, parallelism)
     pub dag_jsonld: Option<String>,
+    /// When true, execute_plan starts with CA→AA (verify-first).
+    /// If CA verification fails, falls back to fallback_steps (PA→DA→CA→AA).
+    pub verify_first: bool,
+    /// Steps to execute as fallback when verify-first CA fails.
+    pub fallback_steps: Vec<PlanStep>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -507,6 +512,8 @@ impl SupervisorAgent {
             max_recursion_depth,
             sub_tasks: vec![],
             dag_jsonld: None,
+            verify_first: false,
+            fallback_steps: vec![],
         }
     }
 
@@ -571,6 +578,8 @@ impl SupervisorAgent {
             max_recursion_depth,
             sub_tasks: vec![],
             dag_jsonld: None,
+            verify_first: false,
+            fallback_steps: vec![],
         }
     }
 
@@ -591,6 +600,8 @@ impl SupervisorAgent {
             max_recursion_depth: 0,
             sub_tasks: vec![],
             dag_jsonld: None,
+            verify_first: false,
+            fallback_steps: vec![],
         }
     }
 
@@ -645,18 +656,22 @@ impl SupervisorAgent {
         }
 
         let prompt = format!(
-            r#"Analyze the user task below and extract the minimal 5W2H metadata set (What + Why).
+            r#"Analyze the user task below and extract the 5W2H metadata set.
 
 User task: {}
 
-Output in JSON format:
+Output in JSON format (all fields optional except what/why):
 {{
   "what": "Core description of the task goal (one sentence)",
   "why_description": "Task intent/value description",
   "success_criteria": ["verifiable condition 1", "condition 2"],
   "priority": "high|medium|low",
   "deadline": "ISO8601 deadline (optional)",
-  "required_role": "Plan|Do|Check|Act (optional)"
+  "estimated_duration": "e.g. 30min, 2h, 3d (optional, guess from task scope)",
+  "required_role": "Plan|Do|Check|Act (optional, who should do this)",
+  "data_sources": ["file paths or data sources relevant to the task (optional)"],
+  "preferred_skills": ["tools or skills likely needed, e.g. file_write, bash (optional)"],
+  "token_budget": 100000 (optional, estimated token cost)
 }}
 
 Output only JSON, no other content."#,
@@ -693,18 +708,20 @@ Output only JSON, no other content."#,
                         w2h.why.success_criteria = success_criteria;
                         w2h.why.priority = priority;
 
-                        if let Some(deadline_str) = parsed.get("deadline").and_then(|v| v.as_str()) {
-                            if let Ok(dt) = deadline_str.parse::<chrono::DateTime<chrono::Utc>>() {
-                                w2h = w2h.with_when(WhenDetail {
-                                    deadline: Some(dt),
-                                    start_after: None,
-                                    estimated_duration: None,
-                                    timezone: None,
-                                    reminder_before: None,
-                                });
-                            }
+                        let deadline = parsed.get("deadline").and_then(|v| v.as_str())
+                            .and_then(|s| s.parse::<chrono::DateTime<chrono::Utc>>().ok());
+                        let estimated_duration = parsed.get("estimated_duration").and_then(|v| v.as_str()).map(String::from);
+                        if deadline.is_some() || estimated_duration.is_some() {
+                            w2h = w2h.with_when(WhenDetail {
+                                deadline,
+                                start_after: None,
+                                estimated_duration,
+                                timezone: None,
+                                reminder_before: None,
+                            });
                         }
 
+                        // ── who ──
                         if let Some(role_str) = parsed.get("required_role").and_then(|v| v.as_str()) {
                             w2h = w2h.with_who(WhoDetail {
                                 requestor: None,
@@ -712,6 +729,44 @@ Output only JSON, no other content."#,
                                 stakeholders: vec![],
                                 required_role: Some(role_str.to_string()),
                                 access_level: None,
+                            });
+                        }
+
+                        // ── where (data_sources) ──
+                        let data_sources: Vec<String> = parsed.get("data_sources").and_then(|v| v.as_array())
+                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .unwrap_or_default();
+                        if !data_sources.is_empty() {
+                            w2h = w2h.with_where(WhereDetail {
+                                data_sources,
+                                execution_environment: None,
+                                target_repository: None,
+                                target_branch: None,
+                            });
+                        }
+
+                        // ── how (preferred_skills) ──
+                        let preferred_skills: Vec<String> = parsed.get("preferred_skills").and_then(|v| v.as_array())
+                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .unwrap_or_default();
+                        if !preferred_skills.is_empty() {
+                            w2h = w2h.with_how(HowDetail {
+                                plan_iri: None,
+                                preferred_skills,
+                                forbidden_tools: vec![],
+                                required_steps: None,
+                                dependencies: vec![],
+                            });
+                        }
+
+                        // ── how_much (token_budget) ──
+                        if let Some(budget) = parsed.get("token_budget").and_then(|v| v.as_u64()) {
+                            w2h = w2h.with_how_much(HowMuchDetail {
+                                token_budget: Some(budget),
+                                max_sub_agents: None,
+                                max_pdca_cycles: None,
+                                expected_quality: None,
+                                actual_cost: None,
                             });
                         }
 
@@ -777,11 +832,40 @@ Output only JSON, no other content."#,
 
     async fn generate_detailed_plan_with_llm(&self, user_input: &str, five_w2h: &crate::core::five_w2h::Task5W2H) -> Result<ExecutionPlan, CoreError> {
         let mut w2h_section = String::new();
+
+        if let Some(ref who) = five_w2h.who {
+            if let Some(ref role) = who.required_role {
+                w2h_section.push_str(&format!("\n- Required Role: {}", role));
+            }
+        }
+
         if let Some(ref when) = five_w2h.when {
             if let Some(ref deadline) = when.deadline {
                 w2h_section.push_str(&format!("\n- Deadline: {}", deadline.to_rfc3339()));
             }
+            if let Some(ref dur) = when.estimated_duration {
+                w2h_section.push_str(&format!("\n- Estimated Duration: {}", dur));
+            }
         }
+
+        if let Some(ref where_) = five_w2h.where_ {
+            if !where_.data_sources.is_empty() {
+                w2h_section.push_str(&format!("\n- Data Sources: {}", where_.data_sources.join(", ")));
+            }
+            if let Some(ref env) = where_.execution_environment {
+                w2h_section.push_str(&format!("\n- Execution Environment: {}", env));
+            }
+        }
+
+        if let Some(ref how) = five_w2h.how {
+            if !how.preferred_skills.is_empty() {
+                w2h_section.push_str(&format!("\n- Preferred Skills: {}", how.preferred_skills.join(", ")));
+            }
+            if !how.forbidden_tools.is_empty() {
+                w2h_section.push_str(&format!("\n- Forbidden Tools: {}", how.forbidden_tools.join(", ")));
+            }
+        }
+
         if let Some(ref how_much) = five_w2h.how_much {
             if let Some(budget) = how_much.token_budget {
                 w2h_section.push_str(&format!("\n- Token Budget: {}", budget));
@@ -790,9 +874,12 @@ Output only JSON, no other content."#,
                 w2h_section.push_str(&format!("\n- Max PDCA Cycles: {}", cycles));
             }
         }
+
         if !five_w2h.why.success_criteria.is_empty() {
             w2h_section.push_str(&format!("\n- Success Criteria: {}", five_w2h.why.success_criteria.join(", ")));
         }
+
+        w2h_section.push_str(&format!("\n- Priority: {:?}", five_w2h.why.priority));
 
         let w2h_block = if w2h_section.is_empty() {
             String::new()
@@ -982,6 +1069,8 @@ Output only JSON, no other content."#,
             max_recursion_depth,
             sub_tasks: vec![],
             dag_jsonld: None,
+            verify_first: false,
+            fallback_steps: vec![],
         })
     }
 
@@ -1327,7 +1416,6 @@ Complexity definitions:
         resumed_messages: Option<Vec<crate::gateway::unified_gateway::ChatMessage>>,
         initial_prev_summary: Option<String>,
     ) -> Result<TaskResult, CoreError> {
-        use crate::core::five_w2h::FillStage;
         
         let cycle_id = self
             .active_cycles
@@ -1361,6 +1449,8 @@ Complexity definitions:
 
         let mut last_result: Option<TaskResult> = None;
         let mut prev_summary: Option<String> = initial_prev_summary;
+        // Track the Do agent's output separately so AA can access it alongside CA's evaluation.
+        let mut da_output: Option<String> = None;
 
         // Resume mode: determine which phase to start from
         // Load latest checkpoint from L0 to resolve phase tags
@@ -1416,7 +1506,7 @@ Complexity definitions:
             None
         };
 
-        let task_level = match plan.task_complexity {
+        let _task_level = match plan.task_complexity {
             TaskComplexity::Instant => "Instant",
             TaskComplexity::Simple => "Simple",
             TaskComplexity::Standard => "Standard",
@@ -1569,7 +1659,15 @@ Complexity definitions:
                     format!("{}\n\nExecution Results:\n{}{}\n\nPlease verify whether the execution results are correct and complete.", step.objective, summary, hints_block)
                 }
                 (Some(summary), AgentRole::Act) => {
-                    format!("{}\n\nCheck Conclusions:\n{}{}\n\nPlease make final decisions and summarize.", step.objective, summary, hints_block)
+                    let da_context = da_output.as_ref()
+                        .filter(|_| {
+                            // Only inject DA context when it differs from CA's conclusion
+                            // (avoids duplication when CA re-states the full output)
+                            da_output.as_ref().map_or(false, |da| da != summary)
+                        })
+                        .map(|da| format!("\n\n## Execution Results\n{}", da))
+                        .unwrap_or_default();
+                    format!("{}\n\n## Original Task\n{}{}\n\n## Check Conclusions\n{}{}\n\nPlease make final decisions and summarize.", step.objective, user_input, da_context, summary, hints_block)
                 }
                 (None, AgentRole::Plan) => {
                     format!("{}\n\n## User Task\n{}{}\n\nPlease create a detailed execution plan for the above user task.", step.objective, user_input, hints_block)
@@ -1577,32 +1675,7 @@ Complexity definitions:
                 _ => step.objective.clone(),
             };
 
-            if step.role == AgentRole::Check {
-                let missing = five_w2h.check_completeness(task_level);
-                if !missing.is_empty() {
-                    info!(missing_dims = ?missing, "5W2H completeness check: missing dimensions, filling defaults");
-                    for dim in &missing {
-                        match dim.as_str() {
-                            "who" => {
-                                five_w2h.record_fill("who", FillStage::Do, "SA-Default");
-                            }
-                            "when" => {
-                                five_w2h.record_fill("when", FillStage::Do, "SA-Default");
-                            }
-                            "where" => {
-                                five_w2h.record_fill("where", FillStage::Do, "SA-Default");
-                            }
-                            "how" => {
-                                five_w2h.record_fill("how", FillStage::Do, "SA-Default");
-                            }
-                            "how_much" => {
-                                five_w2h.record_fill("how_much", FillStage::Do, "SA-Default");
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
+            // 5W2H completeness check already performed in SA phase.
 
             let mut context = TaskContext::new(
                 task_iri,
@@ -1769,32 +1842,15 @@ Complexity definitions:
                 // Propagate this agent's output summary to the next agent in the DAG pipeline.
                 // Without this, the next agent sees stale prev_summary (None or old cycle_feedback)
                 // instead of the previous agent's actual plan/result — breaking cross-cycle PDCA.
-                prev_summary = Some(result.summary.clone());
 
                 if let Some(ref updates) = result.five_w2h_updates {
-                    if let Ok(Some(snapshot)) = self.runner.l0_store.retrieve(&five_w2h_iri) {
-                        if let Ok(mut node) = serde_json::from_str::<serde_json::Value>(&snapshot.content) {
-                            let fill_stage = match step.role {
-                                AgentRole::Plan => FillStage::Plan,
-                                AgentRole::Do => FillStage::Do,
-                                AgentRole::Check => FillStage::Check,
-                                AgentRole::Act => FillStage::Act,
-                            };
-                            let filled_by = format!("{:?}", step.role);
-                            
-                            for (key, _value) in updates.as_object().unwrap_or(&serde_json::Map::new()) {
-                                node[key] = updates.get(key).cloned().unwrap_or(serde_json::Value::Null);
-                                five_w2h.record_fill(key, fill_stage.clone(), &filled_by);
-                            }
-                            
-                            if let Ok(updated_json_ld) = five_w2h.to_json_ld(task_iri) {
-                                let _ = self.runner.l0_store.store(&five_w2h_iri, &updated_json_ld.to_string());
-                                let cfg = crate::CoreConfig::default();
-                                if let Some(ref bb) = self.blackboard {
-                                    if bb.write_node(&five_w2h_iri, &updated_json_ld.to_string(), &cfg).is_ok() {
-                                        tracing::debug!(five_w2h_iri = %five_w2h_iri, "5W2H update synced to blackboard");
-                                    }
-                                }
+                    five_w2h.merge_updates(updates);
+                    if let Ok(updated_json_ld) = five_w2h.to_json_ld(task_iri) {
+                        let _ = self.runner.l0_store.store(&five_w2h_iri, &updated_json_ld.to_string());
+                        let cfg = crate::CoreConfig::default();
+                        if let Some(ref bb) = self.blackboard {
+                            if bb.write_node(&five_w2h_iri, &updated_json_ld.to_string(), &cfg).is_ok() {
+                                tracing::debug!(five_w2h_iri = %five_w2h_iri, "5W2H update synced to blackboard");
                             }
                         }
                     }
@@ -1915,6 +1971,13 @@ Complexity definitions:
                 }
 
                 last_result = Some(result);
+
+                // Preserve the Do agent's output so AA sees full execution results, not just CA's evaluation.
+                if step.role == AgentRole::Do {
+                    if let Some(ref s) = prev_summary {
+                        da_output = Some(s.clone());
+                    }
+                }
             }
 
             if let Some(alert) = self.perception.check_5w2h_constraints(five_w2h_iri) {
@@ -2930,6 +2993,10 @@ Notes:
                 });
             }
         }
+
+        // Fill missing 5W2H dimensions before PA dispatch (SA phase), not at CA stage.
+        five_w2h.derive_defaults(self.max_iterations, self.max_pdca_cycles);
+
         if let Ok(json_ld) = five_w2h.to_json_ld(task_iri) {
             let _ = self.runner.l0_store.store(&five_w2h_iri, &json_ld.to_string());
             let cfg = crate::CoreConfig::default();
@@ -2952,7 +3019,7 @@ Notes:
             .unwrap_or_default();
 
         // Unified execution path: build ExecutionPlan from JSON-LD workflow or LLM
-        let plan = if let Some(ref wf_jsonld) = ctx.workflow_jsonld {
+        let mut plan = if let Some(ref wf_jsonld) = ctx.workflow_jsonld {
             info!(task_iri = %task_iri, "Using JSON-LD workflow mode — converting through adapter to ExecutionPlan");
             let def = crate::core::workflow::loader::load_workflow_jsonld(wf_jsonld)
                 .map_err(|e| CoreError::Internal { message: format!("Workflow parsing failed: {}", e) })?;
@@ -2966,6 +3033,54 @@ Notes:
         } else {
             self.analyze_task_with_llm(user_input, &five_w2h, &perception_hints).await
         };
+
+        // ── Verify-first optimization ──
+        // When workspace has existing files and plan is non-trivial:
+        // prepend CA→AA to check existing code first, store original as fallback_steps.
+        // execute_plan returns "failed" if verify CA fails → retry loop uses fallback_steps.
+        if !plan.verify_first
+            && ctx.workspace_file_summary.is_some()
+            && ctx.resumed_messages.is_none()
+            && ctx.workflow_jsonld.is_none()
+            && plan.steps.len() >= 2
+            && plan.steps.iter().any(|s| matches!(s.role, AgentRole::Plan | AgentRole::Do))
+        {
+            let ws_summary = ctx.workspace_file_summary.as_deref().unwrap_or("workspace has files");
+            plan.fallback_steps = plan.steps.clone();
+            plan.verify_first = true;
+
+            let verify_ca = PlanStep {
+                step_id: "verify_ca".to_string(),
+                role: AgentRole::Check,
+                objective: format!(
+                    "Check if existing workspace files already satisfy the task requirement.\n\
+                     Workspace inventory: {}\n\
+                     If existing code meets requirements, report VERIFIED-PASS with evidence.\n\
+                     If not, report what is missing or needs modification.",
+                    ws_summary
+                ),
+                expected_output: "Verification result: PASS (existing code sufficient) or FAIL (list gaps)".to_string(),
+                dependencies: vec![],
+                tools_allowed: vec![],
+                success_criteria: "Clear pass/fail verdict with evidence from workspace".to_string(),
+            };
+            let verify_aa = PlanStep {
+                step_id: "verify_aa".to_string(),
+                role: AgentRole::Act,
+                objective: "Evaluate verification results. If existing code already satisfies requirements, confirm task complete. Otherwise indicate full execution is needed.".to_string(),
+                expected_output: "Final verdict: task already done vs needs full execution".to_string(),
+                dependencies: vec!["verify_ca".to_string()],
+                tools_allowed: vec![],
+                success_criteria: "Decision clear with justification".to_string(),
+            };
+            // Store original description, prepend verify steps
+            let original_desc = plan.description.clone();
+            plan.steps = vec![verify_ca, verify_aa];
+            plan.agent_sequence = vec![AgentRole::Check, AgentRole::Act];
+            plan.description = format!("[Verify-first] Check existing workspace code before full PDCA. Fallback: {}", original_desc);
+
+            info!(task_iri = %task_iri, ws = %ws_summary, "Verify-first: CA→AA prepended, fallback_steps={}", plan.fallback_steps.len());
+        }
 
         let step_roles: Vec<String> = plan.steps.iter().map(|s| format!("{:?}", s.role)).collect();
         self.emit_sa_thought(task_iri,
@@ -3037,12 +3152,31 @@ Notes:
         }
 
         // ── Outer SA-level PDCA retry loop ──
-        let max_cycles = self.max_pdca_cycles.max(1);
+        // Ensure at least 2 cycles when verify_first is active
+        // (cycle 0 = verify-first CA→AA, cycle 1+ = fallback PDCA)
+        let max_cycles = if plan.verify_first {
+            (self.max_pdca_cycles.max(1)).max(2)
+        } else {
+            self.max_pdca_cycles.max(1)
+        };
         let mut cycle_feedback: Option<String> = None;
         let mut final_result: Option<TaskResult> = None;
 
         for cycle_num in 0..max_cycles {
             let resumed = if cycle_num == 0 { ctx.resumed_messages.clone() } else { None };
+
+            // On retry after verify-first failed, switch to fallback_steps (full PDCA)
+            let current_plan = if cycle_num >= 1 && plan.verify_first && !plan.fallback_steps.is_empty() {
+                let mut fb = plan.clone();
+                fb.steps = plan.fallback_steps.clone();
+                fb.verify_first = false;
+                fb.agent_sequence = fb.steps.iter().map(|s| s.role).collect();
+                fb.description = format!("Fallback PDCA (verify-first CA did not pass): {}",
+                    plan.description.trim_start_matches("[Verify-first] Check existing workspace code before full PDCA. Fallback: "));
+                fb
+            } else {
+                plan.clone()
+            };
 
             info!(
                 task_iri = %task_iri,
@@ -3063,7 +3197,7 @@ Notes:
             }
 
             let result = self.execute_plan(
-                plan.clone(),
+                current_plan,
                 task_iri,
                 user_input,
                 five_w2h.clone(),

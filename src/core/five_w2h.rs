@@ -177,6 +177,147 @@ impl Task5W2H {
         });
     }
 
+    /// Merge structured five_w2h_updates from agent (typically PA) output into this Task5W2H.
+    /// The JSON value is expected to have optional keys: "who", "when", "where", "how", "how_much".
+    /// Each key's value follows the camelCase field names of the corresponding detail struct.
+    /// Only non-null, non-empty values are applied.
+    pub fn merge_updates(&mut self, updates: &serde_json::Value) {
+        let obj = match updates.as_object() {
+            Some(o) => o,
+            None => return,
+        };
+
+        // ── who ──
+        if let Some(who_val) = obj.get("who").and_then(|v| v.as_object()) {
+            let requestor = who_val.get("requestor").and_then(|v| v.as_str()).map(String::from);
+            let assignees = who_val.get("assignees").and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let stakeholders = who_val.get("stakeholders").and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let required_role = who_val.get("requiredRole").and_then(|v| v.as_str()).map(String::from);
+            let access_level = who_val.get("accessLevel").and_then(|v| v.as_str())
+                .and_then(|s| match s {
+                    "Read" => Some(AccessLevel::Read),
+                    "Write" => Some(AccessLevel::Write),
+                    "Admin" => Some(AccessLevel::Admin),
+                    _ => None,
+                });
+            self.who = Some(WhoDetail { requestor, assignees, stakeholders, required_role, access_level });
+            self.record_fill("who", FillStage::Plan, "PA");
+        }
+
+        // ── when ──
+        if let Some(when_val) = obj.get("when").and_then(|v| v.as_object()) {
+            let deadline = when_val.get("deadline").and_then(|v| v.as_str())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+            let start_after = when_val.get("startAfter").and_then(|v| v.as_str())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+            let estimated_duration = when_val.get("estimatedDuration").and_then(|v| v.as_str()).map(String::from);
+            let timezone = when_val.get("timezone").and_then(|v| v.as_str()).map(String::from);
+            let reminder_before = when_val.get("reminderBefore").and_then(|v| v.as_str()).map(String::from);
+            if deadline.is_some() || estimated_duration.is_some() {
+                self.when = Some(WhenDetail { deadline, start_after, estimated_duration, timezone, reminder_before });
+                self.record_fill("when", FillStage::Plan, "PA");
+            }
+        }
+
+        // ── where ──
+        if let Some(where_val) = obj.get("where").and_then(|v| v.as_object()) {
+            let data_sources: Vec<String> = where_val.get("dataSources").and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let execution_environment = where_val.get("executionEnvironment").and_then(|v| v.as_str()).map(String::from);
+            let target_repository = where_val.get("targetRepository").and_then(|v| v.as_str()).map(String::from);
+            let target_branch = where_val.get("targetBranch").and_then(|v| v.as_str()).map(String::from);
+            if !data_sources.is_empty() || execution_environment.is_some() {
+                self.where_ = Some(WhereDetail { data_sources, execution_environment, target_repository, target_branch });
+                self.record_fill("where", FillStage::Plan, "PA");
+            }
+        }
+
+        // ── how ──
+        if let Some(how_val) = obj.get("how").and_then(|v| v.as_object()) {
+            let plan_iri = how_val.get("planIRI").and_then(|v| v.as_str()).map(String::from);
+            let preferred_skills = how_val.get("preferredSkills").and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let forbidden_tools = how_val.get("forbiddenTools").and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let required_steps = how_val.get("requiredSteps").and_then(|v| v.as_str()).map(String::from);
+            let dependencies = how_val.get("dependencies").and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            self.how = Some(HowDetail { plan_iri, preferred_skills, forbidden_tools, required_steps, dependencies });
+            self.record_fill("how", FillStage::Plan, "PA");
+        }
+
+        // ── how_much ──
+        if let Some(hm_val) = obj.get("howMuch").or_else(|| obj.get("how_much")).and_then(|v| v.as_object()) {
+            let token_budget = hm_val.get("tokenBudget").and_then(|v| v.as_u64());
+            let max_sub_agents = hm_val.get("maxSubAgents").and_then(|v| v.as_u64()).map(|n| n as u32);
+            let max_pdca_cycles = hm_val.get("maxPdcaCycles").and_then(|v| v.as_u64()).map(|n| n as u32);
+            let expected_quality = hm_val.get("expectedQuality").and_then(|v| v.as_f64()).map(|n| n as f32);
+            self.how_much = Some(HowMuchDetail {
+                token_budget, max_sub_agents, max_pdca_cycles,
+                expected_quality, actual_cost: None,
+            });
+            self.record_fill("how_much", FillStage::Plan, "PA");
+        }
+    }
+
+    /// Fill remaining missing dimensions with SA-level defaults.
+    /// This is called AFTER merge_updates(), so only truly unknown dimensions get defaults.
+    pub fn derive_defaults(&mut self, _max_iterations: u32, max_pdca_cycles: u32) {
+        if self.who.is_none() {
+            self.who = Some(WhoDetail {
+                requestor: None,
+                assignees: vec![],
+                stakeholders: vec![],
+                required_role: None,
+                access_level: None,
+            });
+            self.record_fill("who", FillStage::Plan, "SA-Default");
+        }
+        if self.where_.is_none() {
+            if let Ok(cwd) = std::env::current_dir() {
+                self.where_ = Some(WhereDetail {
+                    data_sources: vec![],
+                    execution_environment: Some(cwd.to_string_lossy().to_string()),
+                    target_repository: None,
+                    target_branch: None,
+                });
+                self.record_fill("where", FillStage::Plan, "SA-Default");
+            }
+        }
+        if self.how.is_none() {
+            self.how = Some(HowDetail {
+                plan_iri: None,
+                preferred_skills: vec![],
+                forbidden_tools: vec![],
+                required_steps: None,
+                dependencies: vec![],
+            });
+            self.record_fill("how", FillStage::Plan, "SA-Default");
+        }
+        if self.how_much.is_none() {
+            self.how_much = Some(HowMuchDetail {
+                token_budget: None,
+                max_sub_agents: None,
+                max_pdca_cycles: Some(max_pdca_cycles),
+                expected_quality: None,
+                actual_cost: None,
+            });
+            self.record_fill("how_much", FillStage::Plan, "SA-Default");
+        }
+    }
+
+    /// Check which required dimensions are missing for the given task level.
+    /// Only checks dimension_meta (whether dimension has been filled/recorded).
     pub fn check_completeness(&self, task_level: &str) -> Vec<String> {
         let all_dims = vec!["what", "why", "who", "when", "where", "how", "how_much"];
         let required: Vec<&str> = match task_level {

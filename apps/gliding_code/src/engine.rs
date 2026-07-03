@@ -389,15 +389,31 @@ impl CodeCliEngine {
         let task_id = uuid::Uuid::new_v4().to_string();
         let task_iri = format!("iri://task/{}", task_id);
 
+        // Collect workspace file summary once for both paths
+        let ws_summary = self.workspace_monitor.as_ref()
+            .and_then(|wm| wm.get_file_inventory_summary());
+
         let result = if let Some(ref wf_path) = self.config.workflow_path {
             let wf_jsonld = std::fs::read_to_string(wf_path)
                 .map_err(|e| anyhow::anyhow!("读取工作流文件 '{}' 失败: {}", wf_path, e))?;
             let ctx = glidinghorse::core::agent_runner::TaskContext::new(&task_iri, user_input, self.config.max_iterations)
                 .with_original_task(user_input)
                 .with_workflow(&wf_jsonld);
+            let ctx = if let Some(ref summary) = ws_summary {
+                ctx.with_workspace_summary(summary)
+            } else {
+                ctx
+            };
             self.sa.process_task_with_context(user_input, &task_iri, ctx).await?
         } else {
-            self.sa.process_task(user_input, &task_iri).await?
+            let ctx = glidinghorse::core::agent_runner::TaskContext::new(&task_iri, user_input, self.config.max_iterations)
+                .with_original_task(user_input);
+            let ctx = if let Some(ref summary) = ws_summary {
+                ctx.with_workspace_summary(summary)
+            } else {
+                ctx
+            };
+            self.sa.process_task_with_context(user_input, &task_iri, ctx).await?
         };
 
         info!(
@@ -589,8 +605,16 @@ impl CodeCliEngine {
 
         use glidinghorse::core::agent_runner::TaskContext;
 
+        let ws_summary = self.workspace_monitor.as_ref()
+            .and_then(|wm| wm.get_file_inventory_summary());
+
         let ctx = TaskContext::new(task_iri, user_input, self.config.max_iterations)
             .with_original_task(user_input);
+        let ctx = if let Some(ref summary) = ws_summary {
+            ctx.with_workspace_summary(summary)
+        } else {
+            ctx
+        };
         let ctx = if let Some(ref wf_path) = self.config.workflow_path {
             let wf_jsonld = std::fs::read_to_string(wf_path)
                 .map_err(|e| anyhow::anyhow!("读取工作流文件 '{}' 失败: {}", wf_path, e))?;
