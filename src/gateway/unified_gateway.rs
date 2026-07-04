@@ -99,6 +99,8 @@ impl UnifiedGateway {
     pub fn new(settings: &GatewaySettings) -> Result<Self, CoreError> {
         let client = Client::builder()
             .timeout(Duration::from_secs(settings.timeout_seconds))
+            // 显式 User-Agent：部分网关前置 WAF 会拦截空 UA 的请求（返回 403）。
+            .user_agent("curl/8.1.2")
             .build()
             .map_err(|e| CoreError::Internal {
                 message: format!("Failed to create HTTP client: {}", e),

@@ -33,6 +33,8 @@ pub type SharedBatchManager = Arc<tokio::sync::Mutex<Option<BatchAgentManager>>>
 
 pub mod iam;
 use iam::UserIdentity;
+pub mod api_gov;
+use api_gov::{ApiClient, ApiKey, ApiUsageState};
 
 pub struct AppState {
     pub core: Arc<SemanticCore>,
@@ -62,6 +64,12 @@ pub struct AppState {
     pub task_executor: Option<Arc<dyn TaskExecutor>>,
     /// 平台级批处理 Agent 管理器（方案A 运维态）：由 build_http_router 注入，None 表示测试态或未启用。
     pub batch_manager: Option<SharedBatchManager>,
+    /// 入站调用方注册表（运行期可增删改，持久化到 data/api_clients.json）。
+    pub api_clients: Arc<tokio::sync::RwLock<Vec<ApiClient>>>,
+    /// 入站密钥注册表（仅存哈希，持久化到 data/api_keys.json）。
+    pub api_keys: Arc<tokio::sync::RwLock<Vec<ApiKey>>>,
+    /// 进程内限流/配额/并发用量状态（对外调用面）。
+    pub api_usage: Arc<ApiUsageState>,
 }
 
 /// 流式任务执行规格：由 HTTP 流处理器构造并传入执行器。
@@ -84,7 +92,7 @@ pub trait TaskExecutor: Send + Sync {
 }
 
 /// 持久化数据目录；可由 AGENTOS_DATA_DIR 覆盖（便于测试隔离），缺省为 "data"。
-fn data_dir() -> std::path::PathBuf {
+pub(crate) fn data_dir() -> std::path::PathBuf {
     std::env::var("AGENTOS_DATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("data"))
@@ -398,6 +406,9 @@ pub fn build_router(
         vector_store,
         task_executor,
         batch_manager,
+        api_clients: Arc::new(tokio::sync::RwLock::new(api_gov::load_api_clients())),
+        api_keys: Arc::new(tokio::sync::RwLock::new(api_gov::load_api_keys())),
+        api_usage: Arc::new(ApiUsageState::default()),
     });
 
     Router::new()
@@ -446,6 +457,18 @@ pub fn build_router(
         .route("/api/v1/agents/:id", put(update_agent_handler).delete(delete_agent_handler))
         .route("/api/v1/agents/:id/graph", post(bind_agent_graph_handler))
         .route("/api/v1/agents/:id/chat", post(agent_chat_handler))
+        // ── 对外发布：Public API（入站密钥鉴权 + scope + 限流/配额 + 审计）──
+        .route("/api/v1/public/agents/:id/chat", post(public_agent_chat_handler))
+        .route("/api/v1/public/agents/:id/chat/stream", post(public_agent_chat_stream_handler))
+        // ── OpenAI 兼容层（model = agentId，第三方 SDK 可直连）──
+        .route("/v1/models", get(openai_list_models_handler))
+        .route("/v1/chat/completions", post(openai_chat_completions_handler))
+        // ── 调用方 & 密钥治理中心（管理面，需 DA 角色）──
+        .route("/api/v1/api-clients", get(list_api_clients_handler).post(create_api_client_handler))
+        .route("/api/v1/api-clients/:id", put(update_api_client_handler).delete(delete_api_client_handler))
+        .route("/api/v1/api-clients/:id/keys", post(issue_api_key_handler))
+        .route("/api/v1/api-clients/:id/keys/:kid", delete(revoke_api_key_handler))
+        .route("/api/v1/api-audit", get(list_api_audit_handler))
         .route("/api/v1/mcp/servers", get(list_mcp_servers_handler).post(register_mcp_server_handler))
         // ── G6' Prompt/模型灰度版本管理 ──
         .route("/api/v1/prompts", get(list_prompts_handler).post(create_prompt_handler))
@@ -858,7 +881,7 @@ fn build_action_suggestions(sources: &[Value]) -> Vec<Value> {
     ]
 }
 
-/// 组装为上下文交由 LLM 网关生成简体中文回答 → 返回 answer 与 sources。
+/// POST /api/v1/agents/:id/chat — 内部单轮 RAG 问答（管理面，无入站鉴权）。
 async fn agent_chat_handler(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -868,13 +891,37 @@ async fn agent_chat_handler(
     if message.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "message 不能为空" })));
     }
+    let (status, body) = run_agent_rag(&state, &id, &message).await;
+    (status, Json(body))
+}
+
+/// Agent RAG 检索上下文：检索完成、提示已组装，待（同步或流式）调用 LLM。
+struct RagContext {
+    messages: Vec<ChatMessage>,
+    sources: Vec<Value>,
+    retrieved: usize,
+    vector_retrieved: usize,
+    grounded: bool,
+    /// 网关不可用时的图谱直出回退答案（有命中时才有）。
+    fallback_answer: Option<String>,
+    suggested_actions: Vec<Value>,
+}
+
+/// 单轮 RAG 检索与提示组装：定位 Agent → 图/向量检索 → 组装上下文与提示消息。
+/// 返回可复用的 RagContext，供内部 chat、对外 public chat、SSE 流式与 OpenAI 兼容层共用。
+async fn build_rag_context(
+    state: &Arc<AppState>,
+    id: &str,
+    message: &str,
+) -> Result<RagContext, (StatusCode, Value)> {
+    let message = message.to_string();
 
     // 1. 定位 Agent（用户态优先，其次批处理静态）。
     let agent = {
         let guard = state.user_agents.read().await;
         guard
             .iter()
-            .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(id))
             .cloned()
             .or_else(|| {
                 state
@@ -883,7 +930,7 @@ async fn agent_chat_handler(
                     .and_then(|v| v.as_array())
                     .and_then(|arr| {
                         arr.iter()
-                            .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+                            .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(id))
                             .cloned()
                     })
             })
@@ -891,7 +938,7 @@ async fn agent_chat_handler(
     let agent = match agent {
         Some(a) => a,
         None => {
-            return (StatusCode::NOT_FOUND, Json(json!({ "error": "agent not found", "id": id })))
+            return Err((StatusCode::NOT_FOUND, json!({ "error": "agent not found", "id": id })))
         }
     };
     let agent_name = agent.get("name").and_then(|v| v.as_str()).unwrap_or("维修助手").to_string();
@@ -1051,7 +1098,32 @@ async fn agent_chat_handler(
         ChatMessage { role: "user".into(), content: user_content, name: None, tool_calls: None, tool_call_id: None, reasoning_content: None },
     ];
 
-    match state.gateway.chat(messages).await {
+    // 网关不可用时的图谱直出回退（有命中才提供）。
+    let fallback_answer = rows.first().map(|row| {
+        format!(
+            "【基于知识图谱的检索结果】\n故障码 {}（{}）：{}\n含义：{}\n能否行驶：{}\n维修建议：{}\n适用车型：{}",
+            get(row, "?code"), get(row, "?brand"), get(row, "?label"),
+            get(row, "?meaning"), get(row, "?can_drive"), get(row, "?repair"), get(row, "?models"),
+        )
+    });
+    Ok(RagContext {
+        suggested_actions: build_action_suggestions(&sources),
+        grounded: !rows.is_empty(),
+        retrieved: rows.len(),
+        vector_retrieved,
+        fallback_answer,
+        sources,
+        messages,
+    })
+}
+
+/// 单轮 RAG（同步）：检索 → 调 LLM 网关生成简体中文回答。返回 (状态码, JSON 响应体)。
+async fn run_agent_rag(state: &Arc<AppState>, id: &str, message: &str) -> (StatusCode, Value) {
+    let rc = match build_rag_context(state, id, message).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match state.gateway.chat(rc.messages).await {
         Ok(resp) => {
             let answer = resp
                 .choices
@@ -1060,43 +1132,38 @@ async fn agent_chat_handler(
                 .unwrap_or_default();
             (
                 StatusCode::OK,
-                Json(json!({
+                json!({
                     "status": "ok",
                     "answer": answer,
-                    "grounded": !rows.is_empty(),
-                    "sources": sources,
-                    "retrieved": rows.len(),
-                    "vector_retrieved": vector_retrieved,
+                    "grounded": rc.grounded,
+                    "sources": rc.sources,
+                    "retrieved": rc.retrieved,
+                    "vector_retrieved": rc.vector_retrieved,
                     "model": state.gateway.default_model(),
-                    "suggested_actions": build_action_suggestions(&sources),
-                })),
+                    "suggested_actions": rc.suggested_actions,
+                }),
             )
         }
         Err(e) => {
             // 网关失败但已检索到事实时，回退为基于图谱的确定性回答，保证可用性。
-            if let Some(row) = rows.first() {
-                let fallback = format!(
-                    "【基于知识图谱的检索结果】\n故障码 {}（{}）：{}\n含义：{}\n能否行驶：{}\n维修建议：{}\n适用车型：{}",
-                    get(row, "?code"), get(row, "?brand"), get(row, "?label"),
-                    get(row, "?meaning"), get(row, "?can_drive"), get(row, "?repair"), get(row, "?models"),
-                );
+            if let Some(fallback) = rc.fallback_answer {
                 (
                     StatusCode::OK,
-                    Json(json!({
+                    json!({
                         "status": "degraded",
                         "answer": fallback,
                         "grounded": true,
-                        "sources": sources,
-                        "retrieved": rows.len(),
-                        "vector_retrieved": vector_retrieved,
+                        "sources": rc.sources,
+                        "retrieved": rc.retrieved,
+                        "vector_retrieved": rc.vector_retrieved,
                         "warning": format!("LLM 网关不可用，已回退为图谱直出：{}", e),
-                        "suggested_actions": build_action_suggestions(&sources),
-                    })),
+                        "suggested_actions": rc.suggested_actions,
+                    }),
                 )
             } else {
                 (
                     StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": format!("LLM 网关调用失败：{}", e) })),
+                    json!({ "error": format!("LLM 网关调用失败：{}", e) }),
                 )
             }
         }
@@ -1108,6 +1175,716 @@ async fn list_mcp_servers_handler(State(state): State<Arc<AppState>>) -> impl In
     let servers = state.mcp_servers.read().await.clone();
     Json(json!({ "count": servers.len(), "servers": servers }))
 }
+
+// ─── 对外发布：Public API（入站密钥鉴权 + scope + 限流/配额 + 审计）──────────────
+
+/// 从请求头解析入站密钥 → 调用方上下文；未命中/非法返回 401/403。
+async fn authenticate_public(
+    state: &Arc<AppState>,
+    headers: &axum::http::HeaderMap,
+) -> Result<api_gov::ApiCallerContext, (StatusCode, Json<Value>)> {
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let token = match token {
+        Some(t) => t,
+        None => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "missing bearer token" })),
+            ))
+        }
+    };
+    let keys = state.api_keys.read().await;
+    let clients = state.api_clients.read().await;
+    match api_gov::resolve_bearer_token(&token, &keys, &clients) {
+        Ok(ctx) => Ok(ctx),
+        Err(e) => {
+            let code = match e {
+                api_gov::AuthError::Unauthorized => StatusCode::UNAUTHORIZED,
+                _ => StatusCode::FORBIDDEN,
+            };
+            Err((code, Json(json!({ "error": e.as_str() }))))
+        }
+    }
+}
+
+/// Agent 是否已发布（published=true）。
+async fn agent_is_published(state: &Arc<AppState>, id: &str) -> bool {
+    let guard = state.user_agents.read().await;
+    guard
+        .iter()
+        .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(id))
+        .and_then(|a| a.get("published").and_then(|v| v.as_bool()))
+        .unwrap_or(false)
+}
+
+/// 更新命中密钥的 last_used_at 并落盘。
+async fn touch_key_last_used(state: &Arc<AppState>, key_id: &str) {
+    let mut keys = state.api_keys.write().await;
+    if let Some(k) = keys.iter_mut().find(|k| k.id == key_id) {
+        k.last_used_at = Some(chrono::Utc::now().to_rfc3339());
+    }
+    let _ = api_gov::save_api_keys(&keys);
+}
+
+/// 写一条对外调用审计（异步 fs 追加）。
+fn write_public_audit(
+    ctx: &api_gov::ApiCallerContext,
+    agent_id: &str,
+    endpoint: &str,
+    status: u16,
+    started: std::time::Instant,
+    result: &str,
+) {
+    let entry = json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "client_id": ctx.client_id,
+        "key_prefix": ctx.key_prefix,
+        "agent_id": agent_id,
+        "endpoint": endpoint,
+        "status": status,
+        "result": result,
+        "latency_ms": started.elapsed().as_millis() as u64,
+        "tenant_id": ctx.tenant_id,
+    });
+    api_gov::append_audit(&entry);
+}
+
+/// 把限流/配额判定失败映射为 (状态码, 响应体, Retry-After 秒)。
+fn usage_denied_response(d: &api_gov::UsageDenied) -> (StatusCode, Value, Option<u64>) {
+    match d {
+        api_gov::UsageDenied::RateLimited { retry_after } => (
+            StatusCode::TOO_MANY_REQUESTS,
+            json!({ "error": "rate_limited", "retry_after": retry_after }),
+            Some(*retry_after),
+        ),
+        api_gov::UsageDenied::QuotaExceeded { scope } => (
+            StatusCode::TOO_MANY_REQUESTS,
+            json!({ "error": "quota_exceeded", "scope": scope }),
+            None,
+        ),
+        api_gov::UsageDenied::Concurrency => (
+            StatusCode::TOO_MANY_REQUESTS,
+            json!({ "error": "concurrency_limit" }),
+            None,
+        ),
+    }
+}
+
+/// 对外调用统一准入：鉴权 → scope(id ∈ granted && published) → 取 client → 限流/配额/并发。
+/// 成功返回 (调用方上下文, 并发守卫)；失败返回可直接下发的响应（含审计与 Retry-After）。
+async fn public_gate(
+    state: &Arc<AppState>,
+    headers: &axum::http::HeaderMap,
+    id: &str,
+    endpoint: &str,
+    started: std::time::Instant,
+) -> Result<(api_gov::ApiCallerContext, api_gov::ConcurrencyGuard), axum::response::Response> {
+    let ctx = match authenticate_public(state, headers).await {
+        Ok(c) => c,
+        Err(resp) => return Err(resp.into_response()),
+    };
+    if !ctx.granted_agent_ids.iter().any(|a| a == id) {
+        write_public_audit(&ctx, id, endpoint, 403, started, "not_in_scope");
+        return Err((StatusCode::FORBIDDEN, Json(json!({ "error": "agent not in scope", "id": id })))
+            .into_response());
+    }
+    if !agent_is_published(state, id).await {
+        write_public_audit(&ctx, id, endpoint, 403, started, "not_published");
+        return Err((StatusCode::FORBIDDEN, Json(json!({ "error": "agent not published", "id": id })))
+            .into_response());
+    }
+    let client = {
+        let clients = state.api_clients.read().await;
+        clients.iter().find(|c| c.id == ctx.client_id).cloned()
+    };
+    let client = match client {
+        Some(c) => c,
+        None => {
+            return Err((StatusCode::FORBIDDEN, Json(json!({ "error": "client_disabled" })))
+                .into_response())
+        }
+    };
+    let guard = match state.api_usage.try_acquire(&client) {
+        Ok(g) => g,
+        Err(denied) => {
+            let (code, body, retry) = usage_denied_response(&denied);
+            write_public_audit(&ctx, id, endpoint, code.as_u16(), started, "throttled");
+            let mut resp = (code, Json(body)).into_response();
+            if let Some(r) = retry {
+                if let Ok(hv) = r.to_string().parse() {
+                    resp.headers_mut().insert(axum::http::header::RETRY_AFTER, hv);
+                }
+            }
+            return Err(resp);
+        }
+    };
+    Ok((ctx, guard))
+}
+
+/// POST /api/v1/public/agents/:id/chat — 对外单轮问答。
+async fn public_agent_chat_handler(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<AgentChatRequest>,
+) -> impl IntoResponse {
+    let started = std::time::Instant::now();
+    let (ctx, _guard) = match public_gate(&state, &headers, &id, "chat", started).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let message = req.message.trim().to_string();
+    if message.is_empty() {
+        write_public_audit(&ctx, &id, "chat", 400, started, "empty_message");
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "message 不能为空" })))
+            .into_response();
+    }
+    let (status, body) = run_agent_rag(&state, &id, &message).await;
+    touch_key_last_used(&state, &ctx.key_id).await;
+    write_public_audit(&ctx, &id, "chat", status.as_u16(), started, "ok");
+    (status, Json(body)).into_response()
+}
+
+// ─── 流式：原生 SSE + OpenAI chunk（共用同一 token 流水线）────────────────────────
+
+/// SSE 输出形态：原生（token/done 事件）或 OpenAI（chat.completion.chunk + [DONE]）。
+#[derive(Clone, Copy)]
+enum StreamShape {
+    Native,
+    OpenAI,
+}
+
+/// 把一段增量文本封装为对应形态的 SSE Event。
+fn delta_event(shape: StreamShape, chat_id: &str, created: i64, model: &str, text: &str) -> Event {
+    match shape {
+        StreamShape::Native => Event::default().event("token").data(json!({ "delta": text }).to_string()),
+        StreamShape::OpenAI => Event::default().data(
+            json!({
+                "id": chat_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{ "index": 0, "delta": { "content": text }, "finish_reason": null }],
+            })
+            .to_string(),
+        ),
+    }
+}
+
+/// 基于已完成检索的 RagContext，调用网关流式接口并逐 token 下发 SSE；
+/// 尾部下发汇总（原生 done / OpenAI 结束 chunk + [DONE]），并在流结束后落审计。
+/// `guard` 随流移动、于流结束时归还并发额度。
+fn build_sse_response(
+    state: Arc<AppState>,
+    ctx: api_gov::ApiCallerContext,
+    id: String,
+    endpoint: &'static str,
+    started: std::time::Instant,
+    rc: RagContext,
+    guard: api_gov::ConcurrencyGuard,
+    shape: StreamShape,
+    report_model: String,
+) -> axum::response::Response {
+    let llm_model = state.gateway.default_model();
+    let chat_id = format!("chatcmpl-{}", uuid::Uuid::new_v4().simple());
+    let created = chrono::Utc::now().timestamp();
+    let stream = async_stream::stream! {
+        let _guard = guard; // 持有并发额度直至流结束
+        let mut full = String::new();
+        let mut ok = true;
+        match state
+            .gateway
+            .stream_chat_with_params(&llm_model, rc.messages, None, None, None, None)
+            .await
+        {
+            Ok(mut ms) => loop {
+                match ms.next_event().await {
+                    Ok(Some(ev)) => {
+                        if let crate::llm::stream_types::StreamEvent::ContentBlockDelta(d) = &ev {
+                            if let crate::llm::stream_types::ContentBlockDelta::TextDelta { text } = &d.delta {
+                                if !text.is_empty() {
+                                    full.push_str(text);
+                                    yield Ok::<Event, Infallible>(delta_event(shape, &chat_id, created, &report_model, text));
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(_) => { ok = false; break; }
+                }
+            },
+            Err(_) => { ok = false; }
+        }
+        // 流式失败或无产出且有图谱命中 → 回退图谱直出，保证可用性。
+        if full.is_empty() {
+            if let Some(fb) = &rc.fallback_answer {
+                full = fb.clone();
+                yield Ok(delta_event(shape, &chat_id, created, &report_model, fb));
+            }
+        }
+        // 尾包。
+        match shape {
+            StreamShape::Native => {
+                yield Ok(Event::default().event("done").data(
+                    json!({
+                        "answer": full,
+                        "grounded": rc.grounded,
+                        "sources": rc.sources,
+                        "retrieved": rc.retrieved,
+                        "vector_retrieved": rc.vector_retrieved,
+                        "model": llm_model,
+                        "suggested_actions": rc.suggested_actions,
+                    })
+                    .to_string(),
+                ));
+            }
+            StreamShape::OpenAI => {
+                yield Ok(Event::default().data(
+                    json!({
+                        "id": chat_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": report_model,
+                        "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }],
+                    })
+                    .to_string(),
+                ));
+                yield Ok(Event::default().data("[DONE]".to_string()));
+            }
+        }
+        let (status, result) = if !full.is_empty() {
+            (200u16, if ok { "ok" } else { "degraded" })
+        } else {
+            (502u16, "error")
+        };
+        write_public_audit(&ctx, &id, endpoint, status, started, result);
+    };
+    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
+}
+
+/// POST /api/v1/public/agents/:id/chat/stream — 对外 SSE 流式问答（逐 token + done 尾包）。
+async fn public_agent_chat_stream_handler(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<AgentChatRequest>,
+) -> impl IntoResponse {
+    let started = std::time::Instant::now();
+    let (ctx, guard) = match public_gate(&state, &headers, &id, "chat_stream", started).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let message = req.message.trim().to_string();
+    if message.is_empty() {
+        write_public_audit(&ctx, &id, "chat_stream", 400, started, "empty_message");
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "message 不能为空" })))
+            .into_response();
+    }
+    let rc = match build_rag_context(&state, &id, &message).await {
+        Ok(c) => c,
+        Err((status, body)) => {
+            write_public_audit(&ctx, &id, "chat_stream", status.as_u16(), started, "error");
+            return (status, Json(body)).into_response();
+        }
+    };
+    touch_key_last_used(&state, &ctx.key_id).await;
+    let report_model = state.gateway.default_model();
+    build_sse_response(state, ctx, id, "chat_stream", started, rc, guard, StreamShape::Native, report_model)
+}
+
+// ─── OpenAI 兼容层：/v1/models、/v1/chat/completions（model = agentId）──────────────
+
+#[derive(Deserialize)]
+pub struct OpenAiMessage {
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub content: String,
+}
+
+#[derive(Deserialize)]
+pub struct OpenAiChatRequest {
+    pub model: String,
+    #[serde(default)]
+    pub messages: Vec<OpenAiMessage>,
+    #[serde(default)]
+    pub stream: bool,
+}
+
+/// OpenAI 风格错误体。
+fn openai_error(status: StatusCode, message: impl Into<String>, err_type: &str) -> axum::response::Response {
+    (status, Json(json!({ "error": { "message": message.into(), "type": err_type } }))).into_response()
+}
+
+/// 非流式 OpenAI chat.completion 响应（model 回显请求的 agentId）。
+fn openai_completion_json(model: &str, answer: &str) -> axum::response::Response {
+    (
+        StatusCode::OK,
+        Json(json!({
+            "id": format!("chatcmpl-{}", uuid::Uuid::new_v4().simple()),
+            "object": "chat.completion",
+            "created": chrono::Utc::now().timestamp(),
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": answer },
+                "finish_reason": "stop",
+            }],
+            "usage": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 },
+        })),
+    )
+        .into_response()
+}
+
+/// GET /v1/models — 列出当前调用方 scope 内、且 published 的 Agent 作为 model。
+async fn openai_list_models_handler(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let ctx = match authenticate_public(&state, &headers).await {
+        Ok(c) => c,
+        Err(resp) => return resp.into_response(),
+    };
+    let created = chrono::Utc::now().timestamp();
+    let agents = state.user_agents.read().await;
+    let owner = if ctx.owner.is_empty() { "wild-agent-os".to_string() } else { ctx.owner.clone() };
+    let data: Vec<Value> = ctx
+        .granted_agent_ids
+        .iter()
+        .filter(|aid| {
+            agents
+                .iter()
+                .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(aid.as_str()))
+                .and_then(|a| a.get("published").and_then(|v| v.as_bool()))
+                .unwrap_or(false)
+        })
+        .map(|aid| json!({ "id": aid, "object": "model", "created": created, "owned_by": owner }))
+        .collect();
+    (StatusCode::OK, Json(json!({ "object": "list", "data": data }))).into_response()
+}
+
+/// POST /v1/chat/completions — OpenAI 兼容问答（model=agentId，取末条 user 内容做单轮 RAG）。
+async fn openai_chat_completions_handler(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<OpenAiChatRequest>,
+) -> impl IntoResponse {
+    let started = std::time::Instant::now();
+    let id = req.model.trim().to_string();
+    if id.is_empty() {
+        return openai_error(StatusCode::BAD_REQUEST, "model (agentId) 不能为空", "invalid_request_error");
+    }
+    let endpoint: &'static str = if req.stream { "chat_completions_stream" } else { "chat_completions" };
+    let (ctx, guard) = match public_gate(&state, &headers, &id, endpoint, started).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let message = req
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.trim().to_string())
+        .unwrap_or_default();
+    if message.is_empty() {
+        write_public_audit(&ctx, &id, endpoint, 400, started, "empty_message");
+        return openai_error(StatusCode::BAD_REQUEST, "messages 中缺少非空 user 内容", "invalid_request_error");
+    }
+    let rc = match build_rag_context(&state, &id, &message).await {
+        Ok(c) => c,
+        Err((status, body)) => {
+            write_public_audit(&ctx, &id, endpoint, status.as_u16(), started, "error");
+            let msg = body.get("error").and_then(|v| v.as_str()).unwrap_or("agent not found").to_string();
+            return openai_error(status, msg, "invalid_request_error");
+        }
+    };
+    touch_key_last_used(&state, &ctx.key_id).await;
+    if req.stream {
+        return build_sse_response(state, ctx, id.clone(), endpoint, started, rc, guard, StreamShape::OpenAI, id);
+    }
+    match state.gateway.chat(rc.messages).await {
+        Ok(resp) => {
+            let answer = resp.choices.first().and_then(|c| c.message.content.clone()).unwrap_or_default();
+            write_public_audit(&ctx, &id, endpoint, 200, started, "ok");
+            openai_completion_json(&id, &answer)
+        }
+        Err(e) => {
+            if let Some(fb) = rc.fallback_answer {
+                write_public_audit(&ctx, &id, endpoint, 200, started, "degraded");
+                openai_completion_json(&id, &fb)
+            } else {
+                write_public_audit(&ctx, &id, endpoint, 502, started, "error");
+                openai_error(StatusCode::BAD_GATEWAY, format!("LLM 网关调用失败：{}", e), "api_error")
+            }
+        }
+    }
+}
+
+// ─── 管理面：调用方 & 密钥中心（需 DA 角色）────────────────────────────────────
+
+/// 密钥对外视图（绝不含 key_hash）。
+fn key_public_view(k: &ApiKey) -> Value {
+    json!({
+        "id": k.id,
+        "name": k.name,
+        "client_id": k.client_id,
+        "key_prefix": k.key_prefix,
+        "status": k.status,
+        "last_used_at": k.last_used_at,
+        "expires_at": k.expires_at,
+        "created_at": k.created_at,
+    })
+}
+
+#[derive(Deserialize)]
+pub struct CreateClientRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub owner: String,
+    #[serde(default)]
+    pub granted_agent_ids: Vec<String>,
+    pub rate_limit: Option<api_gov::RateLimit>,
+    pub quota: Option<api_gov::Quota>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateClientRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub owner: Option<String>,
+    pub granted_agent_ids: Option<Vec<String>>,
+    pub status: Option<String>,
+    pub rate_limit: Option<api_gov::RateLimit>,
+    pub quota: Option<api_gov::Quota>,
+}
+
+#[derive(Deserialize)]
+pub struct IssueKeyRequest {
+    #[serde(default)]
+    pub name: String,
+    pub expires_at: Option<String>,
+}
+
+/// GET /api/v1/api-clients — 列出调用方（含密钥视图 + 实时用量快照）。
+async fn list_api_clients_handler(
+    State(state): State<Arc<AppState>>,
+    identity: UserIdentity,
+) -> impl IntoResponse {
+    if let Err(e) = identity.require_role("DA") {
+        return e.into_response();
+    }
+    let clients = state.api_clients.read().await;
+    let keys = state.api_keys.read().await;
+    let items: Vec<Value> = clients
+        .iter()
+        .map(|c| {
+            let ckeys: Vec<Value> = keys
+                .iter()
+                .filter(|k| k.client_id == c.id)
+                .map(key_public_view)
+                .collect();
+            json!({
+                "id": c.id,
+                "name": c.name,
+                "description": c.description,
+                "tenant_id": c.tenant_id,
+                "owner": c.owner,
+                "granted_agent_ids": c.granted_agent_ids,
+                "status": c.status,
+                "rate_limit": c.rate_limit,
+                "quota": c.quota,
+                "created_at": c.created_at,
+                "updated_at": c.updated_at,
+                "keys": ckeys,
+                "usage": state.api_usage.snapshot(&c.id),
+            })
+        })
+        .collect();
+    (StatusCode::OK, Json(json!({ "count": items.len(), "clients": items }))).into_response()
+}
+
+/// POST /api/v1/api-clients — 创建调用方。
+async fn create_api_client_handler(
+    State(state): State<Arc<AppState>>,
+    identity: UserIdentity,
+    Json(req): Json<CreateClientRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = identity.require_role("DA") {
+        return e.into_response();
+    }
+    if req.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name 不能为空" }))).into_response();
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    let client = ApiClient {
+        id: uuid::Uuid::new_v4().hyphenated().to_string(),
+        name: req.name.trim().to_string(),
+        description: req.description,
+        tenant_id: identity.tenant_id.clone(),
+        owner: if req.owner.is_empty() { identity.user_id.clone() } else { req.owner },
+        granted_agent_ids: req.granted_agent_ids,
+        status: "active".to_string(),
+        rate_limit: req.rate_limit.unwrap_or_default(),
+        quota: req.quota.unwrap_or_default(),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    let mut guard = state.api_clients.write().await;
+    guard.push(client.clone());
+    let _ = api_gov::save_api_clients(&guard);
+    (StatusCode::CREATED, Json(json!({ "status": "created", "client": client }))).into_response()
+}
+
+/// PUT /api/v1/api-clients/:id — 更新调用方（改授权/限流/配额/启停）。
+async fn update_api_client_handler(
+    State(state): State<Arc<AppState>>,
+    identity: UserIdentity,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<UpdateClientRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = identity.require_role("DA") {
+        return e.into_response();
+    }
+    let mut guard = state.api_clients.write().await;
+    let client = match guard.iter_mut().find(|c| c.id == id) {
+        Some(c) => c,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "client not found", "id": id })))
+                .into_response()
+        }
+    };
+    if let Some(v) = req.name { client.name = v; }
+    if let Some(v) = req.description { client.description = v; }
+    if let Some(v) = req.owner { client.owner = v; }
+    if let Some(v) = req.granted_agent_ids { client.granted_agent_ids = v; }
+    if let Some(v) = req.status { client.status = v; }
+    if let Some(v) = req.rate_limit { client.rate_limit = v; }
+    if let Some(v) = req.quota { client.quota = v; }
+    client.updated_at = chrono::Utc::now().to_rfc3339();
+    let updated = client.clone();
+    let _ = api_gov::save_api_clients(&guard);
+    (StatusCode::OK, Json(json!({ "status": "updated", "client": updated }))).into_response()
+}
+
+/// DELETE /api/v1/api-clients/:id — 删除调用方及其名下所有密钥。
+async fn delete_api_client_handler(
+    State(state): State<Arc<AppState>>,
+    identity: UserIdentity,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = identity.require_role("DA") {
+        return e.into_response();
+    }
+    let mut clients = state.api_clients.write().await;
+    let before = clients.len();
+    clients.retain(|c| c.id != id);
+    if clients.len() == before {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "client not found", "id": id })))
+            .into_response();
+    }
+    let _ = api_gov::save_api_clients(&clients);
+    let mut keys = state.api_keys.write().await;
+    keys.retain(|k| k.client_id != id);
+    let _ = api_gov::save_api_keys(&keys);
+    (StatusCode::OK, Json(json!({ "status": "deleted", "id": id }))).into_response()
+}
+
+/// POST /api/v1/api-clients/:id/keys — 为调用方签发新密钥（响应含明文，仅此一次）。
+async fn issue_api_key_handler(
+    State(state): State<Arc<AppState>>,
+    identity: UserIdentity,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<IssueKeyRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = identity.require_role("DA") {
+        return e.into_response();
+    }
+    let tenant = {
+        let clients = state.api_clients.read().await;
+        match clients.iter().find(|c| c.id == id) {
+            Some(c) => c.tenant_id.clone(),
+            None => {
+                return (StatusCode::NOT_FOUND, Json(json!({ "error": "client not found", "id": id })))
+                    .into_response()
+            }
+        }
+    };
+    let (plaintext, prefix, hash) = api_gov::generate_key(&tenant);
+    let key = ApiKey {
+        id: uuid::Uuid::new_v4().hyphenated().to_string(),
+        name: req.name,
+        client_id: id.clone(),
+        key_prefix: prefix,
+        key_hash: hash,
+        status: "active".to_string(),
+        last_used_at: None,
+        expires_at: req.expires_at,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let mut guard = state.api_keys.write().await;
+    guard.push(key.clone());
+    let _ = api_gov::save_api_keys(&guard);
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "status": "created",
+            "key": key_public_view(&key),
+            "api_key": plaintext,
+            "warning": "该明文仅此一次返回，请立即妥善保存",
+        })),
+    )
+        .into_response()
+}
+
+/// DELETE /api/v1/api-clients/:id/keys/:kid — 撤销某密钥。
+async fn revoke_api_key_handler(
+    State(state): State<Arc<AppState>>,
+    identity: UserIdentity,
+    axum::extract::Path((id, kid)): axum::extract::Path<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(e) = identity.require_role("DA") {
+        return e.into_response();
+    }
+    let mut guard = state.api_keys.write().await;
+    let key = guard.iter_mut().find(|k| k.id == kid && k.client_id == id);
+    match key {
+        Some(k) => {
+            k.status = "revoked".to_string();
+            let _ = api_gov::save_api_keys(&guard);
+            (StatusCode::OK, Json(json!({ "status": "revoked", "id": kid }))).into_response()
+        }
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "key not found", "id": kid })))
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AuditQuery {
+    pub client_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+/// GET /api/v1/api-audit — 对外调用审计查询（按 client/agent 过滤，倒序）。
+async fn list_api_audit_handler(
+    identity: UserIdentity,
+    Query(q): Query<AuditQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = identity.require_role("DA") {
+        return e.into_response();
+    }
+    let limit = q.limit.unwrap_or(200).min(1000);
+    let items = api_gov::read_audit(q.client_id.as_deref(), q.agent_id.as_deref(), limit);
+    (StatusCode::OK, Json(json!({ "count": items.len(), "records": items }))).into_response()
+}
+
 
 #[derive(Deserialize)]
 pub struct McpServerRegisterRequest {
@@ -3522,6 +4299,9 @@ mod tests {
             vector_store: None,
             task_executor: None,
             batch_manager: None,
+            api_clients: Arc::new(tokio::sync::RwLock::new(vec![])),
+            api_keys: Arc::new(tokio::sync::RwLock::new(vec![])),
+            api_usage: Arc::new(ApiUsageState::default()),
         });
 
         // 构造 Router 并发起 GET /api/v1/config 请求
@@ -3595,6 +4375,9 @@ mod tests {
             vector_store: None,
             task_executor: None,
             batch_manager: None,
+            api_clients: Arc::new(tokio::sync::RwLock::new(vec![])),
+            api_keys: Arc::new(tokio::sync::RwLock::new(vec![])),
+            api_usage: Arc::new(ApiUsageState::default()),
         });
 
         let router = Router::new()
@@ -3818,6 +4601,9 @@ mod skill_manifest_tests {
             vector_store: None,
             task_executor: None,
             batch_manager: None,
+            api_clients: Arc::new(tokio::sync::RwLock::new(vec![])),
+            api_keys: Arc::new(tokio::sync::RwLock::new(vec![])),
+            api_usage: Arc::new(ApiUsageState::default()),
         })
     }
 

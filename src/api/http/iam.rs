@@ -36,7 +36,7 @@ pub struct JwtClaims {
 // ─── UserIdentity ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum AuthMethod { Jwt, Base64Header, Anonymous }
+pub enum AuthMethod { Jwt, Base64Header, ApiKey, Anonymous }
 
 #[derive(Debug, Clone)]
 pub struct UserIdentity {
