@@ -121,6 +121,105 @@ fn save_user_agents(agents: &[Value]) -> std::io::Result<()> {
     std::fs::write(&path, content)
 }
 
+/// 从旧 knowledge_graph 值中解析知识库 uuid（形如 .../kb/{uuid}）。
+fn extract_kb_uuid_from_graph(graph: &str) -> Option<String> {
+    let idx = graph.rfind("/kb/")?;
+    let candidate = graph[idx + 4..].split('/').next().unwrap_or_default();
+    if candidate.len() == 36 && candidate.matches('-').count() == 4 {
+        Some(candidate.to_string())
+    } else {
+        None
+    }
+}
+
+/// 一次性幂等迁移：将存量 agent.knowledge_graph（旧「绑定知识图谱」单值）迁入知识包体系。
+/// 策略（对每个 knowledge_graph 非空的 agent）：
+///   1) 能解析出 KB uuid 且已有知识包的 graph_kb_ids 覆盖它 → 确保该包挂载到 agent，清空旧字段；
+///   2) 否则能解析出 KB uuid → 新建知识包 {graph_kb_ids:[uuid]}，挂载并清空；
+///   3) 否则（原始命名图）→ 新建知识包 {named_graph: 原值}，挂载并清空。
+/// 返回 (agents_changed, packs_changed)；清空后再次运行不再产生变更（幂等）。
+fn migrate_legacy_agent_graphs(agents: &mut [Value], packs: &mut Vec<Value>) -> (bool, bool) {
+    let mut agents_changed = false;
+    let mut packs_changed = false;
+    for agent in agents.iter_mut() {
+        let kg = agent
+            .get("knowledge_graph")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if kg.is_empty() {
+            continue;
+        }
+        let agent_name = agent.get("name").and_then(|v| v.as_str()).unwrap_or("agent").to_string();
+        let mut pack_ids: Vec<String> = agent
+            .get("knowledge_pack_ids")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        let kb_uuid = extract_kb_uuid_from_graph(&kg);
+        let covering_pack_id = kb_uuid.as_ref().and_then(|uuid| {
+            packs
+                .iter()
+                .find(|p| {
+                    p.get("graph_kb_ids")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().any(|x| x.as_str() == Some(uuid.as_str())))
+                        .unwrap_or(false)
+                })
+                .and_then(|p| p.get("id").and_then(|v| v.as_str()).map(String::from))
+        });
+
+        let target_pack_id = match covering_pack_id {
+            Some(pid) => pid,
+            None => {
+                let new_id = uuid::Uuid::new_v4().hyphenated().to_string();
+                let mut pack = json!({
+                    "id": new_id.clone(),
+                    "name": format!("{}（图谱迁移）", agent_name),
+                    "description": "由旧「绑定知识图谱」自动迁移生成",
+                    "version": "1.0.0",
+                    "icon": "Package",
+                    "color": "amber",
+                    "named_graph": "",
+                    "vector_namespace": "",
+                    "ontology_domain": "",
+                    "stats": { "object_types": 0, "link_types": 0, "action_types": 0, "functions": 0 },
+                    "category_ids": [],
+                    "graph_kb_ids": [],
+                    "vector_kb_ids": [],
+                    "builtin": false,
+                    "created_at": chrono::Utc::now().to_rfc3339(),
+                });
+                match &kb_uuid {
+                    Some(uuid) => pack["graph_kb_ids"] = json!([uuid]),
+                    None => pack["named_graph"] = json!(kg),
+                }
+                packs.push(pack);
+                packs_changed = true;
+                new_id
+            }
+        };
+
+        if !pack_ids.contains(&target_pack_id) {
+            pack_ids.push(target_pack_id.clone());
+        }
+        if let Some(obj) = agent.as_object_mut() {
+            obj.insert("knowledge_pack_ids".into(), json!(pack_ids));
+            obj.insert("knowledge_graph".into(), json!(""));
+            obj.remove("knowledge_graph_description");
+            obj.insert("updated_at".into(), json!(chrono::Utc::now().to_rfc3339()));
+        }
+        agents_changed = true;
+        tracing::info!(
+            "migrated legacy knowledge_graph for agent '{}' -> pack {}",
+            agent_name,
+            target_pack_id
+        );
+    }
+    (agents_changed, packs_changed)
+}
+
 /// MCP 服务器注册表的持久化文件路径。
 fn mcp_servers_store_path() -> std::path::PathBuf {
     data_dir().join("mcp_servers.json")
@@ -391,6 +490,18 @@ pub fn build_router(
         core.skills.register_skill(skill);
     }
 
+    // 一次性幂等迁移：将存量 agent.knowledge_graph（旧「绑定知识图谱」）迁入知识包体系。
+    let mut loaded_agents = load_user_agents();
+    let mut loaded_packs = load_knowledge_packs();
+    let (agents_migrated, packs_migrated) =
+        migrate_legacy_agent_graphs(&mut loaded_agents, &mut loaded_packs);
+    if agents_migrated {
+        let _ = save_user_agents(&loaded_agents);
+    }
+    if packs_migrated {
+        let _ = save_knowledge_packs(&loaded_packs);
+    }
+
     let state = Arc::new(AppState {
         core,
         gateway,
@@ -398,11 +509,11 @@ pub fn build_router(
         config_info: Arc::new(tokio::sync::RwLock::new(config_info)),
         agents_info,
         mcp_servers: Arc::new(tokio::sync::RwLock::new(load_mcp_servers())),
-        user_agents: Arc::new(tokio::sync::RwLock::new(load_user_agents())),
+        user_agents: Arc::new(tokio::sync::RwLock::new(loaded_agents)),
         prompts: Arc::new(PromptRegistry::load(prompts_store_path())),
         kb_categories: Arc::new(tokio::sync::RwLock::new(load_kb_categories())),
         knowledge_bases: Arc::new(tokio::sync::RwLock::new(load_knowledge_bases())),
-        knowledge_packs: Arc::new(tokio::sync::RwLock::new(load_knowledge_packs())),
+        knowledge_packs: Arc::new(tokio::sync::RwLock::new(loaded_packs)),
         vector_store,
         task_executor,
         batch_manager,
@@ -463,7 +574,6 @@ pub fn build_router(
         .route("/api/v1/kb/bases/:id/search", post(search_knowledge_base_handler))
         .route("/api/v1/agents", get(list_agents_handler).post(create_agent_handler))
         .route("/api/v1/agents/:id", put(update_agent_handler).delete(delete_agent_handler))
-        .route("/api/v1/agents/:id/graph", post(bind_agent_graph_handler))
         .route("/api/v1/agents/:id/chat", post(agent_chat_handler))
         // ── 对外发布：Public API（入站密钥鉴权 + scope + 限流/配额 + 审计）──
         .route("/api/v1/public/agents/:id/chat", post(public_agent_chat_handler))
@@ -686,7 +796,6 @@ pub struct AgentCreateRequest {
     pub business_domain: Option<String>,
     #[serde(default)]
     pub skills: Vec<String>,
-    pub knowledge_graph: Option<String>,
     /// 关联的知识包 id 列表（Agent → N 知识包）。
     #[serde(default)]
     pub knowledge_pack_ids: Vec<String>,
@@ -706,7 +815,6 @@ async fn create_agent_handler(
         "description": req.description.unwrap_or_default(),
         "business_domain": req.business_domain.unwrap_or_default(),
         "skills": req.skills,
-        "knowledge_graph": req.knowledge_graph.unwrap_or_default(),
         "knowledge_pack_ids": req.knowledge_pack_ids,
         "enabled": req.enabled.unwrap_or(true),
         "icon": req.icon.unwrap_or_else(|| "Bot".to_string()),
@@ -950,12 +1058,9 @@ async fn build_rag_context(
         }
     };
     let agent_name = agent.get("name").and_then(|v| v.as_str()).unwrap_or("维修助手").to_string();
-    // 2a. 解析 Agent 的知识来源：展开知识包 → 命名图集合 + 向量命名空间集合（兼容旧 knowledge_graph 单值）。
+    // 2a. 解析 Agent 的知识来源：展开知识包 → 命名图集合 + 向量命名空间集合。
     let mut graph_iris: Vec<String> = Vec::new();
     let mut vector_namespaces: Vec<String> = Vec::new();
-    if let Some(g) = agent.get("knowledge_graph").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
-        graph_iris.push(expand_iri(g));
-    }
     let pack_ids: Vec<String> = agent
         .get("knowledge_pack_ids")
         .and_then(|v| v.as_array())
@@ -4567,57 +4672,6 @@ fn convert_event_to_sse(event: &crate::core::event_bus::Event) -> Option<Event> 
 
 // ─── G5：知识库可视化绑定 ─────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
-pub struct BindGraphRequest {
-    /// KG 命名图名称，如 "aps/benches"，后端自动加前缀 tenant_graph(tenant_id, graph)。
-    pub graph: String,
-    pub description: Option<String>,
-}
-
-/// POST /api/v1/agents/:id/graph — 绑定智能体与知识图谱命名图
-async fn bind_agent_graph_handler(
-    State(state): State<Arc<AppState>>,
-    identity: UserIdentity,
-    axum::extract::Path(id): axum::extract::Path<String>,
-    Json(req): Json<BindGraphRequest>,
-) -> impl IntoResponse {
-    if req.graph.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({
-            "error": "graph 不能为空"
-        }))).into_response();
-    }
-    // 租户隔离前缀
-    let full_graph = format!("tenant:{}/{}", identity.tenant_id, req.graph);
-    let patch = json!({
-        "knowledge_graph": full_graph,
-        "knowledge_graph_description": req.description.unwrap_or_default(),
-    });
-    let mut guard = state.user_agents.write().await;
-    let found = guard.iter_mut()
-        .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(id.as_str()));
-    match found {
-        Some(agent) => {
-            if let (Some(obj), Some(patch_obj)) = (agent.as_object_mut(), patch.as_object()) {
-                for (k, v) in patch_obj {
-                    obj.insert(k.clone(), v.clone());
-                }
-                obj.insert("updated_at".into(), json!(chrono::Utc::now().to_rfc3339()));
-                obj.insert("graph_bound_by".into(), json!(identity.user_id.clone()));
-            }
-            let updated = agent.clone();
-            let _ = save_user_agents(&guard);
-            (StatusCode::OK, Json(json!({
-                "status": "bound",
-                "agent_id": id,
-                "graph": full_graph,
-                "agent": updated,
-                "bound_by": identity.user_id,
-            }))).into_response()
-        }
-        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "agent not found", "id": id }))).into_response(),
-    }
-}
-
 // ─── G6'：Prompt/模型灰度版本管理 ────────────────────────────────────────────
 
 /// GET /api/v1/prompts — 列举所有 Prompt 版本
@@ -4877,7 +4931,6 @@ mod tests {
             .route("/api/v1/kg/query", post(kg_query_handler))
             .route("/api/v1/agents", post(create_agent_handler))
             .route("/api/v1/skills", post(register_skill_handler))
-            .route("/api/v1/agents/:id/graph", post(bind_agent_graph_handler))
             .with_state(state);
 
         async fn post_json(
@@ -4990,19 +5043,7 @@ mod tests {
                 .await;
         assert_eq!(st, StatusCode::FORBIDDEN);
 
-        // [4] 绑定专用知识库（自动注入租户前缀）
-        let (st, bound) = post_json(
-            &router,
-            &format!("/api/v1/agents/{}/graph", agent_id),
-            json!({"graph": "kb/fault-codes", "description": "故障码知识库"}),
-            Some(&id_a),
-        )
-        .await;
-        assert_eq!(st, StatusCode::OK);
-        assert_eq!(bound["graph"], g_tesla);
-        assert_eq!(bound["bound_by"], "svc-tesla");
-
-        // [5] 跨租户会话隔离
+        // [4] 跨租户会话隔离（图谱直查，租户命名图隔离）
         let list = |g: &str| {
             json!({"sparql": format!(
                 "SELECT ?label WHERE {{ GRAPH <{}> {{ ?s a <http://aps.local/ontology/FaultCode> ; <http://www.w3.org/2000/01/rdf-schema#label> ?label }} }}", g)})
@@ -5466,5 +5507,128 @@ mod ontology_action_tests {
         let r = mk_req(None, json!({}), false);
         let err = build_action_effects("NoSuchAction", &r, &kg, "t").unwrap_err();
         assert_eq!(err.0, StatusCode::NOT_FOUND);
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+/// §9 知识库图谱摄取回归单测：固化两处已修复缺陷——
+///   1) 中文 IRI 保留（kb_sanitize_id 不再把非 ASCII 折叠成 `_`，避免碰撞/损坏）；
+///   2) 图谱库 stats 三元组计数（Oxigraph 绑定键带 `?` 前缀，须用 `?c` 而非 `c`）。
+#[cfg(test)]
+mod kb_ingest_tests {
+    use super::*;
+
+    /// 回归：中文实体/关系名应原样保留 Unicode，仅对 IRIREF 禁用字符做百分号编码。
+    #[test]
+    fn test_kb_sanitize_id_preserves_unicode() {
+        // 中文原样保留（旧实现会全部变成下划线）。
+        assert_eq!(kb_sanitize_id("比亚迪"), "比亚迪");
+        assert_eq!(kb_sanitize_id("车型:测试001"), "车型:测试001");
+        // 不同中文实体不得坍缩到同一串（旧实现会碰撞）。
+        assert_ne!(kb_sanitize_id("比亚迪"), kb_sanitize_id("特斯拉"));
+        // IRIREF 语法禁用字符按 UTF-8 逐字节百分号编码。
+        assert_eq!(kb_sanitize_id("a b"), "a%20b");
+        let enc = kb_sanitize_id("x<y>\"z");
+        assert!(enc.contains("%3C") && enc.contains("%3E") && enc.contains("%22"), "got {enc}");
+    }
+
+    /// 回归：中文主/谓项展开为可读、无碰撞的 iri://entity|relation IRI。
+    #[test]
+    fn test_kb_expand_iri_term_chinese_no_collision() {
+        let a = kb_expand_iri_term("车型:EV001", "iri://entity/");
+        let b = kb_expand_iri_term("车型:EV002", "iri://entity/");
+        assert_eq!(a, "iri://entity/车型:EV001");
+        assert_ne!(a, b, "不同中文实体必须映射到不同 IRI");
+        // 已是 IRI 前缀则原样透传。
+        assert_eq!(
+            kb_expand_iri_term("http://ex.org/x", "iri://entity/"),
+            "http://ex.org/x"
+        );
+    }
+
+    /// 回归：CSV 图谱导入保留中文、区分 iri/literal 宾语类型。
+    #[test]
+    fn test_kb_quads_from_csv_chinese() {
+        let csv = "subject,predicate,object,object_type\n\
+                   车型:测试001,属于品牌,品牌:比亚迪,iri\n\
+                   车型:测试001,续航里程,605,literal\n";
+        let quads = kb_quads_from_csv(csv).expect("csv parse");
+        assert_eq!(quads.len(), 2);
+        assert_eq!(quads[0].subject, "iri://entity/车型:测试001");
+        assert_eq!(quads[0].predicate, "iri://relation/属于品牌");
+        assert_eq!(quads[0].object, RdfValue::Iri("iri://entity/品牌:比亚迪".to_string()));
+        assert_eq!(quads[1].object, RdfValue::Literal("605".to_string()));
+    }
+
+    /// 回归：写入命名图后，用 stats handler 同款 COUNT 查询验证——
+    /// 绑定键为 `?c`（带 `?`），`c` 不存在；中文 IRI 精确计数。
+    #[test]
+    fn test_graph_stats_count_binding_key() {
+        let kg = KnowledgeGraphStore::new().expect("in-mem store");
+        let graph = "iri://kb/test-cn-stats";
+        let csv = "subject,predicate,object,object_type\n\
+                   车型:测试001,属于品牌,品牌:比亚迪,iri\n\
+                   车型:测试001,续航里程,605,literal\n";
+        let quads = kb_quads_from_csv(csv).expect("csv parse");
+        kg.write_quads(&quads, graph).expect("write quads");
+
+        // 与 knowledge_base_stats_handler 完全一致的计数查询。
+        let q = format!("SELECT (COUNT(*) AS ?c) WHERE {{ GRAPH <{g}> {{ ?s ?p ?o }} }}", g = graph);
+        let rows = kg.query_sparql(&q, None).expect("count query");
+        let first = rows.first().expect("one row");
+        // 关键回归：绑定键带 `?` 前缀。
+        assert!(first.get("c").is_none(), "绑定键不应是 `c`");
+        let count = first
+            .get("?c")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<u64>().ok())
+            .expect("?c parses to u64");
+        assert_eq!(count, 2);
+    }
+
+    /// 回归：旧 knowledge_graph 已被某知识包（graph_kb_ids）覆盖时——
+    /// 迁移只清空旧字段、不新建包，且幂等（二次运行无变更）。
+    #[test]
+    fn test_migrate_legacy_graph_already_covered() {
+        let kb_uuid = "cbf58bb1-f09d-4256-a195-351f10172a90";
+        let mut agents = vec![json!({
+            "id": "a1",
+            "name": "新能源车维修助手",
+            "knowledge_graph": format!("tenant:default/tenant:default/kb/{}", kb_uuid),
+            "knowledge_pack_ids": ["ev-repair-fault-kb"],
+        })];
+        let mut packs = vec![json!({
+            "id": "ev-repair-fault-kb",
+            "graph_kb_ids": [kb_uuid],
+        })];
+        let (a, p) = migrate_legacy_agent_graphs(&mut agents, &mut packs);
+        assert!(a, "agent 应被迁移");
+        assert!(!p, "已覆盖：不应新建知识包");
+        assert_eq!(packs.len(), 1, "包数量不变");
+        assert_eq!(agents[0]["knowledge_graph"], json!(""), "旧字段应清空");
+        assert_eq!(agents[0]["knowledge_pack_ids"], json!(["ev-repair-fault-kb"]));
+        // 幂等：二次运行无变更。
+        let (a2, p2) = migrate_legacy_agent_graphs(&mut agents, &mut packs);
+        assert!(!a2 && !p2, "幂等：清空后不再变更");
+    }
+
+    /// 回归：旧 knowledge_graph 未被任何包覆盖时——新建 graph_kb_ids 包并挂载。
+    #[test]
+    fn test_migrate_legacy_graph_creates_pack() {
+        let kb_uuid = "11111111-2222-3333-4444-555555555555";
+        let mut agents = vec![json!({
+            "id": "a2",
+            "name": "维修助手",
+            "knowledge_graph": format!("tenant:default/kb/{}", kb_uuid),
+            "knowledge_pack_ids": [],
+        })];
+        let mut packs: Vec<Value> = vec![];
+        let (a, p) = migrate_legacy_agent_graphs(&mut agents, &mut packs);
+        assert!(a && p, "应迁移并新建包");
+        assert_eq!(packs.len(), 1);
+        assert_eq!(packs[0]["graph_kb_ids"], json!([kb_uuid]));
+        let new_pack_id = packs[0]["id"].as_str().unwrap();
+        assert_eq!(agents[0]["knowledge_pack_ids"], json!([new_pack_id]));
+        assert_eq!(agents[0]["knowledge_graph"], json!(""));
     }
 }
