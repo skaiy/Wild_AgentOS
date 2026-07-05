@@ -817,6 +817,24 @@ impl Settings {
         config.try_deserialize()
     }
 
+    /// 仅加载 embedding 段（含各字段 serde 默认值），用于运行期热切换。
+    /// 相比整份 `load()`，本方法不受其它必填字段（如 api.grpc_addr）约束，
+    /// 因此即便 config.yaml 缺省也能稳健读到 config_override.json 的 embedding 覆盖。
+    pub fn load_embedding() -> EmbeddingSettings {
+        Config::builder()
+            .add_source(config::File::with_name("config").required(false))
+            .add_source(config::File::with_name("data/config_override").required(false))
+            .add_source(
+                Environment::with_prefix("AGENT_OS")
+                    .separator("_")
+                    .try_parsing(true),
+            )
+            .build()
+            .ok()
+            .and_then(|c| c.get::<EmbeddingSettings>("embedding").ok())
+            .unwrap_or_default()
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.gateway.base_url.is_empty() {
             tracing::warn!("gateway.base_url is not set. LLM features will be unavailable until configured via UI.");

@@ -25,7 +25,7 @@ use crate::memory::memory_manager::MemoryManager;
 use crate::memory::prefetch_engine::PrefetchEngine;
 use crate::memory::scheduler::MemoryScheduler;
 use crate::memory::unified_graph::UnifiedGraphStore;
-use crate::memory::HyperspaceStore;
+use crate::api::http::SharedVectorStore;
 use crate::skill_graph::graph_store::SkillGraphStore;
 use crate::templates::template_engine::TemplateEngine;
 use crate::tools::skill_registry::SkillRegistry;
@@ -56,7 +56,7 @@ pub struct AgentOSService {
     prefetch: Arc<PrefetchEngine>,
     unified_graph: Arc<UnifiedGraphStore>,
     /// 向量知识库（HyperspaceStore）：由 HTTP 路由、任务执行器与 SA 工具链共享的同一实例。
-    vector_store: Option<Arc<HyperspaceStore>>,
+    vector_store: SharedVectorStore,
     execution_states: Arc<RwLock<HashMap<String, ExecutionState>>>,
     /// Batch Agent manager, post-new async initialization.
     /// Arc 包裹以便与 HTTP 路由共享同一实例（方案A 平台运维台）。
@@ -437,7 +437,7 @@ fn build_supervisor_agent(
     prefetch: Arc<PrefetchEngine>,
     unified_graph: Arc<UnifiedGraphStore>,
     event_bus: Arc<EventBus>,
-    vector_store: Option<Arc<HyperspaceStore>>,
+    vector_store: SharedVectorStore,
     settings: &Settings,
 ) -> SupervisorAgent {
     // initialize WorkspaceMonitor (if workspace root is configured)
@@ -491,8 +491,8 @@ fn build_supervisor_agent(
             executor.set_workspace_monitor(wm.clone());
         }
         // 注入向量库，使 SA 工具链的 kb_vector_search 可做语义召回
-        if let Some(ref vs) = vector_store {
-            executor.set_vector_store(vs.clone());
+        if let Some(vs) = vector_store.load_full() {
+            executor.set_vector_store(vs);
         }
     }
 
@@ -530,7 +530,7 @@ pub struct HttpTaskExecutor {
     prefetch: Arc<PrefetchEngine>,
     unified_graph: Arc<UnifiedGraphStore>,
     event_bus: Arc<EventBus>,
-    vector_store: Option<Arc<HyperspaceStore>>,
+    vector_store: SharedVectorStore,
     settings: Settings,
 }
 

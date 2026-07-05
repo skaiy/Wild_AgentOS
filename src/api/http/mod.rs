@@ -32,6 +32,11 @@ use crate::memory::l2_blackboard::QueryFilter;
 /// inner Option matches the gRPC server's take-on-shutdown lifecycle).
 pub type SharedBatchManager = Arc<tokio::sync::Mutex<Option<BatchAgentManager>>>;
 
+/// 可原子热替换的向量库句柄：HTTP 路由 / gRPC / 任务执行器 / SA 工具链共享同一容器。
+/// 内层 `None` 表示向量检索禁用（embedding 初始化失败或尚未配置）。
+/// embedding 配置变更时通过 `ArcSwapOption::store` 原子换入新维度的库，无需重启进程。
+pub type SharedVectorStore = Arc<arc_swap::ArcSwapOption<HyperspaceStore>>;
+
 pub mod iam;
 use iam::UserIdentity;
 pub mod api_gov;
@@ -58,8 +63,9 @@ pub struct AppState {
     pub knowledge_bases: Arc<tokio::sync::RwLock<Vec<Value>>>,
     /// 知识包注册表（运行期可增删改，持久化到 data/knowledge_packs.json；首启由内置包种子化）。
     pub knowledge_packs: Arc<tokio::sync::RwLock<Vec<Value>>>,
-    /// 向量库（HyperspaceStore，按 embedding 配置初始化；初始化失败则为 None，向量检索禁用）。
-    pub vector_store: Option<Arc<HyperspaceStore>>,
+    /// 向量库（HyperspaceStore，按 embedding 配置初始化；内层 None 表示向量检索禁用）。
+    /// 采用 `ArcSwapOption` 以支持 embedding 配置热切换时原子换库（见 `hot_reload_vector_store`）。
+    pub vector_store: SharedVectorStore,
     /// 原文对象存储（BlobStore：MinIO 或 LocalFs 兜底）。为 None 时上传不落原文，仅向量化。
     pub blob_store: Option<Arc<dyn BlobStore>>,
     /// 任务执行器（productized 抽象）：由 build_http_router 注入，驱动 SA 跑 PDCA 管线并向共享事件总线推送执行事件。
@@ -493,18 +499,19 @@ pub struct StreamEventResponse {
     pub data: Value,
 }
 
-/// 按 embedding 配置打开向量库（HyperspaceStore）。失败则返回 None（向量检索禁用，不影响图检索）。
-/// 供 build_router 与 gRPC 服务共用，确保 HTTP 路由、任务执行器与 SA 工具链共享**同一个**向量库实例。
+/// 按 embedding 配置打开向量库（HyperspaceStore），包进可原子热替换的 `SharedVectorStore`。
+/// 初始化失败则内层为 None（向量检索禁用，不影响图检索）。
+/// 供 build_router 与 gRPC 服务共用，确保 HTTP 路由、任务执行器与 SA 工具链共享**同一个**可换库容器。
 pub fn open_vector_store(
     embedding: &crate::config::settings::EmbeddingSettings,
-) -> Option<Arc<HyperspaceStore>> {
+) -> SharedVectorStore {
     let embed = crate::memory::embedding_service::create_embedding_service_from_config(embedding);
     let vdir = data_dir().join("vector_store");
     match HyperspaceStore::open(&vdir, embed) {
-        Ok(s) => Some(Arc::new(s)),
+        Ok(s) => Arc::new(arc_swap::ArcSwapOption::from_pointee(s)),
         Err(e) => {
             tracing::warn!("向量库初始化失败，向量检索禁用: {}", e);
-            None
+            Arc::new(arc_swap::ArcSwapOption::empty())
         }
     }
 }
@@ -515,7 +522,7 @@ pub fn build_router(
     kg_store: Arc<oxigraph::store::Store>,
     config_info: Value,
     agents_info: Value,
-    vector_store: Option<Arc<HyperspaceStore>>,
+    vector_store: SharedVectorStore,
     task_executor: Option<Arc<dyn TaskExecutor>>,
     batch_manager: Option<SharedBatchManager>,
 ) -> Router {
@@ -811,17 +818,146 @@ async fn update_config_handler(
         }
     }
 
+    // 4. Embedding 变更：按新配置热切换向量库并后台重建所有向量 KB 索引（免重启即时生效）。
+    let mut embedding_reloaded = false;
+    let mut reindex_queued = 0usize;
+    let mut dim_note = String::new();
+    let mut reload_err: Option<String> = None;
+    if patch.get("embedding").is_some() {
+        match hot_reload_embedding(&state).await {
+            Ok((old_dim, new_dim, dim_changed, kbs)) => {
+                embedding_reloaded = true;
+                reindex_queued = kbs;
+                dim_note = if dim_changed {
+                    format!("向量维度 {old_dim} → {new_dim}")
+                } else {
+                    format!("维度 {new_dim} 不变")
+                };
+                // 同步脱敏快照的 active_dimension，使前端反显即时反映新生效维度。
+                let mut info = state.config_info.write().await;
+                if let Some(emb) = info.get_mut("embedding").and_then(|v| v.as_object_mut()) {
+                    emb.insert("active_dimension".into(), json!(new_dim));
+                }
+            }
+            Err(e) => reload_err = Some(e),
+        }
+    }
+
     let final_info = state.config_info.read().await.clone();
+    let message = if let Some(e) = &reload_err {
+        format!("配置已持久化，但向量库热切换失败：{e}（重启后仍会按新配置生效）")
+    } else if embedding_reloaded {
+        format!(
+            "配置已更新并即时生效（Embedding 已热切换，{dim_note}；已排队重建 {reindex_queued} 个向量库索引）。"
+        )
+    } else if persisted {
+        "配置已更新并持久化生效。".to_string()
+    } else {
+        "配置已在运行时更新，但持久化失败。".to_string()
+    };
     Json(json!({
         "status": "ok",
-        "message": if persisted {
-            "配置已更新并持久化生效。"
-        } else {
-            "配置已在运行时更新，但持久化失败。"
-        },
+        "message": message,
         "persisted": persisted,
+        "embedding_reloaded": embedding_reloaded,
+        "reindex_queued": reindex_queued,
         "config": final_info,
     }))
+}
+
+/// Embedding 配置热切换：按最新持久化配置重建 embedding 服务，原子换入新维度向量库，
+/// 并后台重建所有向量 KB 索引（从原文台账重嵌入）。免进程重启即时生效。
+/// 返回 (old_dim, new_dim, dim_changed, reindex_queued)。
+async fn hot_reload_embedding(
+    state: &Arc<AppState>,
+) -> Result<(usize, usize, bool, usize), String> {
+    let embedding = crate::config::settings::Settings::load_embedding();
+    let new_embed =
+        crate::memory::embedding_service::create_embedding_service_from_config(&embedding);
+    let new_dim = new_embed.dimension();
+    let old_dim = state.vector_store.load_full().map(|s| s.dimension());
+    let dim_changed = old_dim != Some(new_dim);
+    let vdir = data_dir().join("vector_store");
+    // 任何 embedding 变更都需换库重建（旧向量来自旧模型，语义不可混用；维度变更更是结构不兼容）。
+    // 用全新目录打开，旧库整体移为 .bak-<ts> 便于回滚，同时避免与仍被引用的旧句柄争用同一文件。
+    if vdir.exists() {
+        let bak = data_dir().join(format!(
+            "vector_store.bak-{}",
+            chrono::Utc::now().format("%Y%m%d%H%M%S")
+        ));
+        std::fs::rename(&vdir, &bak).map_err(|e| format!("轮换旧向量目录失败: {e}"))?;
+        tracing::info!("embedding 热切换：旧向量库已移至 {}", bak.display());
+    }
+    std::fs::create_dir_all(&vdir).map_err(|e| format!("创建向量目录失败: {e}"))?;
+    let new_store =
+        HyperspaceStore::open(&vdir, new_embed).map_err(|e| format!("打开新向量库失败: {e}"))?;
+    state.vector_store.store(Some(Arc::new(new_store)));
+    tracing::info!(old_dim = ?old_dim, new_dim, dim_changed, "embedding 已热切换，向量库原子换入");
+    let reindex_queued = spawn_reindex_all_vector_kbs(state.clone()).await;
+    Ok((old_dim.unwrap_or(0), new_dim, dim_changed, reindex_queued))
+}
+
+/// 遍历所有向量 KB，逐个后台重建索引（从 BlobStore 原文台账）。返回排队重建的 KB 数。
+/// 无 BlobStore 或无原文台账的 KB 将被跳过（存量向量已作废，需重新上传）。
+async fn spawn_reindex_all_vector_kbs(state: Arc<AppState>) -> usize {
+    if state.blob_store.is_none() {
+        tracing::warn!("BlobStore 未启用，跳过自动重建（存量向量已作废，需重新上传原文）");
+        return 0;
+    }
+    let targets: Vec<(String, String, String, Vec<Value>)> = {
+        let guard = state.knowledge_bases.read().await;
+        guard
+            .iter()
+            .filter_map(|kb| {
+                if kb.get("kb_type").and_then(|v| v.as_str()) != Some("vector") {
+                    return None;
+                }
+                let id = kb.get("id").and_then(|v| v.as_str())?.to_string();
+                let namespace = kb
+                    .get("vector_namespace")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if namespace.is_empty() {
+                    return None;
+                }
+                let tenant = kb
+                    .get("tenant_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default")
+                    .to_string();
+                let docs = kb
+                    .get("documents")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if docs.is_empty() {
+                    return None;
+                }
+                Some((id, namespace, tenant, docs))
+            })
+            .collect()
+    };
+    let count = targets.len();
+    for (id, namespace, tenant, docs) in targets {
+        {
+            let mut guard = state.knowledge_bases.write().await;
+            if let Some(o) = guard
+                .iter_mut()
+                .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+                .and_then(|b| b.as_object_mut())
+            {
+                o.insert("reindex_status".into(), json!("reindexing"));
+                o.insert("reindex_started_at".into(), json!(chrono::Utc::now().to_rfc3339()));
+            }
+            let _ = save_knowledge_bases(&guard);
+        }
+        let st = state.clone();
+        tokio::spawn(async move {
+            run_kb_reindex(st, id, namespace, tenant, docs).await;
+        });
+    }
+    count
 }
 
 /// GET /api/v1/agents — 返回批处理 Agent（静态）与用户态 Agent（持久化）合并列表
@@ -1208,7 +1344,7 @@ async fn build_rag_context(
 
     // 2c. 向量知识库检索：对每个命名空间做语义相似检索（向量库启用时）。
     let mut vector_hits: Vec<(String, f32)> = Vec::new();
-    if let Some(vstore) = &state.vector_store {
+    if let Some(vstore) = state.vector_store.load_full() {
         for ns in &vector_namespaces {
             let filter = HybridSearchFilter::new().with_named_graph(ns.clone());
             if let Ok(hits) = vstore.search_with_filter(&message, &filter, 5).await {
@@ -3926,8 +4062,8 @@ async fn ingest_knowledge_base_handler(
     if namespace.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "该向量库缺少 vector_namespace" })));
     }
-    let store = match &state.vector_store {
-        Some(s) => s.clone(),
+    let store = match state.vector_store.load_full() {
+        Some(s) => s,
         None => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -4005,8 +4141,8 @@ async fn search_knowledge_base_handler(
     if namespace.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "该向量库缺少 vector_namespace" })));
     }
-    let store = match &state.vector_store {
-        Some(s) => s.clone(),
+    let store = match state.vector_store.load_full() {
+        Some(s) => s,
         None => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -4109,8 +4245,8 @@ async fn upload_knowledge_base_handler(
     if namespace.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "该向量库缺少 vector_namespace" })));
     }
-    let store = match &state.vector_store {
-        Some(s) => s.clone(),
+    let store = match state.vector_store.load_full() {
+        Some(s) => s,
         None => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -4459,7 +4595,7 @@ async fn reindex_knowledge_base_handler(
     if namespace.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "该向量库缺少 vector_namespace" })));
     }
-    if state.vector_store.is_none() {
+    if state.vector_store.load().is_none() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": "向量库未启用（embedding 初始化失败）" })),
@@ -4520,8 +4656,8 @@ async fn run_kb_reindex(
     tenant: String,
     docs: Vec<Value>,
 ) {
-    let store = match &state.vector_store {
-        Some(s) => s.clone(),
+    let store = match state.vector_store.load_full() {
+        Some(s) => s,
         None => return,
     };
     let blob = match &state.blob_store {
@@ -5329,7 +5465,7 @@ mod tests {
             kb_categories: Arc::new(tokio::sync::RwLock::new(vec![])),
             knowledge_bases: Arc::new(tokio::sync::RwLock::new(vec![])),
             knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
-            vector_store: None,
+            vector_store: Arc::new(arc_swap::ArcSwapOption::empty()),
             blob_store: None,
             task_executor: None,
             batch_manager: None,
@@ -5406,7 +5542,7 @@ mod tests {
             kb_categories: Arc::new(tokio::sync::RwLock::new(vec![])),
             knowledge_bases: Arc::new(tokio::sync::RwLock::new(vec![])),
             knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
-            vector_store: None,
+            vector_store: Arc::new(arc_swap::ArcSwapOption::empty()),
             blob_store: None,
             task_executor: None,
             batch_manager: None,
@@ -5620,7 +5756,7 @@ mod skill_manifest_tests {
             kb_categories: Arc::new(tokio::sync::RwLock::new(vec![])),
             knowledge_bases: Arc::new(tokio::sync::RwLock::new(vec![])),
             knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
-            vector_store: None,
+            vector_store: Arc::new(arc_swap::ArcSwapOption::empty()),
             blob_store: None,
             task_executor: None,
             batch_manager: None,

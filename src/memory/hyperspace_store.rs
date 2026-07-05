@@ -131,6 +131,11 @@ impl HyperspaceStore {
         })
     }
 
+    /// 当前向量维度（由注入的 embedding 服务决定）。用于配置热切换时判断维度是否变化。
+    pub fn dimension(&self) -> usize {
+        self.embed.dimension()
+    }
+
     // ── Private helpers ──────────────────────────────────────────────────────
 
     /// Embed text, falling back to a zero vector on failure.
