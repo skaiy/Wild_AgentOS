@@ -126,6 +126,7 @@ unicode-segmentation = "1.10"
 # ─── Ontologies engine (ported from open-ontologies) ────────
 ontologies = { path = "crates/ontologies" }
 csv = "1"
+rust-s3 = { version = "0.37.2", default-features = false, features = ["tokio-rustls-tls"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

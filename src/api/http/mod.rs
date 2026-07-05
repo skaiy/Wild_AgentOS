@@ -7,7 +7,7 @@ use axum::{
     http::{header, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
-        IntoResponse,
+        IntoResponse, Response,
     },
     routing::{delete, get, post, put},
     Json, Router,
@@ -24,6 +24,7 @@ use crate::tools::tool_guard::{GuardAuditEntry, GUARD_AUDIT_LOG};
 use crate::tools::prompt_registry::{PromptRegistry, PromptVersion};
 use crate::tools::skill_registry::SkillMeta;
 use crate::memory::hyperspace_store::{HybridSearchFilter, HyperspaceStore};
+use crate::blob::BlobStore;
 use crate::batch::manager::BatchAgentManager;
 use crate::memory::l2_blackboard::QueryFilter;
 
@@ -59,6 +60,8 @@ pub struct AppState {
     pub knowledge_packs: Arc<tokio::sync::RwLock<Vec<Value>>>,
     /// 向量库（HyperspaceStore，按 embedding 配置初始化；初始化失败则为 None，向量检索禁用）。
     pub vector_store: Option<Arc<HyperspaceStore>>,
+    /// 原文对象存储（BlobStore：MinIO 或 LocalFs 兜底）。为 None 时上传不落原文，仅向量化。
+    pub blob_store: Option<Arc<dyn BlobStore>>,
     /// 任务执行器（productized 抽象）：由 build_http_router 注入，驱动 SA 跑 PDCA 管线并向共享事件总线推送执行事件。
     /// 为 None 时（仅测试态）流式任务不会真正执行，处理器会即时推送 TASK_FAILED 以避免前端卡在「启动中」。
     pub task_executor: Option<Arc<dyn TaskExecutor>>,
@@ -389,8 +392,39 @@ fn save_config_override(patch: &Value) -> std::io::Result<()> {
             }
         }
     }
+
+    // Embedding（向量化）段：深合并，清理 UI 辅助字段与空 oneapi.api_key。
+    if let Some(emb_patch) = patch.get("embedding") {
+        let mut clean = emb_patch.clone();
+        if let Some(o) = clean.as_object_mut() {
+            o.remove("active_dimension");
+            if let Some(oneapi) = o.get_mut("oneapi").and_then(|v| v.as_object_mut()) {
+                oneapi.remove("api_key_configured");
+                if oneapi.get("api_key").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(false) {
+                    oneapi.remove("api_key");
+                }
+            }
+        }
+        if let Some(obj) = root.as_object_mut() {
+            let existing = obj.entry("embedding").or_insert(json!({}));
+            json_deep_merge(existing, &clean);
+        }
+    }
+
     let content = serde_json::to_string_pretty(&root).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&path, content)
+}
+
+/// 递归深合并 src 到 dst（对象逐键合并，其余类型直接覆盖）。
+fn json_deep_merge(dst: &mut Value, src: &Value) {
+    match (dst, src) {
+        (Value::Object(d), Value::Object(s)) => {
+            for (k, v) in s {
+                json_deep_merge(d.entry(k.clone()).or_insert(Value::Null), v);
+            }
+        }
+        (d, s) => *d = s.clone(),
+    }
 }
 
 #[derive(Serialize)]
@@ -515,6 +549,7 @@ pub fn build_router(
         knowledge_bases: Arc::new(tokio::sync::RwLock::new(load_knowledge_bases())),
         knowledge_packs: Arc::new(tokio::sync::RwLock::new(loaded_packs)),
         vector_store,
+        blob_store: crate::blob::open_blob_store(),
         task_executor,
         batch_manager,
         api_clients: Arc::new(tokio::sync::RwLock::new(api_gov::load_api_clients())),
@@ -571,6 +606,9 @@ pub fn build_router(
             "/api/v1/kb/bases/:id/import-graph",
             post(import_graph_knowledge_base_handler).layer(DefaultBodyLimit::max(KB_UPLOAD_MAX_BYTES)),
         )
+        .route("/api/v1/kb/bases/:id/reindex", post(reindex_knowledge_base_handler))
+        .route("/api/v1/kb/bases/:id/documents", get(list_kb_documents_handler))
+        .route("/api/v1/kb/bases/:id/documents/:doc_id/raw", get(kb_document_raw_handler))
         .route("/api/v1/kb/bases/:id/search", post(search_knowledge_base_handler))
         .route("/api/v1/agents", get(list_agents_handler).post(create_agent_handler))
         .route("/api/v1/agents/:id", put(update_agent_handler).delete(delete_agent_handler))
@@ -752,6 +790,23 @@ async fn update_config_handler(
                         }
                     }
                 }
+            }
+        }
+        // Embedding 快照：深合并；oneapi.api_key 转为 api_key_configured，不回显明文。
+        if let Some(emb_patch) = patch.get("embedding") {
+            let mut clean = emb_patch.clone();
+            if let Some(o) = clean.as_object_mut() {
+                if let Some(oneapi) = o.get_mut("oneapi").and_then(|v| v.as_object_mut()) {
+                    let key_now = oneapi.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+                    if oneapi.contains_key("api_key") {
+                        oneapi.insert("api_key_configured".into(), json!(!key_now.is_empty()));
+                        oneapi.remove("api_key");
+                    }
+                }
+            }
+            if let Some(obj) = info.as_object_mut() {
+                let existing = obj.entry("embedding").or_insert(json!({}));
+                json_deep_merge(existing, &clean);
             }
         }
     }
@@ -4000,6 +4055,29 @@ fn kb_text_ext(name: &str) -> Option<()> {
     }
 }
 
+/// 依扩展名推断原文 Content-Type，用于对象存储写入（未知类型回退 octet-stream）。
+fn kb_content_type(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    let ct = if lower.ends_with(".txt") || lower.ends_with(".log") {
+        "text/plain; charset=utf-8"
+    } else if lower.ends_with(".md") || lower.ends_with(".markdown") {
+        "text/markdown; charset=utf-8"
+    } else if lower.ends_with(".csv") {
+        "text/csv; charset=utf-8"
+    } else if lower.ends_with(".json") || lower.ends_with(".jsonl") {
+        "application/json; charset=utf-8"
+    } else if lower.ends_with(".pdf") {
+        "application/pdf"
+    } else if lower.ends_with(".docx") {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    } else if lower.ends_with(".doc") {
+        "application/msword"
+    } else {
+        "application/octet-stream"
+    };
+    ct.to_string()
+}
+
 /// POST /api/v1/kb/bases/:id/upload — 向量库文件上传摄取（multipart）。
 /// 字段：file（可多次，文件）、chunk_size、chunk_strategy、min_importance。
 /// TXT/MD 等纯文本直解析→分块→embedding→写入；PDF/Word 暂无解析器，逐文件诚实标注 skipped。
@@ -4093,42 +4171,119 @@ async fn upload_knowledge_base_handler(
     // 当前仅实现固定长度分块；其余策略降级为 fixed 并在响应标注。
     let applied_strategy = "fixed";
 
-    let tags = vec![namespace.clone(), format!("tenant:{}", identity.tenant_id)];
+    let base_tags = vec![namespace.clone(), format!("tenant:{}", identity.tenant_id)];
+    let blob = state.blob_store.clone();
     let mut file_results: Vec<Value> = Vec::new();
+    let mut ledger_entries: Vec<Value> = Vec::new();
     let mut total_chunks = 0usize;
     for (name, bytes) in files {
-        if kb_text_ext(&name).is_none() {
-            file_results.push(json!({
-                "name": name,
-                "chunks": 0,
-                "skipped_reason": "暂无该类型解析器（PDF/Word 等），请上传 TXT/Markdown/CSV/JSON 文本",
-            }));
-            continue;
+        // 内容寻址：doc_id = 原文 sha256，既用于去重也作为重建索引的稳定键。
+        let doc_id = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            hex::encode(hasher.finalize())
+        };
+        let content_type = kb_content_type(&name);
+        let size = bytes.len();
+        // ① 原文落盘：无论能否解析都持久化，为重建索引/预览/溯源留底。
+        let blob_key = format!("tenant:{}/kb/{}/{}", identity.tenant_id, id, doc_id);
+        let mut blob_ref = Value::Null;
+        let mut persist_err: Option<String> = None;
+        if let Some(b) = &blob {
+            match b.put(&blob_key, &bytes, &content_type).await {
+                Ok(_) => blob_ref = json!({ "backend": b.backend(), "key": blob_key }),
+                Err(e) => persist_err = Some(format!("原文落盘失败: {e}")),
+            }
+        } else {
+            persist_err = Some("BlobStore 未启用，原文未持久化".to_string());
         }
-        let text = String::from_utf8_lossy(&bytes).to_string();
+        // ② 解析 + 分块 + 向量化（chunk 打 doc:<doc_id> 标签，chunk_iris 入台账供重建删除）。
+        let parseable = kb_text_ext(&name).is_some();
         let mut file_chunks = 0usize;
+        let mut chunk_iris: Vec<String> = Vec::new();
         let mut file_err: Option<String> = None;
-        for chunk in chunk_text(&text, chunk_size) {
-            let iri = format!("{}#chunk/{}", namespace, uuid::Uuid::new_v4().hyphenated());
-            match store
-                .upsert_with_metadata(&iri, &chunk, &tags, Some(min_importance), None, Some(namespace.as_str()))
-                .await
-            {
-                Ok(_) => {
-                    file_chunks += 1;
-                    total_chunks += 1;
-                }
-                Err(e) => {
-                    file_err = Some(format!("写入失败: {e}"));
-                    break;
+        if parseable {
+            let mut doc_tags = base_tags.clone();
+            doc_tags.push(format!("doc:{}", doc_id));
+            let text = String::from_utf8_lossy(&bytes).to_string();
+            for chunk in chunk_text(&text, chunk_size) {
+                let iri = format!("{}#chunk/{}", namespace, uuid::Uuid::new_v4().hyphenated());
+                match store
+                    .upsert_with_metadata(&iri, &chunk, &doc_tags, Some(min_importance), None, Some(namespace.as_str()))
+                    .await
+                {
+                    Ok(_) => {
+                        file_chunks += 1;
+                        total_chunks += 1;
+                        chunk_iris.push(iri);
+                    }
+                    Err(e) => {
+                        file_err = Some(format!("写入失败: {e}"));
+                        break;
+                    }
                 }
             }
+        } else {
+            file_err = Some(
+                "暂无该类型解析器（PDF/Word 等），原文已留底，接入解析器后可重建索引".to_string(),
+            );
         }
-        let mut entry = json!({ "name": name, "chunks": file_chunks });
-        if let Some(e) = file_err {
+        // ③ 台账状态：ready(已向量化) / stored(仅留底未向量化) / failed(向量化出错)。
+        let status = if !parseable {
+            "stored"
+        } else if file_err.is_some() {
+            "failed"
+        } else {
+            "ready"
+        };
+        let mut entry = json!({ "name": name, "chunks": file_chunks, "doc_id": doc_id });
+        entry["persisted"] = json!(!blob_ref.is_null());
+        if let Some(e) = &file_err {
             entry["skipped_reason"] = json!(e);
         }
+        if let Some(e) = &persist_err {
+            entry["persist_warning"] = json!(e);
+        }
         file_results.push(entry);
+        ledger_entries.push(json!({
+            "doc_id": doc_id,
+            "filename": name,
+            "size": size,
+            "content_type": content_type,
+            "blob_ref": blob_ref,
+            "status": status,
+            "chunks": file_chunks,
+            "chunk_iris": chunk_iris,
+            "chunk_size": chunk_size,
+            "chunk_strategy": applied_strategy,
+            "min_importance": min_importance,
+            "uploaded_by": identity.user_id,
+            "uploaded_at": chrono::Utc::now().to_rfc3339(),
+        }));
+    }
+    // 将台账合并进 KB.documents（按 doc_id 去重覆盖）并持久化。
+    if !ledger_entries.is_empty() {
+        let mut guard = state.knowledge_bases.write().await;
+        if let Some(obj) = guard
+            .iter_mut()
+            .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .and_then(|b| b.as_object_mut())
+        {
+            let mut docs: Vec<Value> = obj
+                .get("documents")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            for ne in &ledger_entries {
+                let ndoc = ne.get("doc_id").and_then(|v| v.as_str());
+                docs.retain(|d| d.get("doc_id").and_then(|v| v.as_str()) != ndoc);
+                docs.push(ne.clone());
+            }
+            obj.insert("documents".into(), json!(docs));
+            obj.insert("updated_at".into(), json!(chrono::Utc::now().to_rfc3339()));
+        }
+        let _ = save_knowledge_bases(&guard);
     }
     (
         StatusCode::OK,
@@ -4143,6 +4298,338 @@ async fn upload_knowledge_base_handler(
         })),
     )
 }
+
+/// GET /api/v1/kb/bases/:id/documents — 返回该向量库的原文档台账（documents）。
+async fn list_kb_documents_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let kb = {
+        let guard = state.knowledge_bases.read().await;
+        guard
+            .iter()
+            .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .cloned()
+    };
+    match kb {
+        Some(k) => {
+            let docs = k.get("documents").cloned().unwrap_or_else(|| json!([]));
+            let count = docs.as_array().map(|a| a.len()).unwrap_or(0);
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "count": count,
+                    "documents": docs,
+                    "reindex_status": k.get("reindex_status").cloned().unwrap_or(Value::Null),
+                    "reindexed_at": k.get("reindexed_at").cloned().unwrap_or(Value::Null),
+                })),
+            )
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "knowledge base not found", "id": id })),
+        ),
+    }
+}
+
+/// RFC 5987 编码（Content-Disposition filename* 用），保留 A-Za-z0-9-._~，其余按 UTF-8 百分号编码。
+fn rfc5987_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.as_bytes() {
+        let c = *b;
+        if c.is_ascii_alphanumeric() || matches!(c, b'-' | b'.' | b'_' | b'~') {
+            out.push(c as char);
+        } else {
+            out.push_str(&format!("%{:02X}", c));
+        }
+    }
+    out
+}
+
+/// GET /api/v1/kb/bases/:id/documents/:doc_id/raw — 经 core 代理从 BlobStore 返回原文（不暴露 MinIO）。
+async fn kb_document_raw_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path((id, doc_id)): axum::extract::Path<(String, String)>,
+) -> Response {
+    let doc = {
+        let guard = state.knowledge_bases.read().await;
+        guard
+            .iter()
+            .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .and_then(|k| k.get("documents").and_then(|v| v.as_array()).cloned())
+            .and_then(|docs| {
+                docs.into_iter()
+                    .find(|d| d.get("doc_id").and_then(|v| v.as_str()) == Some(doc_id.as_str()))
+            })
+    };
+    let doc = match doc {
+        Some(d) => d,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "document not found", "doc_id": doc_id })),
+            )
+                .into_response()
+        }
+    };
+    let key = doc
+        .get("blob_ref")
+        .and_then(|b| b.get("key"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let key = match key {
+        Some(k) => k,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "该文档原文未持久化（BlobStore 未启用时上传）" })),
+            )
+                .into_response()
+        }
+    };
+    let blob = match &state.blob_store {
+        Some(b) => b.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "BlobStore 未启用" })),
+            )
+                .into_response()
+        }
+    };
+    match blob.get(&key).await {
+        Ok(bytes) => {
+            let ct = doc
+                .get("content_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let fname = doc.get("filename").and_then(|v| v.as_str()).unwrap_or("file");
+            let disp = format!("inline; filename*=UTF-8''{}", rfc5987_encode(fname));
+            (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, ct),
+                    (header::CONTENT_DISPOSITION, disp),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("读取原文失败: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/v1/kb/bases/:id/reindex — 按当前 embedding/分块重建向量索引（异步）。
+/// 从 documents 台账拉原文 → 删旧 chunk → 重新分块 embedding 写新 → 更新台账与状态。
+async fn reindex_knowledge_base_handler(
+    State(state): State<Arc<AppState>>,
+    _identity: UserIdentity,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let kb = {
+        let guard = state.knowledge_bases.read().await;
+        guard
+            .iter()
+            .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .cloned()
+    };
+    let kb = match kb {
+        Some(k) => k,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "knowledge base not found", "id": id })),
+            )
+        }
+    };
+    if kb.get("kb_type").and_then(|v| v.as_str()) != Some("vector") {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "仅向量知识库支持重建索引" })));
+    }
+    let namespace = kb
+        .get("vector_namespace")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if namespace.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "该向量库缺少 vector_namespace" })));
+    }
+    if state.vector_store.is_none() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "向量库未启用（embedding 初始化失败）" })),
+        );
+    }
+    if state.blob_store.is_none() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "BlobStore 未启用，无原文可重建" })),
+        );
+    }
+    let docs: Vec<Value> = kb
+        .get("documents")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if docs.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "无原文档台账，无法重建（请重新上传后再试）" })),
+        );
+    }
+    let tenant = kb
+        .get("tenant_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
+    // 标记 reindexing 并落盘，避免并发重复触发。
+    {
+        let mut guard = state.knowledge_bases.write().await;
+        if let Some(o) = guard
+            .iter_mut()
+            .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .and_then(|b| b.as_object_mut())
+        {
+            o.insert("reindex_status".into(), json!("reindexing"));
+            o.insert("reindex_started_at".into(), json!(chrono::Utc::now().to_rfc3339()));
+        }
+        let _ = save_knowledge_bases(&guard);
+    }
+    let doc_count = docs.len();
+    let state2 = state.clone();
+    let id2 = id.clone();
+    tokio::spawn(async move {
+        run_kb_reindex(state2, id2, namespace, tenant, docs).await;
+    });
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({ "status": "reindexing", "id": id, "documents": doc_count })),
+    )
+}
+
+/// 后台重建任务：逐文档从 BlobStore 拉原文，删旧 chunk 后按当前 embedding 重新入库，回写台账。
+async fn run_kb_reindex(
+    state: Arc<AppState>,
+    id: String,
+    namespace: String,
+    tenant: String,
+    docs: Vec<Value>,
+) {
+    let store = match &state.vector_store {
+        Some(s) => s.clone(),
+        None => return,
+    };
+    let blob = match &state.blob_store {
+        Some(b) => b.clone(),
+        None => return,
+    };
+    let mut updated: Vec<Value> = Vec::new();
+    let mut any_failed = false;
+    for mut doc in docs {
+        let doc_id = doc.get("doc_id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let filename = doc.get("filename").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let chunk_size = doc.get("chunk_size").and_then(|v| v.as_u64()).unwrap_or(500) as usize;
+        let min_importance = doc.get("min_importance").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+        let key = doc
+            .get("blob_ref")
+            .and_then(|b| b.get("key"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        // ① 删旧 chunk（幂等，忽略单条失败）。
+        if let Some(arr) = doc.get("chunk_iris").and_then(|v| v.as_array()) {
+            for it in arr {
+                if let Some(iri) = it.as_str() {
+                    let _ = store.delete(iri).await;
+                }
+            }
+        }
+        // ② 无原文或非可解析类型：无法重建，保留留底状态。
+        if key.is_none() || kb_text_ext(&filename).is_none() {
+            if let Some(o) = doc.as_object_mut() {
+                o.insert("chunks".into(), json!(0));
+                o.insert("chunk_iris".into(), json!([]));
+                if kb_text_ext(&filename).is_none() {
+                    o.insert("status".into(), json!("stored"));
+                } else {
+                    any_failed = true;
+                    o.insert("status".into(), json!("failed"));
+                    o.insert("skipped_reason".into(), json!("原文缺失，无法重建"));
+                }
+            }
+            updated.push(doc);
+            continue;
+        }
+        let key = key.unwrap();
+        let bytes = match blob.get(&key).await {
+            Ok(b) => b,
+            Err(e) => {
+                any_failed = true;
+                if let Some(o) = doc.as_object_mut() {
+                    o.insert("status".into(), json!("failed"));
+                    o.insert("skipped_reason".into(), json!(format!("原文读取失败: {e}")));
+                    o.insert("chunks".into(), json!(0));
+                    o.insert("chunk_iris".into(), json!([]));
+                }
+                updated.push(doc);
+                continue;
+            }
+        };
+        // ③ 重新分块 embedding 写入。
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        let tags = vec![namespace.clone(), format!("tenant:{}", tenant), format!("doc:{}", doc_id)];
+        let mut new_iris: Vec<String> = Vec::new();
+        let mut err: Option<String> = None;
+        for chunk in chunk_text(&text, chunk_size) {
+            let iri = format!("{}#chunk/{}", namespace, uuid::Uuid::new_v4().hyphenated());
+            match store
+                .upsert_with_metadata(&iri, &chunk, &tags, Some(min_importance), None, Some(namespace.as_str()))
+                .await
+            {
+                Ok(_) => new_iris.push(iri),
+                Err(e) => {
+                    err = Some(format!("写入失败: {e}"));
+                    break;
+                }
+            }
+        }
+        if let Some(o) = doc.as_object_mut() {
+            o.insert("chunks".into(), json!(new_iris.len()));
+            o.insert("chunk_iris".into(), json!(new_iris));
+            if let Some(e) = &err {
+                any_failed = true;
+                o.insert("status".into(), json!("failed"));
+                o.insert("skipped_reason".into(), json!(e));
+            } else {
+                o.insert("status".into(), json!("ready"));
+                o.remove("skipped_reason");
+            }
+        }
+        updated.push(doc);
+    }
+    // 回写台账与状态。
+    {
+        let mut guard = state.knowledge_bases.write().await;
+        if let Some(o) = guard
+            .iter_mut()
+            .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .and_then(|b| b.as_object_mut())
+        {
+            o.insert("documents".into(), json!(updated));
+            o.insert("reindex_status".into(), json!(if any_failed { "failed" } else { "ready" }));
+            o.insert("reindexed_at".into(), json!(chrono::Utc::now().to_rfc3339()));
+            o.insert("updated_at".into(), json!(chrono::Utc::now().to_rfc3339()));
+        }
+        let _ = save_knowledge_bases(&guard);
+    }
+    tracing::info!(kb = %id, failed = any_failed, "KB reindex 完成");
+}
+
 
 /// 把非 IRI 的标识符转为可用作 IRI 局部名的安全串（非字母数字与 ._- 之外替换为 _）。
 /// 为 SPARQL IRIREF 局部标识做最小转义：保留 Unicode（中文实体/关系名可读、无碰撞），
@@ -4843,6 +5330,7 @@ mod tests {
             knowledge_bases: Arc::new(tokio::sync::RwLock::new(vec![])),
             knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
             vector_store: None,
+            blob_store: None,
             task_executor: None,
             batch_manager: None,
             api_clients: Arc::new(tokio::sync::RwLock::new(vec![])),
@@ -4919,6 +5407,7 @@ mod tests {
             knowledge_bases: Arc::new(tokio::sync::RwLock::new(vec![])),
             knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
             vector_store: None,
+            blob_store: None,
             task_executor: None,
             batch_manager: None,
             api_clients: Arc::new(tokio::sync::RwLock::new(vec![])),
@@ -5132,6 +5621,7 @@ mod skill_manifest_tests {
             knowledge_bases: Arc::new(tokio::sync::RwLock::new(vec![])),
             knowledge_packs: Arc::new(tokio::sync::RwLock::new(vec![])),
             vector_store: None,
+            blob_store: None,
             task_executor: None,
             batch_manager: None,
             api_clients: Arc::new(tokio::sync::RwLock::new(vec![])),

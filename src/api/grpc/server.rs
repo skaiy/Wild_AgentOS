@@ -328,6 +328,17 @@ impl AgentOSService {
         // 若为空则检查环境变量（AGENT_OS_GATEWAY_API_KEY）作为兜底，确保 ConfigMap/Secret 注入方式也能正确展示。
         let api_key_configured = !g.api_key.is_empty()
             || std::env::var("AGENT_OS_GATEWAY_API_KEY").map(|v| !v.is_empty()).unwrap_or(false);
+        // Embedding（向量化）：脱敏 oneapi.api_key；active_dimension 为当前生效维度（供前端提示重建）。
+        let e = &self.settings.embedding;
+        let active_dimension = if !e.enabled {
+            e.fallback.dimension
+        } else {
+            match e.provider.as_str() {
+                "ollama" => e.ollama.dimension,
+                "oneapi" => e.oneapi.dimension,
+                _ => e.fallback.dimension,
+            }
+        };
         serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
             "gateway": {
@@ -337,6 +348,25 @@ impl AgentOSService {
                 "timeout_seconds": g.timeout_seconds,
                 "model_mapping": g.model_mapping,
                 "api_key_configured": api_key_configured,
+            },
+            "embedding": {
+                "enabled": e.enabled,
+                "provider": e.provider,
+                "active_dimension": active_dimension,
+                "ollama": {
+                    "base_url": e.ollama.base_url,
+                    "model": e.ollama.model,
+                    "dimension": e.ollama.dimension,
+                },
+                "oneapi": {
+                    "base_url": e.oneapi.base_url,
+                    "model": e.oneapi.model,
+                    "dimension": e.oneapi.dimension,
+                    "api_key_configured": !e.oneapi.api_key.is_empty(),
+                },
+                "fallback": {
+                    "dimension": e.fallback.dimension,
+                },
             },
             "api": {
                 "grpc_addr": self.settings.api.grpc_addr,
