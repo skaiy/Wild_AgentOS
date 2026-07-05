@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::convert::Infallible;
 
 use axum::{
-    extract::{Query, State},
+    extract::{DefaultBodyLimit, Multipart, Query, State},
     http::{header, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -19,7 +19,7 @@ use crate::core::core_types::SemanticCore;
 use crate::gateway::unified_gateway::{ChatMessage, UnifiedGateway};
 use crate::knowledge_graph::rdf_mapper::RdfMapper;
 use crate::knowledge_graph::store::KnowledgeGraphStore;
-use crate::knowledge_graph::types::{EdgeDef, LLMExtractionOutput, NodeDef};
+use crate::knowledge_graph::types::{EdgeDef, LLMExtractionOutput, NodeDef, RdfQuad, RdfValue};
 use crate::tools::tool_guard::{GuardAuditEntry, GUARD_AUDIT_LOG};
 use crate::tools::prompt_registry::{PromptRegistry, PromptVersion};
 use crate::tools::skill_registry::SkillMeta;
@@ -452,6 +452,14 @@ pub fn build_router(
         .route("/api/v1/kb/bases/:id", put(update_knowledge_base_handler).delete(delete_knowledge_base_handler))
         .route("/api/v1/kb/bases/:id/stats", get(knowledge_base_stats_handler))
         .route("/api/v1/kb/bases/:id/ingest", post(ingest_knowledge_base_handler))
+        .route(
+            "/api/v1/kb/bases/:id/upload",
+            post(upload_knowledge_base_handler).layer(DefaultBodyLimit::max(KB_UPLOAD_MAX_BYTES)),
+        )
+        .route(
+            "/api/v1/kb/bases/:id/import-graph",
+            post(import_graph_knowledge_base_handler).layer(DefaultBodyLimit::max(KB_UPLOAD_MAX_BYTES)),
+        )
         .route("/api/v1/kb/bases/:id/search", post(search_knowledge_base_handler))
         .route("/api/v1/agents", get(list_agents_handler).post(create_agent_handler))
         .route("/api/v1/agents/:id", put(update_agent_handler).delete(delete_agent_handler))
@@ -3681,7 +3689,7 @@ async fn knowledge_base_stats_handler(
                     match kg.query_sparql(&q, None) {
                         Ok(rows) => rows
                             .first()
-                            .and_then(|r| r.get("c"))
+                            .and_then(|r| r.get("?c"))
                             .and_then(|v| v.as_str())
                             .and_then(|s| s.parse::<u64>().ok())
                             .map(|n| json!(n))
@@ -3863,6 +3871,490 @@ async fn search_knowledge_base_handler(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("检索失败: {e}") })),
         ),
+    }
+}
+
+/// KB 上传/导入单文件体积上限（60MB，覆盖前端提示的 50MB/文件 + 编码开销）。
+const KB_UPLOAD_MAX_BYTES: usize = 60 * 1024 * 1024;
+
+/// 依扩展名判断向量库上传文件是否为当前可解析的纯文本类型。
+/// 返回 Some(()) 表示直读文本；None 表示暂无解析器（PDF/Word 等），走诚实降级。
+fn kb_text_ext(name: &str) -> Option<()> {
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with(".txt")
+        || lower.ends_with(".md")
+        || lower.ends_with(".markdown")
+        || lower.ends_with(".csv")
+        || lower.ends_with(".log")
+        || lower.ends_with(".json")
+        || lower.ends_with(".jsonl")
+    {
+        Some(())
+    } else {
+        None
+    }
+}
+
+/// POST /api/v1/kb/bases/:id/upload — 向量库文件上传摄取（multipart）。
+/// 字段：file（可多次，文件）、chunk_size、chunk_strategy、min_importance。
+/// TXT/MD 等纯文本直解析→分块→embedding→写入；PDF/Word 暂无解析器，逐文件诚实标注 skipped。
+async fn upload_knowledge_base_handler(
+    State(state): State<Arc<AppState>>,
+    identity: UserIdentity,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let kb = {
+        let guard = state.knowledge_bases.read().await;
+        guard
+            .iter()
+            .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .cloned()
+    };
+    let kb = match kb {
+        Some(k) => k,
+        None => return (StatusCode::NOT_FOUND, Json(json!({ "error": "knowledge base not found", "id": id }))),
+    };
+    if kb.get("kb_type").and_then(|v| v.as_str()) != Some("vector") {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "仅向量知识库支持文件上传" })));
+    }
+    let namespace = kb
+        .get("vector_namespace")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if namespace.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "该向量库缺少 vector_namespace" })));
+    }
+    let store = match &state.vector_store {
+        Some(s) => s.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "向量库未启用（embedding 初始化失败）" })),
+            )
+        }
+    };
+
+    // 逐字段读取：文件累积到内存，参数落到局部变量。
+    let mut chunk_size: usize = 500;
+    let mut chunk_strategy = String::from("fixed");
+    let mut min_importance: f32 = 0.5;
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("multipart 解析失败: {e}") })))
+            }
+        };
+        let fname = field.name().unwrap_or_default().to_string();
+        let filename = field.file_name().map(|s| s.to_string());
+        match fname.as_str() {
+            "chunk_size" => {
+                if let Ok(t) = field.text().await {
+                    if let Ok(n) = t.trim().parse::<usize>() {
+                        chunk_size = n.clamp(50, 4000);
+                    }
+                }
+            }
+            "chunk_strategy" => {
+                if let Ok(t) = field.text().await {
+                    chunk_strategy = t.trim().to_string();
+                }
+            }
+            "min_importance" => {
+                if let Ok(t) = field.text().await {
+                    if let Ok(v) = t.trim().parse::<f32>() {
+                        min_importance = v.clamp(0.0, 1.0);
+                    }
+                }
+            }
+            _ => {
+                let name = filename.unwrap_or_else(|| fname.clone());
+                match field.bytes().await {
+                    Ok(b) => files.push((name, b.to_vec())),
+                    Err(e) => {
+                        return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("读取文件失败: {e}") })))
+                    }
+                }
+            }
+        }
+    }
+    if files.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "未收到任何文件（字段名 file）" })));
+    }
+    // 当前仅实现固定长度分块；其余策略降级为 fixed 并在响应标注。
+    let applied_strategy = "fixed";
+
+    let tags = vec![namespace.clone(), format!("tenant:{}", identity.tenant_id)];
+    let mut file_results: Vec<Value> = Vec::new();
+    let mut total_chunks = 0usize;
+    for (name, bytes) in files {
+        if kb_text_ext(&name).is_none() {
+            file_results.push(json!({
+                "name": name,
+                "chunks": 0,
+                "skipped_reason": "暂无该类型解析器（PDF/Word 等），请上传 TXT/Markdown/CSV/JSON 文本",
+            }));
+            continue;
+        }
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        let mut file_chunks = 0usize;
+        let mut file_err: Option<String> = None;
+        for chunk in chunk_text(&text, chunk_size) {
+            let iri = format!("{}#chunk/{}", namespace, uuid::Uuid::new_v4().hyphenated());
+            match store
+                .upsert_with_metadata(&iri, &chunk, &tags, Some(min_importance), None, Some(namespace.as_str()))
+                .await
+            {
+                Ok(_) => {
+                    file_chunks += 1;
+                    total_chunks += 1;
+                }
+                Err(e) => {
+                    file_err = Some(format!("写入失败: {e}"));
+                    break;
+                }
+            }
+        }
+        let mut entry = json!({ "name": name, "chunks": file_chunks });
+        if let Some(e) = file_err {
+            entry["skipped_reason"] = json!(e);
+        }
+        file_results.push(entry);
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "uploaded",
+            "namespace": namespace,
+            "total_chunks": total_chunks,
+            "chunk_size": chunk_size,
+            "chunk_strategy_requested": chunk_strategy,
+            "chunk_strategy_applied": applied_strategy,
+            "files": file_results,
+        })),
+    )
+}
+
+/// 把非 IRI 的标识符转为可用作 IRI 局部名的安全串（非字母数字与 ._- 之外替换为 _）。
+/// 为 SPARQL IRIREF 局部标识做最小转义：保留 Unicode（中文实体/关系名可读、无碰撞），
+/// 仅对 IRIREF 语法禁止的字符（控制符、空格、<>"{}|\^`）按 UTF-8 逐字节百分号编码。
+fn kb_sanitize_id(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_control()
+            || c == ' '
+            || matches!(c, '<' | '>' | '"' | '{' | '}' | '|' | '\\' | '^' | '`')
+        {
+            let mut buf = [0u8; 4];
+            for b in c.encode_utf8(&mut buf).bytes() {
+                out.push_str(&format!("%{:02X}", b));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// 将三元组导入中的主/谓项展开为 IRI：已是 http(s)/iri: 前缀则原样；命中已知前缀走 expand_iri；
+/// 否则包装为 iri://entity/{sanitize}（主语）或调用方另行处理谓语。
+fn kb_expand_iri_term(raw: &str, entity_prefix: &str) -> String {
+    let t = raw.trim();
+    if t.starts_with("http://") || t.starts_with("https://") || t.starts_with("iri://") {
+        return t.to_string();
+    }
+    let expanded = expand_iri(t);
+    if expanded != t {
+        expanded
+    } else {
+        format!("{}{}", entity_prefix, kb_sanitize_id(t))
+    }
+}
+
+/// 依 object_type 与启发式构造对象 RdfValue：iri→IRI；literal→字面量；缺省时按是否像 IRI 判定。
+fn kb_object_value(raw: &str, object_type: Option<&str>) -> RdfValue {
+    let t = raw.trim();
+    match object_type.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("iri") => RdfValue::Iri(kb_expand_iri_term(t, "iri://entity/")),
+        Some("literal") => RdfValue::Literal(t.to_string()),
+        _ => {
+            if t.starts_with("http://") || t.starts_with("https://") || t.starts_with("iri://") {
+                RdfValue::Iri(t.to_string())
+            } else {
+                RdfValue::Literal(t.to_string())
+            }
+        }
+    }
+}
+
+/// 从 CSV 文本构造三元组（列名不区分大小写匹配 subject/predicate/object[/object_type]，缺则按位置 0/1/2/3）。
+fn kb_quads_from_csv(text: &str) -> Result<Vec<RdfQuad>, String> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .flexible(true)
+        .has_headers(true)
+        .from_reader(text.as_bytes());
+    let headers = rdr.headers().map_err(|e| format!("CSV 表头解析失败: {e}"))?.clone();
+    let find = |names: &[&str]| -> Option<usize> {
+        headers
+            .iter()
+            .position(|h| names.iter().any(|n| h.trim().eq_ignore_ascii_case(n)))
+    };
+    let (si, pi, oi) = (
+        find(&["subject", "s"]).unwrap_or(0),
+        find(&["predicate", "p", "relation", "rel"]).unwrap_or(1),
+        find(&["object", "o"]).unwrap_or(2),
+    );
+    let ti = find(&["object_type", "otype", "type"]);
+    let mut quads = Vec::new();
+    for (idx, rec) in rdr.records().enumerate() {
+        let rec = rec.map_err(|e| format!("CSV 第 {} 行解析失败: {e}", idx + 2))?;
+        let s = rec.get(si).unwrap_or("").trim();
+        let p = rec.get(pi).unwrap_or("").trim();
+        let o = rec.get(oi).unwrap_or("").trim();
+        if s.is_empty() || p.is_empty() || o.is_empty() {
+            continue;
+        }
+        let otype = ti.and_then(|i| rec.get(i));
+        quads.push(RdfQuad {
+            subject: kb_expand_iri_term(s, "iri://entity/"),
+            predicate: kb_expand_iri_term(p, "iri://relation/"),
+            object: kb_object_value(o, otype),
+            graph: None,
+        });
+    }
+    Ok(quads)
+}
+
+/// 从 JSONL 文本构造三元组（每行一个对象，键 subject/s、predicate/p、object/o、object_type 可选）。
+fn kb_quads_from_jsonl(text: &str) -> Result<Vec<RdfQuad>, String> {
+    let mut quads = Vec::new();
+    for (idx, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let v: Value = serde_json::from_str(line).map_err(|e| format!("JSONL 第 {} 行解析失败: {e}", idx + 1))?;
+        let pick = |keys: &[&str]| -> String {
+            for k in keys {
+                if let Some(s) = v.get(*k).and_then(|x| x.as_str()) {
+                    return s.trim().to_string();
+                }
+            }
+            String::new()
+        };
+        let s = pick(&["subject", "s"]);
+        let p = pick(&["predicate", "p", "relation", "rel"]);
+        let o = pick(&["object", "o"]);
+        if s.is_empty() || p.is_empty() || o.is_empty() {
+            continue;
+        }
+        let otype = v.get("object_type").and_then(|x| x.as_str());
+        quads.push(RdfQuad {
+            subject: kb_expand_iri_term(&s, "iri://entity/"),
+            predicate: kb_expand_iri_term(&p, "iri://relation/"),
+            object: kb_object_value(&o, otype),
+            graph: None,
+        });
+    }
+    Ok(quads)
+}
+
+/// 从简化 N-Triples 文本构造三元组：每行 `<s> <p> <o> .` 或 `<s> <p> "literal" .`。
+fn kb_quads_from_triples(text: &str) -> Result<Vec<RdfQuad>, String> {
+    let mut quads = Vec::new();
+    for (idx, raw) in text.lines().enumerate() {
+        let line = raw.trim().trim_end_matches('.').trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // subject
+        let rest = line.strip_prefix('<').ok_or_else(|| format!("第 {} 行：主语需为 <IRI>", idx + 1))?;
+        let (subj, rest) = rest.split_once('>').ok_or_else(|| format!("第 {} 行：主语缺少 >", idx + 1))?;
+        let rest = rest.trim_start();
+        // predicate
+        let rest = rest.strip_prefix('<').ok_or_else(|| format!("第 {} 行：谓语需为 <IRI>", idx + 1))?;
+        let (pred, rest) = rest.split_once('>').ok_or_else(|| format!("第 {} 行：谓语缺少 >", idx + 1))?;
+        let obj_raw = rest.trim();
+        let object = if let Some(inner) = obj_raw.strip_prefix('<').and_then(|r| r.strip_suffix('>')) {
+            RdfValue::Iri(inner.to_string())
+        } else if let Some(inner) = obj_raw.strip_prefix('"').and_then(|r| r.strip_suffix('"')) {
+            RdfValue::Literal(inner.to_string())
+        } else if obj_raw.is_empty() {
+            return Err(format!("第 {} 行：缺少宾语", idx + 1));
+        } else {
+            RdfValue::Literal(obj_raw.to_string())
+        };
+        quads.push(RdfQuad {
+            subject: subj.to_string(),
+            predicate: pred.to_string(),
+            object,
+            graph: None,
+        });
+    }
+    Ok(quads)
+}
+
+/// POST /api/v1/kb/bases/:id/import-graph — 图谱库文件导入（multipart）。
+/// 字段：file（文件）、format（csv|jsonl|triples，缺省按扩展名推断）、schema（可选）、clear_before（可选）。
+async fn import_graph_knowledge_base_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let kb = {
+        let guard = state.knowledge_bases.read().await;
+        guard
+            .iter()
+            .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .cloned()
+    };
+    let kb = match kb {
+        Some(k) => k,
+        None => return (StatusCode::NOT_FOUND, Json(json!({ "error": "knowledge base not found", "id": id }))),
+    };
+    if kb.get("kb_type").and_then(|v| v.as_str()) != Some("graph") {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "仅图谱知识库支持三元组导入" })));
+    }
+    let graph_iri = kb.get("graph").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    if graph_iri.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "该图谱库缺少命名图 graph" })));
+    }
+
+    let mut format: Option<String> = None;
+    let mut schema = String::new();
+    let mut clear_before = false;
+    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut file_name = String::new();
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("multipart 解析失败: {e}") }))),
+        };
+        let fname = field.name().unwrap_or_default().to_string();
+        let filename = field.file_name().map(|s| s.to_string());
+        match fname.as_str() {
+            "format" => {
+                if let Ok(t) = field.text().await {
+                    format = Some(t.trim().to_ascii_lowercase());
+                }
+            }
+            "schema" => {
+                if let Ok(t) = field.text().await {
+                    schema = t.trim().to_string();
+                }
+            }
+            "clear_before" => {
+                if let Ok(t) = field.text().await {
+                    clear_before = matches!(t.trim(), "true" | "1" | "yes");
+                }
+            }
+            _ => {
+                if let Some(n) = filename {
+                    file_name = n;
+                }
+                match field.bytes().await {
+                    Ok(b) => file_bytes = Some(b.to_vec()),
+                    Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("读取文件失败: {e}") }))),
+                }
+            }
+        }
+    }
+
+    // 推断格式：显式 format 优先，其次文件扩展名，默认 csv。
+    let fmt = format.unwrap_or_else(|| {
+        let lower = file_name.to_ascii_lowercase();
+        if lower.ends_with(".jsonl") || lower.ends_with(".json") {
+            "jsonl".into()
+        } else if lower.ends_with(".nt") || lower.ends_with(".ttl") || lower.ends_with(".triples") {
+            "triples".into()
+        } else {
+            "csv".into()
+        }
+    });
+
+    let has_file = file_bytes.as_ref().map(|b| !b.is_empty()).unwrap_or(false);
+    if !has_file && schema.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "未收到文件（字段名 file）或 schema" })));
+    }
+
+    let mut quads: Vec<RdfQuad> = Vec::new();
+    if has_file {
+        let text = String::from_utf8_lossy(file_bytes.as_ref().unwrap()).to_string();
+        let parsed = match fmt.as_str() {
+            "csv" => kb_quads_from_csv(&text),
+            "jsonl" => kb_quads_from_jsonl(&text),
+            "triples" | "nt" | "ttl" => kb_quads_from_triples(&text),
+            "cypher" => Err("暂不支持执行 Cypher（Oxigraph 走 SPARQL），请改用 CSV/JSONL/triples".to_string()),
+            other => Err(format!("不支持的 format: {other}")),
+        };
+        match parsed {
+            Ok(q) => quads = q,
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))),
+        }
+    }
+
+    // 统计不同主语/谓语（写入前，基于原始 quads）。
+    let mut subjects = std::collections::HashSet::new();
+    let mut predicates = std::collections::HashSet::new();
+    for q in &quads {
+        subjects.insert(q.subject.clone());
+        predicates.insert(q.predicate.clone());
+    }
+
+    // 可选 schema：写为命名图元三元组，供后续写入时校验参考。
+    let schema_saved = !schema.is_empty();
+    if schema_saved {
+        quads.push(RdfQuad {
+            subject: graph_iri.clone(),
+            predicate: "https://agentos.ontology/meta/kbSchema".to_string(),
+            object: RdfValue::Literal(schema.clone()),
+            graph: None,
+        });
+    }
+
+    if clear_before {
+        let clear = format!("DELETE WHERE {{ GRAPH <{g}> {{ ?s ?p ?o . }} }}", g = graph_iri);
+        if let Err(e) = state.kg_store.update(&clear) {
+            tracing::warn!(graph = %graph_iri, "KB import clear skipped: {}", e);
+        }
+    }
+
+    if quads.is_empty() {
+        return (StatusCode::OK, Json(json!({
+            "status": "imported",
+            "graph": graph_iri,
+            "format": fmt,
+            "triples_written": 0,
+            "entities": 0,
+            "relations": 0,
+            "schema_saved": schema_saved,
+            "note": "未解析出任何三元组",
+        })));
+    }
+
+    let kg = match KnowledgeGraphStore::with_shared_store(state.kg_store.clone()) {
+        Ok(kg) => kg,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))),
+    };
+    match kg.write_quads(&quads, &graph_iri) {
+        Ok(()) => {
+            let _ = state.kg_store.flush();
+            (StatusCode::OK, Json(json!({
+                "status": "imported",
+                "graph": graph_iri,
+                "format": fmt,
+                "triples_written": quads.len(),
+                "entities": subjects.len(),
+                "relations": predicates.len(),
+                "schema_saved": schema_saved,
+            })))
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))),
     }
 }
 

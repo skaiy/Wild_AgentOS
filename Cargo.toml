@@ -57,7 +57,7 @@ tonic = "0.10"
 prost = "0.12"
 
 # HTTP
-axum = "0.7"
+axum = { version = "0.7", features = ["multipart"] }
 tower = "0.4"
 
 # 日志
@@ -125,6 +125,7 @@ unicode-segmentation = "1.10"
 
 # ─── Ontologies engine (ported from open-ontologies) ────────
 ontologies = { path = "crates/ontologies" }
+csv = "1"
 
 [dev-dependencies]
 tokio-test = "0.4"
