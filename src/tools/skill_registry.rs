@@ -843,6 +843,23 @@ impl SkillRegistry {
             .collect()
     }
 
+    /// 从内存注册表移除一条技能（含角色/分类反向索引清理）。返回是否原本存在。
+    pub fn remove_skill(&self, skill_iri: &str) -> bool {
+        let removed = self.skills.write().remove(skill_iri).is_some();
+        if removed {
+            let mut by_role = self.skills_by_role.write();
+            for iris in by_role.values_mut() {
+                iris.retain(|i| i != skill_iri);
+            }
+            let mut by_cat = self.skills_by_category.write();
+            for iris in by_cat.values_mut() {
+                iris.retain(|i| i != skill_iri);
+            }
+            debug!(skill_iri = %skill_iri, "Skill removed");
+        }
+        removed
+    }
+
     pub fn list_skills_basic(&self) -> Vec<SkillBasic> {
         let skills = self.skills.read();
         skills.values().map(|c| c.basic.clone()).collect()
