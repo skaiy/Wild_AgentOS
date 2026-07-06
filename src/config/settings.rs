@@ -475,6 +475,14 @@ pub struct ModelResource {
 fn default_provider_kind() -> String { "openai_compatible".to_string() }
 fn default_provider_timeout() -> u64 { 60 }
 
+/// 归一化 OpenAI 兼容 base_url：去尾部斜杠，并剥离用户可能多写的尾部 `/v1`
+/// （各调用点统一再拼 `/v1/...`，避免出现 `/v1/v1/...` 导致 404）。
+pub fn normalize_api_base(base: &str) -> String {
+    let t = base.trim().trim_end_matches('/');
+    let t = if t.to_ascii_lowercase().ends_with("/v1") { &t[..t.len() - 3] } else { t };
+    t.trim_end_matches('/').to_string()
+}
+
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct TokenOptimizationSettings {
     #[serde(default = "default_true")]
@@ -949,6 +957,24 @@ mod tests {
     fn test_logging_settings_default_has_redb_in_init() {
         let settings = LoggingSettings::default();
         assert_eq!(settings.level, "info");
+    }
+
+    #[test]
+    fn test_normalize_api_base() {
+        // 无 /v1：原样（仅去尾斜杠）
+        assert_eq!(normalize_api_base("https://api.x.com"), "https://api.x.com");
+        assert_eq!(normalize_api_base("https://api.x.com/"), "https://api.x.com");
+        // 含尾部 /v1：剥离，避免后续拼接出 /v1/v1
+        assert_eq!(normalize_api_base("https://api.x.com/v1"), "https://api.x.com");
+        assert_eq!(normalize_api_base("https://api.x.com/v1/"), "https://api.x.com");
+        assert_eq!(normalize_api_base("https://api.x.com/V1"), "https://api.x.com");
+        // 带子路径的兼容端点（/v1 结尾同样剥离，其余保留）
+        assert_eq!(
+            normalize_api_base("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            "https://dashscope.aliyuncs.com/compatible-mode"
+        );
+        // 路径中间的 v1 不受影响
+        assert_eq!(normalize_api_base("https://api.x.com/v1/foo"), "https://api.x.com/v1/foo");
     }
 
     #[test]

@@ -377,7 +377,7 @@ impl UnifiedGateway {
     }
 
     pub fn set_base_url(&self, url: String) {
-        *self.base_url.write().unwrap() = url.trim_end_matches('/').to_string();
+        *self.base_url.write().unwrap() = crate::config::settings::normalize_api_base(&url);
     }
 
     pub fn set_api_key(&self, key: String) {
@@ -409,7 +409,7 @@ impl UnifiedGateway {
         if let Some(pid) = self.model_provider.read().unwrap().get(model).cloned() {
             if let Some(p) = self.providers.read().unwrap().get(&pid) {
                 if !p.base_url.is_empty() {
-                    return (p.base_url.trim_end_matches('/').to_string(), p.api_key.clone());
+                    return (crate::config::settings::normalize_api_base(&p.base_url), p.api_key.clone());
                 }
             }
         }

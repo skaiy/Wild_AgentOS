@@ -4928,7 +4928,7 @@ async fn test_model_handler(
     if model.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "resource.model 为空，无法测试" })));
     }
-    let base = provider.base_url.trim_end_matches('/').to_string();
+    let base = crate::config::settings::normalize_api_base(&provider.base_url);
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(provider.timeout_seconds.clamp(3, 60)))
         .build()
@@ -5040,7 +5040,7 @@ async fn provider_models_handler(
             Json(json!({ "error": "base_url 未配置（提供 base_url 或已保存的 provider_id）" })),
         );
     }
-    let base = base_url.trim_end_matches('/').to_string();
+    let base = crate::config::settings::normalize_api_base(&base_url);
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(timeout.clamp(3, 60)))
         .build()
@@ -5142,7 +5142,7 @@ async fn activate_embedding_handler(
             "enabled": true,
             "provider": "oneapi",
             "oneapi": {
-                "base_url": provider.base_url,
+                "base_url": crate::config::settings::normalize_api_base(&provider.base_url),
                 "api_key": provider.api_key,
                 "model": resource.model,
                 "dimension": dimension,

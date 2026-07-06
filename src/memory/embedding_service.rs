@@ -46,7 +46,7 @@ impl OneApiEmbeddingService {
 #[async_trait]
 impl EmbeddingService for OneApiEmbeddingService {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
-        let url = format!("{}/v1/embeddings", self.api_url.trim_end_matches('/'));
+        let url = format!("{}/v1/embeddings", crate::config::settings::normalize_api_base(&self.api_url));
         let body = serde_json::json!({
             "model": self.model,
             "input": text
