@@ -281,6 +281,28 @@ fn save_user_skill(skill: &SkillMeta) -> std::io::Result<()> {
     std::fs::write(&path, content)
 }
 
+/// 按 skill_iri 从用户态技能文件删除一条并持久化。返回是否原本存在。
+fn delete_user_skill(skill_iri: &str) -> std::io::Result<bool> {
+    let mut skills = load_user_skills();
+    let before = skills.len();
+    skills.retain(|s| s.skill_iri != skill_iri);
+    let existed = skills.len() != before;
+    if existed {
+        let path = skills_store_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(&skills).unwrap_or_else(|_| "[]".to_string());
+        std::fs::write(&path, content)?;
+    }
+    Ok(existed)
+}
+
+/// 判定是否为系统级内置技能（`iri://` 命名空间，由内核启动播种，只读）。
+fn is_system_skill_iri(iri: &str) -> bool {
+    iri.starts_with("iri://")
+}
+
 /// Prompt 版本注册表的持久化文件路径。
 fn prompts_store_path() -> std::path::PathBuf {
     data_dir().join("prompts.json")
@@ -629,7 +651,7 @@ pub fn build_router(
         .route("/api/v1/blackboard/nodes", get(list_blackboard_nodes_handler))
         .route("/api/v1/batch/agents", get(list_batch_agents_handler))
         .route("/api/v1/batch/agents/:name/control", post(control_batch_agent_handler))
-        .route("/api/v1/skills", get(list_skills_handler).post(register_skill_handler))
+        .route("/api/v1/skills", get(list_skills_handler).post(register_skill_handler).delete(delete_skill_handler))
         .route("/api/v1/skills/manifest", get(skill_manifest_handler))
         .route("/api/v1/skills/import-git", post(import_git_skill_handler))
         .route("/api/v1/guard/audit", get(guard_audit_handler))
@@ -2800,6 +2822,13 @@ async fn register_skill_handler(
             "status": "error", "error": "skill_iri 不能为空"
         }))).into_response();
     }
+    // 系统级命名空间（iri://）保留给内核内置技能，只读——不可经 API 注册或覆盖。
+    if is_system_skill_iri(&skill.skill_iri) {
+        return (StatusCode::FORBIDDEN, Json(json!({
+            "status": "error",
+            "error": "系统级内置技能（iri://）为只读，不可注册或修改；请使用 skill:// 命名空间",
+        }))).into_response();
+    }
     let sig_status = state.core.skills.verify_skill_signature(&skill);
     use crate::tools::skill_registry::SignatureStatus;
     if sig_status == SignatureStatus::Invalid {
@@ -2817,6 +2846,41 @@ async fn register_skill_handler(
         "signature_status": sig_status.as_str(),
         "registered_by": identity.user_id,
         "tenant_id": identity.tenant_id,
+    }))).into_response()
+}
+
+/// DELETE /api/v1/skills?iri=... — 删除应用级技能（G7：仅 DA 角色）。
+/// 系统级内置技能（iri://）只读，拒绝删除。
+async fn delete_skill_handler(
+    State(state): State<Arc<AppState>>,
+    identity: UserIdentity,
+    Query(q): Query<SkillManifestQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = identity.require_role("DA") {
+        return e.into_response();
+    }
+    if q.iri.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "status": "error", "error": "iri 不能为空"
+        }))).into_response();
+    }
+    if is_system_skill_iri(&q.iri) {
+        return (StatusCode::FORBIDDEN, Json(json!({
+            "status": "error",
+            "error": "系统级内置技能（iri://）为只读，不可删除",
+        }))).into_response();
+    }
+    let removed_mem = state.core.skills.remove_skill(&q.iri);
+    let removed_disk = delete_user_skill(&q.iri).unwrap_or(false);
+    if !removed_mem && !removed_disk {
+        return (StatusCode::NOT_FOUND, Json(json!({
+            "status": "error", "error": "技能未找到（检查 iri）"
+        }))).into_response();
+    }
+    (StatusCode::OK, Json(json!({
+        "status": "ok",
+        "skill_iri": q.iri,
+        "deleted_by": identity.user_id,
     }))).into_response()
 }
 
