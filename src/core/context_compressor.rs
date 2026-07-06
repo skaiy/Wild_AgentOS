@@ -118,7 +118,7 @@ impl ToolResultCompressor {
                 _ => continue,
             };
             if let Some(compressed_content) = compressed_map.get(call_id) {
-                msg.content = compressed_content.to_string();
+                msg.content = compressed_content.to_string().into();
             }
         }
     }
@@ -160,7 +160,7 @@ impl ContextWindowManager {
     /// Estimate token consumption of a message list (4 chars ≈ 1 token, mixed CJK/Latin estimation)
     pub fn estimate_tokens(messages: &[ChatMessage]) -> usize {
         messages.iter().map(|m| {
-            let mut total = m.content.len() / 4 + m.role.len() / 4;
+            let mut total = m.content.as_text().len() / 4 + m.role.len() / 4;
             if let Some(ref calls) = m.tool_calls {
                 for call in calls {
                     total += call.function.name.len() / 4;
@@ -228,7 +228,7 @@ impl ContextWindowManager {
         if !summary.is_empty() {
             compressed.push(ChatMessage {
                 role: "user".to_string(),
-                content: format!("[History Summary] {}", summary),
+                content: format!("[History Summary] {}", summary).into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -320,13 +320,15 @@ impl ContextWindowManager {
                             tool_calls.push(tc.function.name.clone());
                         }
                     }
-                    if msg.content.len() > 50 && msg.content.len() < 200 {
-                        summaries.push(msg.content.clone());
+                    let content_text = msg.content.as_text();
+                    if content_text.len() > 50 && content_text.len() < 200 {
+                        summaries.push(content_text);
                     }
                 }
                 "tool" => {
-                    if msg.content.contains("error") || msg.content.contains("Error") {
-                        errors.push(msg.content.chars().take(100).collect::<String>());
+                    let content_text = msg.content.as_text();
+                    if content_text.contains("error") || content_text.contains("Error") {
+                        errors.push(content_text.chars().take(100).collect::<String>());
                     }
                 }
                 _ => {}
@@ -420,12 +422,12 @@ mod tests {
         
         // Build messages: system + several tool messages
         let mut msgs = vec![ChatMessage {
-            role: "system".to_string(), content: "sys".to_string(),
+            role: "system".to_string(), content: "sys".into(),
             name: None, tool_calls: None, tool_call_id: None, reasoning_content: None,
         }];
         for i in 1..=4 {
             msgs.push(ChatMessage {
-                role: "tool".to_string(), content: long.clone(),
+                role: "tool".to_string(), content: long.clone().into(),
                 name: None, tool_calls: None,
                 tool_call_id: Some(format!("call_{}", i)),
                 reasoning_content: None,
@@ -442,10 +444,10 @@ mod tests {
         for msg in msgs.iter().filter(|m| m.role == "tool") {
             let cid = msg.tool_call_id.as_ref().unwrap();
             if compressed_ids.contains(cid) {
-                assert!(msg.content.starts_with("[Summary"), 
+                assert!(msg.content.as_text().starts_with("[Summary"),
                     "tool_call_id={} should be compressed", cid);
             } else {
-                assert_eq!(msg.content.len(), long.len(), 
+                assert_eq!(msg.content.as_text().len(), long.len(),
                     "tool_call_id={} should remain full", cid);
             }
         }

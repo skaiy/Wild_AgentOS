@@ -21,6 +21,8 @@ pub struct Settings {
     pub batch_agents: BatchSettings,
     #[serde(default)]
     pub workspace: WorkspaceSettings,
+    #[serde(default)]
+    pub models: ModelsSettings,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -415,6 +417,61 @@ impl Default for EmbeddingSettings {
     }
 }
 
+// ── Models 注册表(P3):多 provider + 多 resource,支持多模态 ──
+/// 模型资源注册表:外部 API provider 与其下型号(resource)的集合。
+/// 采用 Vec + serde(default),使旧 override 无 `models` 段时反序列化为空,零破坏。
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ModelsSettings {
+    #[serde(default)]
+    pub providers: Vec<ProviderConfig>,
+    #[serde(default)]
+    pub resources: Vec<ModelResource>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ProviderConfig {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub base_url: String,
+    /// 反序列化保留;GET 快照脱敏为 api_key_configured,绝不回显明文。
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_provider_kind")]
+    pub kind: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_provider_timeout")]
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ModelResource {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    pub provider_id: String,
+    /// 真实型号名,发给 provider 的 "model"。
+    pub model: String,
+    /// chat|vision|embedding|audio_asr|audio_tts|realtime
+    #[serde(default)]
+    pub modalities: Vec<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub context_window: Option<u32>,
+    #[serde(default)]
+    pub supports_tools: bool,
+    #[serde(default)]
+    pub supports_reasoning: bool,
+    #[serde(default)]
+    pub supports_vision: bool,
+}
+
+fn default_provider_kind() -> String { "openai_compatible".to_string() }
+fn default_provider_timeout() -> u64 { 60 }
+
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct TokenOptimizationSettings {
     #[serde(default = "default_true")]
@@ -796,6 +853,7 @@ impl Default for Settings {
             token_optimization: TokenOptimizationSettings::default(),
             batch_agents: BatchSettings::default(),
             workspace: WorkspaceSettings::default(),
+            models: ModelsSettings::default(),
         }
     }
 }
@@ -835,6 +893,23 @@ impl Settings {
             .unwrap_or_default()
     }
 
+    /// 仅加载 models 段(含各字段 serde 默认值),用于运行期热更新模型注册表。
+    /// 与 `load_embedding` 同范式:不受其它必填字段约束,稳健读回 config_override.json 覆盖。
+    pub fn load_models() -> ModelsSettings {
+        Config::builder()
+            .add_source(config::File::with_name("config").required(false))
+            .add_source(config::File::with_name("data/config_override").required(false))
+            .add_source(
+                Environment::with_prefix("AGENT_OS")
+                    .separator("_")
+                    .try_parsing(true),
+            )
+            .build()
+            .ok()
+            .and_then(|c| c.get::<ModelsSettings>("models").ok())
+            .unwrap_or_default()
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.gateway.base_url.is_empty() {
             tracing::warn!("gateway.base_url is not set. LLM features will be unavailable until configured via UI.");
@@ -871,5 +946,35 @@ mod tests {
     fn test_logging_settings_default_has_redb_in_init() {
         let settings = LoggingSettings::default();
         assert_eq!(settings.level, "info");
+    }
+
+    #[test]
+    fn test_models_settings_empty_and_full() {
+        // 空对象 → 默认空注册表(向后兼容:旧 override 无 models 段)。
+        let empty: ModelsSettings = serde_json::from_str("{}").unwrap();
+        assert!(empty.providers.is_empty());
+        assert!(empty.resources.is_empty());
+
+        // 满配:provider 省略 kind/enabled/timeout 走默认;resource 省略布尔能力走默认。
+        let full: ModelsSettings = serde_json::from_str(
+            r#"{
+                "providers": [{ "id": "prov-openai", "base_url": "https://api.local", "api_key": "sk-x" }],
+                "resources": [{ "id": "res-vl", "provider_id": "prov-openai", "model": "qwen-vl-max", "modalities": ["chat","vision"], "supports_vision": true }]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(full.providers.len(), 1);
+        let p = &full.providers[0];
+        assert_eq!(p.id, "prov-openai");
+        assert_eq!(p.kind, "openai_compatible"); // 默认
+        assert!(p.enabled); // 默认 true
+        assert_eq!(p.timeout_seconds, 60); // 默认
+        assert_eq!(full.resources.len(), 1);
+        let r = &full.resources[0];
+        assert_eq!(r.model, "qwen-vl-max");
+        assert!(r.enabled); // 默认 true
+        assert!(r.supports_vision);
+        assert!(!r.supports_tools); // 默认 false
+        assert_eq!(r.modalities, vec!["chat".to_string(), "vision".to_string()]);
     }
 }

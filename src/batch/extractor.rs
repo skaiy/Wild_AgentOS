@@ -112,7 +112,7 @@ impl ExtractorPipeline {
             let messages = vec![
                 ChatMessage {
                     role: "system".to_string(),
-                    content: system_prompt.to_string(),
+                    content: system_prompt.into(),
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,
@@ -120,7 +120,7 @@ impl ExtractorPipeline {
                 },
                 ChatMessage {
                     role: "user".to_string(),
-                    content: user_content,
+                    content: user_content.into(),
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,

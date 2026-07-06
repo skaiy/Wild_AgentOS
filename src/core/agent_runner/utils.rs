@@ -677,7 +677,7 @@ impl super::AgentRunner {
         let messages: Vec<ChatMessage> = vec![
             ChatMessage {
                 role: "system".to_string(),
-                content: system_content,
+                content: system_content.into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -685,7 +685,7 @@ impl super::AgentRunner {
             },
             ChatMessage {
                 role: "user".to_string(),
-                content: context_msg,
+                content: context_msg.into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -725,7 +725,7 @@ impl super::AgentRunner {
                 );
                 if let Some(sys_msg) = running_messages.first_mut() {
                     if sys_msg.role == "system" {
-                        sys_msg.content.push_str(&prompt);
+                        sys_msg.content.as_text_mut().push_str(&prompt);
                     }
                 }
                 guard_pending_pre_injections.clear();
@@ -817,7 +817,7 @@ impl super::AgentRunner {
                             .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content));
                         running_messages.push(ChatMessage {
                             role: "assistant".to_string(),
-                            content: asst_summary,
+                            content: asst_summary.into(),
                             name: None,
                             tool_calls: Some(
                                 tool_calls
@@ -954,7 +954,7 @@ impl super::AgentRunner {
 
                             running_messages.push(ChatMessage {
                                 role: "tool".to_string(),
-                                content: tool_content,
+                                content: tool_content.into(),
                                 name: None,
                                 tool_calls: None,
                                 tool_call_id: Some(c.id.clone()),
@@ -1044,7 +1044,7 @@ impl super::AgentRunner {
 
                             running_messages.push(ChatMessage {
                                 role: "user".to_string(),
-                                content: summary_note,
+                                content: summary_note.into(),
                                 name: None,
                                 tool_calls: None,
                                 tool_call_id: None,
@@ -1351,7 +1351,7 @@ impl super::AgentRunner {
             if msg.role != "tool" {
                 continue;
             }
-            if msg.content.len() <= threshold {
+            if msg.content.as_text().len() <= threshold {
                 continue;
             }
             let call_id = match msg.tool_call_id.as_deref() {
@@ -1367,14 +1367,14 @@ impl super::AgentRunner {
                 .is_some();
             if has_micro_tool {
                 let iri = format!("iri://tool-result/{}", call_id);
-                let original_size = msg.content.len();
+                let original_size = msg.content.as_text().len();
                 msg.content = format!(
                     "[Compressed {} bytes] Call the `{}` tool for the full result\nIRI: {}",
                     original_size, micro_tool_name, iri,
-                );
+                ).into();
                 debug!(
                     "[tool_compress] Reference compression: {} ({} bytes -> {} bytes)",
-                    micro_tool_name, original_size, msg.content.len(),
+                    micro_tool_name, original_size, msg.content.as_text().len(),
                 );
             }
         }

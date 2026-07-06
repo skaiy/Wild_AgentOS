@@ -339,8 +339,47 @@ impl AgentOSService {
                 _ => e.fallback.dimension,
             }
         };
+        // Models 注册表脱敏快照：provider.api_key → api_key_configured；resources 无密钥原样。
+        let models = {
+            let m = &self.settings.models;
+            let providers: Vec<serde_json::Value> = m
+                .providers
+                .iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "id": p.id,
+                        "name": p.name,
+                        "base_url": p.base_url,
+                        "kind": p.kind,
+                        "enabled": p.enabled,
+                        "timeout_seconds": p.timeout_seconds,
+                        "api_key_configured": !p.api_key.is_empty(),
+                    })
+                })
+                .collect();
+            let resources: Vec<serde_json::Value> = m
+                .resources
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "id": r.id,
+                        "name": r.name,
+                        "provider_id": r.provider_id,
+                        "model": r.model,
+                        "modalities": r.modalities,
+                        "enabled": r.enabled,
+                        "context_window": r.context_window,
+                        "supports_tools": r.supports_tools,
+                        "supports_reasoning": r.supports_reasoning,
+                        "supports_vision": r.supports_vision,
+                    })
+                })
+                .collect();
+            serde_json::json!({ "providers": providers, "resources": resources })
+        };
         serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
+            "models": models,
             "gateway": {
                 "base_url": g.base_url,
                 "default_model": g.default_model,

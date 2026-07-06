@@ -14,7 +14,7 @@ use crate::CoreError;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
-    pub content: String,
+    pub content: ChatContent,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -23,6 +23,100 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+}
+
+/// 消息内容:纯文本或多部件(VL 多模态)。`#[serde(untagged)]` 先试 Text,
+/// 使旧 JSON `"content":"..."` 仍反序列化为 Text;新 VL 数组反序列化为 Parts。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ChatContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentPart {
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<ImageUrl>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageUrl {
+    pub url: String,
+}
+
+impl Default for ChatContent {
+    fn default() -> Self {
+        ChatContent::Text(String::new())
+    }
+}
+
+impl ChatContent {
+    pub fn text<S: Into<String>>(s: S) -> Self {
+        ChatContent::Text(s.into())
+    }
+    /// 取纯文本(Parts 时拼接所有 text 部件),供校验/回退/日志使用。
+    pub fn as_text(&self) -> String {
+        match self {
+            ChatContent::Text(s) => s.clone(),
+            ChatContent::Parts(ps) => ps
+                .iter()
+                .filter_map(|p| p.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
+    /// 取可变文本引用;若当前为 Parts 则先折叠为等价纯文本,便于就地增删(如系统提示拼接)。
+    pub fn as_text_mut(&mut self) -> &mut String {
+        if let ChatContent::Parts(_) = self {
+            let flattened = self.as_text();
+            *self = ChatContent::Text(flattened);
+        }
+        match self {
+            ChatContent::Text(s) => s,
+            _ => unreachable!("just normalized to Text above"),
+        }
+    }
+    pub fn image(url: impl Into<String>) -> ContentPart {
+        ContentPart {
+            kind: "image_url".into(),
+            text: None,
+            image_url: Some(ImageUrl { url: url.into() }),
+        }
+    }
+    pub fn part_text(t: impl Into<String>) -> ContentPart {
+        ContentPart {
+            kind: "text".into(),
+            text: Some(t.into()),
+            image_url: None,
+        }
+    }
+    /// 提取所有 image_url 部件的 URL(Text 变体返回空),供 VL 透传。
+    pub fn image_urls(&self) -> Vec<String> {
+        match self {
+            ChatContent::Text(_) => Vec::new(),
+            ChatContent::Parts(ps) => ps
+                .iter()
+                .filter_map(|p| p.image_url.as_ref().map(|u| u.url.clone()))
+                .collect(),
+        }
+    }
+}
+
+impl From<String> for ChatContent {
+    fn from(s: String) -> Self {
+        ChatContent::Text(s)
+    }
+}
+
+impl From<&str> for ChatContent {
+    fn from(s: &str) -> Self {
+        ChatContent::Text(s.to_string())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +178,14 @@ pub struct Usage {
     pub total_tokens: u32,
 }
 
+/// 单个 provider 的运行时端点信息(由 models 注册表灌入,支持热更新)。
+#[derive(Clone, Default)]
+pub struct ProviderRuntime {
+    pub base_url: String,
+    pub api_key: String,
+    pub timeout_seconds: u64,
+}
+
 pub struct UnifiedGateway {
     base_url: RwLock<String>,
     api_key: RwLock<String>,
@@ -93,6 +195,10 @@ pub struct UnifiedGateway {
     timeout_seconds: u64,
     max_retries: u32,
     retry_base_ms: u64,
+    /// provider_id → 运行时端点(base_url/api_key/timeout)。
+    providers: RwLock<HashMap<String, ProviderRuntime>>,
+    /// resource.model → provider_id;命中则按该 provider 解析端点,否则回退单网关。
+    model_provider: RwLock<HashMap<String, String>>,
 }
 
 impl UnifiedGateway {
@@ -115,6 +221,8 @@ impl UnifiedGateway {
             timeout_seconds: settings.timeout_seconds,
             max_retries: settings.max_retries,
             retry_base_ms: 500,
+            providers: RwLock::new(HashMap::new()),
+            model_provider: RwLock::new(HashMap::new()),
         })
     }
 
@@ -134,12 +242,13 @@ impl UnifiedGateway {
         messages: Vec<ChatMessage>,
     ) -> Result<ChatCompletionResponse, CoreError> {
         let sanitized = Self::sanitize_tool_messages(messages);
-        let url = format!("{}/v1/chat/completions", self.base_url.read().unwrap());
+        let (base, key) = self.resolve_endpoint(model);
+        let url = format!("{}/v1/chat/completions", base);
         let body = serde_json::json!({
             "model": model,
             "messages": sanitized,
         });
-        self.send_request(&url, body).await
+        self.send_request(&url, &key, body).await
     }
 
     pub async fn chat_with_params(
@@ -154,7 +263,7 @@ impl UnifiedGateway {
         let messages = Self::sanitize_tool_messages(messages);
         // Pre-validate messages: check for empty content that might cause 400 errors
         for (i, msg) in messages.iter().enumerate() {
-            if msg.content.trim().is_empty() && msg.role != "assistant" {
+            if msg.content.as_text().trim().is_empty() && msg.role != "assistant" {
                 warn!(
                     msg_idx = i, role = %msg.role,
                     "Message has empty content — this may cause 400 errors from the LLM API"
@@ -162,7 +271,8 @@ impl UnifiedGateway {
             }
         }
 
-        let url = format!("{}/v1/chat/completions", self.base_url.read().unwrap());
+        let (base, key) = self.resolve_endpoint(model);
+        let url = format!("{}/v1/chat/completions", base);
         let mut body = serde_json::json!({
             "model": model,
             "messages": messages,
@@ -177,12 +287,13 @@ impl UnifiedGateway {
             body["tools"] = serde_json::json!(t);
             body["tool_choice"] = serde_json::json!(tool_choice.unwrap_or("auto"));
         }
-        self.send_request(&url, body).await
+        self.send_request(&url, &key, body).await
     }
 
     async fn send_request(
         &self,
         url: &str,
+        api_key: &str,
         body: Value,
     ) -> Result<ChatCompletionResponse, CoreError> {
         let mut last_error = None;
@@ -198,7 +309,7 @@ impl UnifiedGateway {
             let req = self
                 .client
                 .post(url)
-                .header("Authorization", format!("Bearer {}", self.api_key.read().unwrap()))
+                .header("Authorization", format!("Bearer {}", api_key))
                 .header("Content-Type", "application/json")
                 .json(&req_body);
 
@@ -282,6 +393,32 @@ impl UnifiedGateway {
         self.model_mapping.write().unwrap().insert(task_type, model);
     }
 
+    /// 灌入 provider 运行时注册表(整体替换),支持 models 段热更新。
+    pub fn set_provider_registry(&self, provs: HashMap<String, ProviderRuntime>) {
+        *self.providers.write().unwrap() = provs;
+    }
+
+    /// 灌入 model→provider 映射(整体替换),支持 models 段热更新。
+    pub fn set_model_provider_mapping(&self, map: HashMap<String, String>) {
+        *self.model_provider.write().unwrap() = map;
+    }
+
+    /// 按 model 解析目标端点:命中 model→provider 且其 base_url 非空则用该 provider 的
+    /// base_url/api_key;否则回退单网关(向后兼容,未配置 models 或未命中时行为不变)。
+    fn resolve_endpoint(&self, model: &str) -> (String, String) {
+        if let Some(pid) = self.model_provider.read().unwrap().get(model).cloned() {
+            if let Some(p) = self.providers.read().unwrap().get(&pid) {
+                if !p.base_url.is_empty() {
+                    return (p.base_url.trim_end_matches('/').to_string(), p.api_key.clone());
+                }
+            }
+        }
+        (
+            self.base_url.read().unwrap().clone(),
+            self.api_key.read().unwrap().clone(),
+        )
+    }
+
     pub fn get_model(&self, task_type: &str) -> String {
         let mapping = self.model_mapping.read().unwrap();
         mapping
@@ -346,7 +483,8 @@ impl UnifiedGateway {
         tools: Option<Vec<Value>>,
         tool_choice: Option<&str>,
     ) -> Result<MessageStream, CoreError> {
-        let url = format!("{}/v1/chat/completions", self.base_url.read().unwrap());
+        let (base, key) = self.resolve_endpoint(model);
+        let url = format!("{}/v1/chat/completions", base);
         let mut body = serde_json::json!({
             "model": model,
             "messages": messages,
@@ -363,18 +501,19 @@ impl UnifiedGateway {
             body["tool_choice"] = serde_json::json!(tool_choice.unwrap_or("auto"));
         }
 
-        self.send_stream_request(&url, body).await
+        self.send_stream_request(&url, &key, body).await
     }
 
     async fn send_stream_request(
         &self,
         url: &str,
+        api_key: &str,
         body: Value,
     ) -> Result<MessageStream, CoreError> {
         let req = self
             .client
             .post(url)
-            .header("Authorization", format!("Bearer {}", self.api_key.read().unwrap()))
+            .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
             .json(&body);
@@ -443,5 +582,84 @@ mod tests {
         // test updating base URL at runtime
         gateway.set_base_url("https://api.new-endpoint.com".to_string());
         assert_eq!(*gateway.base_url.read().unwrap(), "https://api.new-endpoint.com");
+    }
+
+    fn test_gateway() -> UnifiedGateway {
+        let settings = GatewaySettings {
+            base_url: "http://fallback:3000".to_string(),
+            api_key: "sk-fallback".to_string(),
+            default_model: "deepseek-v4-flash".to_string(),
+            timeout_seconds: 30,
+            max_retries: 3,
+            model_mapping: HashMap::from([("default".to_string(), "deepseek-v4-flash".to_string())]),
+        };
+        UnifiedGateway::new(&settings).unwrap()
+    }
+
+    #[test]
+    fn test_chat_content_untagged_backcompat() {
+        // 旧 JSON:content 为字符串 → Text
+        let m: ChatMessage =
+            serde_json::from_str(r#"{"role":"user","content":"hi"}"#).unwrap();
+        assert!(matches!(m.content, ChatContent::Text(ref s) if s == "hi"));
+
+        // 新 VL JSON:content 为数组 → Parts
+        let vl = r#"{"role":"user","content":[{"type":"text","text":"看图"},{"type":"image_url","image_url":{"url":"http://x/1.png"}}]}"#;
+        let m2: ChatMessage = serde_json::from_str(vl).unwrap();
+        match &m2.content {
+            ChatContent::Parts(ps) => {
+                assert_eq!(ps.len(), 2);
+                assert_eq!(ps[0].kind, "text");
+                assert_eq!(ps[1].kind, "image_url");
+                assert_eq!(ps[1].image_url.as_ref().unwrap().url, "http://x/1.png");
+            }
+            _ => panic!("expected Parts"),
+        }
+    }
+
+    #[test]
+    fn test_chat_content_as_text_and_serialize() {
+        let parts = ChatContent::Parts(vec![
+            ChatContent::part_text("第一段"),
+            ChatContent::image("http://x/1.png"),
+            ChatContent::part_text("第二段"),
+        ]);
+        assert_eq!(parts.as_text(), "第一段\n第二段");
+        // image_urls 仅提取 image_url 部件;Text 变体返回空。
+        assert_eq!(parts.image_urls(), vec!["http://x/1.png".to_string()]);
+        assert!(ChatContent::text("hi").image_urls().is_empty());
+
+        // Text 序列化为字符串(untagged),保持旧线格式。
+        let txt = ChatContent::text("hi");
+        assert_eq!(serde_json::to_value(&txt).unwrap(), serde_json::json!("hi"));
+    }
+
+    #[test]
+    fn test_resolve_endpoint_hit_and_fallback() {
+        let gw = test_gateway();
+        // 未配置 models → 回退单网关
+        let (b, k) = gw.resolve_endpoint("deepseek-v4-flash");
+        assert_eq!(b, "http://fallback:3000");
+        assert_eq!(k, "sk-fallback");
+
+        // 配置 provider + 映射 → 命中
+        gw.set_provider_registry(HashMap::from([(
+            "prov-vl".to_string(),
+            ProviderRuntime {
+                base_url: "https://vl.example.com/".to_string(),
+                api_key: "sk-vl".to_string(),
+                timeout_seconds: 60,
+            },
+        )]));
+        gw.set_model_provider_mapping(HashMap::from([(
+            "qwen-vl-max".to_string(),
+            "prov-vl".to_string(),
+        )]));
+        let (b2, k2) = gw.resolve_endpoint("qwen-vl-max");
+        assert_eq!(b2, "https://vl.example.com"); // 尾斜杠被裁剪
+        assert_eq!(k2, "sk-vl");
+        // 未命中的 model 仍回退
+        let (b3, _) = gw.resolve_endpoint("deepseek-v4-flash");
+        assert_eq!(b3, "http://fallback:3000");
     }
 }

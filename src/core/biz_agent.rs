@@ -309,7 +309,7 @@ Output only the JSON array, no other content."#,
         let messages = vec![
             crate::gateway::unified_gateway::ChatMessage {
                 role: "user".to_string(),
-                content: prompt,
+                content: prompt.into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -431,7 +431,7 @@ Output only the JSON, no other content."#,
         let messages = vec![
             crate::gateway::unified_gateway::ChatMessage {
                 role: "user".to_string(),
-                content: prompt,
+                content: prompt.into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,

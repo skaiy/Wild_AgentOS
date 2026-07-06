@@ -53,7 +53,7 @@ impl LLMClient {
             .into_iter()
             .map(|m| ChatMessage {
                 role: m.role,
-                content: m.content,
+                content: m.content.into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -79,7 +79,7 @@ impl LLMClient {
             .into_iter()
             .map(|m| ChatMessage {
                 role: m.role,
-                content: m.content,
+                content: m.content.into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -149,7 +149,7 @@ impl LLMClient {
             .into_iter()
             .map(|m| ChatMessage {
                 role: m.role,
-                content: m.content,
+                content: m.content.into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,

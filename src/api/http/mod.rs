@@ -12,11 +12,12 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::core::core_types::SemanticCore;
-use crate::gateway::unified_gateway::{ChatMessage, UnifiedGateway};
+use crate::gateway::unified_gateway::{ChatContent, ChatMessage, UnifiedGateway};
 use crate::knowledge_graph::rdf_mapper::RdfMapper;
 use crate::knowledge_graph::store::KnowledgeGraphStore;
 use crate::knowledge_graph::types::{EdgeDef, LLMExtractionOutput, NodeDef, RdfQuad, RdfValue};
@@ -417,6 +418,46 @@ fn save_config_override(patch: &Value) -> std::io::Result<()> {
         }
     }
 
+    // Models 段:整体替换 providers/resources(集合语义,避免深合并残留已删项);
+    // 空/缺失 provider.api_key 时回填 root 中同 id 的旧 key,避免误清空。
+    if let Some(models_patch) = patch.get("models") {
+        let mut clean = models_patch.clone();
+        if let Some(provs) = clean.get_mut("providers").and_then(|v| v.as_array_mut()) {
+            let old = root
+                .get("models")
+                .and_then(|m| m.get("providers"))
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            for p in provs.iter_mut() {
+                let pid = p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let k = p.get("api_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if let Some(o) = p.as_object_mut() {
+                    o.remove("api_key_configured");
+                }
+                if k.is_empty() {
+                    if let Some(old_p) = old
+                        .iter()
+                        .find(|x| x.get("id").and_then(|v| v.as_str()) == Some(&pid))
+                    {
+                        if let (Some(o), Some(ok)) = (p.as_object_mut(), old_p.get("api_key")) {
+                            if ok.as_str().map(|s| !s.is_empty()).unwrap_or(false) {
+                                o.insert("api_key".into(), ok.clone());
+                            } else {
+                                o.remove("api_key");
+                            }
+                        }
+                    } else if let Some(o) = p.as_object_mut() {
+                        o.remove("api_key");
+                    }
+                }
+            }
+        }
+        if let Some(obj) = root.as_object_mut() {
+            obj.insert("models".into(), clean);
+        }
+    }
+
     let content = serde_json::to_string_pretty(&root).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&path, content)
 }
@@ -564,6 +605,9 @@ pub fn build_router(
         api_usage: Arc::new(ApiUsageState::default()),
     });
 
+    // 启动首灌：把持久化的 models 注册表灌入 gateway，使进程启动即按多 provider 生效。
+    hot_reload_models(&state);
+
     Router::new()
         .route("/health", get(health_handler))
         .route("/metrics", get(metrics_handler))
@@ -617,6 +661,14 @@ pub fn build_router(
         .route("/api/v1/kb/bases/:id/documents", get(list_kb_documents_handler))
         .route("/api/v1/kb/bases/:id/documents/:doc_id/raw", get(kb_document_raw_handler))
         .route("/api/v1/kb/bases/:id/search", post(search_knowledge_base_handler))
+        // ── 图片入口（VL 多模态）：上传 + 只读代理 ──
+        .route(
+            "/api/v1/images/upload",
+            post(upload_image_handler).layer(DefaultBodyLimit::max(IMAGE_UPLOAD_MAX_BYTES)),
+        )
+        .route("/api/v1/images/:image_id/raw", get(image_raw_handler))
+        // ── 模型资源连通性测试（不回显 api_key）──
+        .route("/api/v1/models/test", post(test_model_handler))
         .route("/api/v1/agents", get(list_agents_handler).post(create_agent_handler))
         .route("/api/v1/agents/:id", put(update_agent_handler).delete(delete_agent_handler))
         .route("/api/v1/agents/:id/chat", post(agent_chat_handler))
@@ -816,6 +868,35 @@ async fn update_config_handler(
                 json_deep_merge(existing, &clean);
             }
         }
+        // Models 快照：整体替换；每个 provider 的 api_key 转为 api_key_configured，不回显明文。
+        if let Some(models_patch) = patch.get("models") {
+            let mut clean = models_patch.clone();
+            if let Some(provs) = clean.get_mut("providers").and_then(|v| v.as_array_mut()) {
+                for p in provs.iter_mut() {
+                    if let Some(o) = p.as_object_mut() {
+                        let key_now = o.get("api_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        // 已配置：本次提供了非空 key，或此前已有同 id 的持久化 key。
+                        let pid = o.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let prev_configured = info
+                            .get("models")
+                            .and_then(|m| m.get("providers"))
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter().any(|x| {
+                                    x.get("id").and_then(|v| v.as_str()) == Some(&pid)
+                                        && x.get("api_key_configured").and_then(|v| v.as_bool()).unwrap_or(false)
+                                })
+                            })
+                            .unwrap_or(false);
+                        o.insert("api_key_configured".into(), json!(!key_now.is_empty() || prev_configured));
+                        o.remove("api_key");
+                    }
+                }
+            }
+            if let Some(obj) = info.as_object_mut() {
+                obj.insert("models".into(), clean);
+            }
+        }
     }
 
     // 4. Embedding 变更：按新配置热切换向量库并后台重建所有向量 KB 索引（免重启即时生效）。
@@ -843,6 +924,12 @@ async fn update_config_handler(
         }
     }
 
+    // 4b. Models 变更：把最新注册表灌入 gateway（provider 端点 + model→provider 映射），
+    //     增量热更、无需重启；未命中 model 时 gateway 自动回退单网关。
+    if patch.get("models").is_some() {
+        hot_reload_models(&state);
+    }
+
     let final_info = state.config_info.read().await.clone();
     let message = if let Some(e) = &reload_err {
         format!("配置已持久化，但向量库热切换失败：{e}（重启后仍会按新配置生效）")
@@ -863,6 +950,34 @@ async fn update_config_handler(
         "reindex_queued": reindex_queued,
         "config": final_info,
     }))
+}
+
+/// Models 注册表热更新：按最新持久化配置把启用的 provider 端点与 model→provider 映射
+/// 灌入 gateway。整体替换、无需重启；移除 models 段后调用即回退单网关。
+fn hot_reload_models(state: &Arc<AppState>) {
+    let m = crate::config::settings::Settings::load_models();
+    let mut provs: HashMap<String, crate::gateway::unified_gateway::ProviderRuntime> = HashMap::new();
+    for p in m.providers.iter().filter(|p| p.enabled) {
+        provs.insert(
+            p.id.clone(),
+            crate::gateway::unified_gateway::ProviderRuntime {
+                base_url: p.base_url.clone(),
+                api_key: p.api_key.clone(),
+                timeout_seconds: p.timeout_seconds,
+            },
+        );
+    }
+    let mut mp: HashMap<String, String> = HashMap::new();
+    for r in m.resources.iter().filter(|r| r.enabled) {
+        if m.providers.iter().any(|p| p.id == r.provider_id && p.enabled) {
+            mp.insert(r.model.clone(), r.provider_id.clone());
+        }
+    }
+    let provider_count = provs.len();
+    let model_count = mp.len();
+    state.gateway.set_provider_registry(provs);
+    state.gateway.set_model_provider_mapping(mp);
+    tracing::info!(provider_count, model_count, "models 注册表已热更新灌入 gateway");
 }
 
 /// Embedding 配置热切换：按最新持久化配置重建 embedding 服务，原子换入新维度向量库，
@@ -1198,7 +1313,7 @@ async fn agent_chat_handler(
     if message.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "message 不能为空" })));
     }
-    let (status, body) = run_agent_rag(&state, &id, &message).await;
+    let (status, body) = run_agent_rag(&state, &id, &message, &[]).await;
     (status, Json(body))
 }
 
@@ -1212,16 +1327,57 @@ struct RagContext {
     /// 网关不可用时的图谱直出回退答案（有命中时才有）。
     fallback_answer: Option<String>,
     suggested_actions: Vec<Value>,
+    /// 本次实际调用的真实型号名（按 model_mounts 选模型解析，回退旧 model/default）。
+    model: String,
+}
+
+/// 解析 Agent 在指定能力槽上实际调用的真实型号名。
+/// 依 `keys` 顺序读 `model_mounts[key]` → `config_info.models.resources[id].model`；
+/// 均未命中时回退旧 `agent.model`（单模型），再回退 `gateway.default_model()`。
+async fn resolve_agent_model(state: &Arc<AppState>, agent: &Value, keys: &[&str]) -> String {
+    let mounts = agent.get("model_mounts");
+    let resources = {
+        let cfg = state.config_info.read().await;
+        cfg.get("models")
+            .and_then(|m| m.get("resources"))
+            .and_then(|v| v.as_array())
+            .cloned()
+    };
+    if let (Some(mounts), Some(resources)) = (mounts, resources.as_ref()) {
+        for key in keys {
+            let res_id = match mounts.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                Some(r) => r,
+                None => continue,
+            };
+            if let Some(model) = resources
+                .iter()
+                .find(|r| r.get("id").and_then(|v| v.as_str()) == Some(res_id))
+                .and_then(|r| r.get("model").and_then(|v| v.as_str()))
+                .filter(|s| !s.is_empty())
+            {
+                return model.to_string();
+            }
+        }
+    }
+    agent
+        .get("model")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| state.gateway.default_model())
 }
 
 /// 单轮 RAG 检索与提示组装：定位 Agent → 图/向量检索 → 组装上下文与提示消息。
 /// 返回可复用的 RagContext，供内部 chat、对外 public chat、SSE 流式与 OpenAI 兼容层共用。
+/// `images` 为随消息透传的图片 URL 列表（非空即走 VL：选 vision 模型 + 组多部件 user 消息）。
 async fn build_rag_context(
     state: &Arc<AppState>,
     id: &str,
     message: &str,
+    images: &[String],
 ) -> Result<RagContext, (StatusCode, Value)> {
     let message = message.to_string();
+    let has_image = !images.is_empty();
 
     // 1. 定位 Agent（用户态优先，其次批处理静态）。
     let agent = {
@@ -1249,6 +1405,9 @@ async fn build_rag_context(
         }
     };
     let agent_name = agent.get("name").and_then(|v| v.as_str()).unwrap_or("维修助手").to_string();
+    // 选模型：有图走 vision 槽（回退 chat 槽），纯文本走 chat 槽；均未命中回退旧 model/default。
+    let model_keys: &[&str] = if has_image { &["vision", "chat"] } else { &["chat"] };
+    let selected_model = resolve_agent_model(state, &agent, model_keys).await;
     // 2a. 解析 Agent 的知识来源：展开知识包 → 命名图集合 + 向量命名空间集合。
     let mut graph_iris: Vec<String> = Vec::new();
     let mut vector_namespaces: Vec<String> = Vec::new();
@@ -1397,9 +1556,19 @@ async fn build_rag_context(
         format!("\n【向量知识库检索结果】\n{vector_facts}")
     };
     let user_content = format!("{graph_section}{vector_section}\n【用户问题】\n{message}");
+    // 有图时组多部件 user 消息（文本 + 各 image_url），否则退化为纯文本。
+    let user_msg = if has_image {
+        let mut parts = vec![ChatContent::part_text(user_content)];
+        for u in images {
+            parts.push(ChatContent::image(u.clone()));
+        }
+        ChatMessage { role: "user".into(), content: ChatContent::Parts(parts), name: None, tool_calls: None, tool_call_id: None, reasoning_content: None }
+    } else {
+        ChatMessage { role: "user".into(), content: user_content.into(), name: None, tool_calls: None, tool_call_id: None, reasoning_content: None }
+    };
     let messages = vec![
-        ChatMessage { role: "system".into(), content: sys, name: None, tool_calls: None, tool_call_id: None, reasoning_content: None },
-        ChatMessage { role: "user".into(), content: user_content, name: None, tool_calls: None, tool_call_id: None, reasoning_content: None },
+        ChatMessage { role: "system".into(), content: sys.into(), name: None, tool_calls: None, tool_call_id: None, reasoning_content: None },
+        user_msg,
     ];
 
     // 网关不可用时的图谱直出回退（有命中才提供）。
@@ -1418,16 +1587,17 @@ async fn build_rag_context(
         fallback_answer,
         sources,
         messages,
+        model: selected_model,
     })
 }
 
 /// 单轮 RAG（同步）：检索 → 调 LLM 网关生成简体中文回答。返回 (状态码, JSON 响应体)。
-async fn run_agent_rag(state: &Arc<AppState>, id: &str, message: &str) -> (StatusCode, Value) {
-    let rc = match build_rag_context(state, id, message).await {
+async fn run_agent_rag(state: &Arc<AppState>, id: &str, message: &str, images: &[String]) -> (StatusCode, Value) {
+    let rc = match build_rag_context(state, id, message, images).await {
         Ok(c) => c,
         Err(resp) => return resp,
     };
-    match state.gateway.chat(rc.messages).await {
+    match state.gateway.chat_with_model(&rc.model, rc.messages).await {
         Ok(resp) => {
             let answer = resp
                 .choices
@@ -1443,7 +1613,7 @@ async fn run_agent_rag(state: &Arc<AppState>, id: &str, message: &str) -> (Statu
                     "sources": rc.sources,
                     "retrieved": rc.retrieved,
                     "vector_retrieved": rc.vector_retrieved,
-                    "model": state.gateway.default_model(),
+                    "model": rc.model,
                     "suggested_actions": rc.suggested_actions,
                 }),
             )
@@ -1648,7 +1818,7 @@ async fn public_agent_chat_handler(
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "message 不能为空" })))
             .into_response();
     }
-    let (status, body) = run_agent_rag(&state, &id, &message).await;
+    let (status, body) = run_agent_rag(&state, &id, &message, &[]).await;
     touch_key_last_used(&state, &ctx.key_id).await;
     write_public_audit(&ctx, &id, "chat", status.as_u16(), started, "ok");
     (status, Json(body)).into_response()
@@ -1694,7 +1864,7 @@ fn build_sse_response(
     shape: StreamShape,
     report_model: String,
 ) -> axum::response::Response {
-    let llm_model = state.gateway.default_model();
+    let llm_model = rc.model.clone();
     let chat_id = format!("chatcmpl-{}", uuid::Uuid::new_v4().simple());
     let created = chrono::Utc::now().timestamp();
     let stream = async_stream::stream! {
@@ -1789,7 +1959,7 @@ async fn public_agent_chat_stream_handler(
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "message 不能为空" })))
             .into_response();
     }
-    let rc = match build_rag_context(&state, &id, &message).await {
+    let rc = match build_rag_context(&state, &id, &message, &[]).await {
         Ok(c) => c,
         Err((status, body)) => {
             write_public_audit(&ctx, &id, "chat_stream", status.as_u16(), started, "error");
@@ -1797,7 +1967,7 @@ async fn public_agent_chat_stream_handler(
         }
     };
     touch_key_last_used(&state, &ctx.key_id).await;
-    let report_model = state.gateway.default_model();
+    let report_model = rc.model.clone();
     build_sse_response(state, ctx, id, "chat_stream", started, rc, guard, StreamShape::Native, report_model)
 }
 
@@ -1807,8 +1977,9 @@ async fn public_agent_chat_stream_handler(
 pub struct OpenAiMessage {
     #[serde(default)]
     pub role: String,
+    /// 文本或多部件(含 image_url)内容;untagged 兼容旧 String 与新数组两种入参。
     #[serde(default)]
-    pub content: String,
+    pub content: ChatContent,
 }
 
 #[derive(Deserialize)]
@@ -1888,18 +2059,19 @@ async fn openai_chat_completions_handler(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let message = req
-        .messages
-        .iter()
-        .rev()
-        .find(|m| m.role == "user")
-        .map(|m| m.content.trim().to_string())
+    let last_user = req.messages.iter().rev().find(|m| m.role == "user");
+    let message = last_user
+        .map(|m| m.content.as_text().trim().to_string())
+        .unwrap_or_default();
+    // 提取末条 user 消息内的图片 URL(image_url 部件),供 VL 透传给 build_rag_context。
+    let images: Vec<String> = last_user
+        .map(|m| m.content.image_urls())
         .unwrap_or_default();
     if message.is_empty() {
         write_public_audit(&ctx, &id, endpoint, 400, started, "empty_message");
         return openai_error(StatusCode::BAD_REQUEST, "messages 中缺少非空 user 内容", "invalid_request_error");
     }
-    let rc = match build_rag_context(&state, &id, &message).await {
+    let rc = match build_rag_context(&state, &id, &message, &images).await {
         Ok(c) => c,
         Err((status, body)) => {
             write_public_audit(&ctx, &id, endpoint, status.as_u16(), started, "error");
@@ -1911,7 +2083,7 @@ async fn openai_chat_completions_handler(
     if req.stream {
         return build_sse_response(state, ctx, id.clone(), endpoint, started, rc, guard, StreamShape::OpenAI, id);
     }
-    match state.gateway.chat(rc.messages).await {
+    match state.gateway.chat_with_model(&rc.model, rc.messages).await {
         Ok(resp) => {
             let answer = resp.choices.first().and_then(|c| c.message.content.clone()).unwrap_or_default();
             write_public_audit(&ctx, &id, endpoint, 200, started, "ok");
@@ -4173,6 +4345,48 @@ async fn search_knowledge_base_handler(
 /// KB 上传/导入单文件体积上限（60MB，覆盖前端提示的 50MB/文件 + 编码开销）。
 const KB_UPLOAD_MAX_BYTES: usize = 60 * 1024 * 1024;
 
+/// 图片上传单文件体积上限（10MiB）。
+const IMAGE_UPLOAD_MAX_BYTES: usize = 10 * 1024 * 1024;
+/// 内联 data URI 阈值：仅小图（≤256KiB）随上传响应返回 data_uri，便于无回源出网场景。
+const IMAGE_DATA_URI_MAX_BYTES: usize = 256 * 1024;
+
+/// content_type → 受支持图片扩展名；None 表示非受支持图片类型（拒绝上传）。
+fn image_ext_from_ct(ct: &str) -> Option<&'static str> {
+    match ct.split(';').next().unwrap_or("").trim() {
+        "image/png" => Some("png"),
+        "image/jpeg" | "image/jpg" => Some("jpg"),
+        "image/webp" => Some("webp"),
+        "image/gif" => Some("gif"),
+        _ => None,
+    }
+}
+
+/// 扩展名 → content_type（raw 代理回填响应头）。
+fn image_ct_from_ext(ext: &str) -> &'static str {
+    match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        _ => "application/octet-stream",
+    }
+}
+
+/// 按魔数嗅探图片扩展名（content_type 缺失/不可信时兜底）。
+fn sniff_image_ext(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() >= 8 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n" {
+        Some("png")
+    } else if bytes.len() >= 3 && &bytes[0..3] == b"\xff\xd8\xff" {
+        Some("jpg")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else if bytes.len() >= 6 && (&bytes[0..6] == b"GIF87a" || &bytes[0..6] == b"GIF89a") {
+        Some("gif")
+    } else {
+        None
+    }
+}
+
 /// 依扩展名判断向量库上传文件是否为当前可解析的纯文本类型。
 /// 返回 Some(()) 表示直读文本；None 表示暂无解析器（PDF/Word 等），走诚实降级。
 fn kb_text_ext(name: &str) -> Option<()> {
@@ -4558,6 +4772,230 @@ async fn kb_document_raw_handler(
             Json(json!({ "error": format!("读取原文失败: {e}") })),
         )
             .into_response(),
+    }
+}
+
+/// POST /api/v1/images/upload — 图片上传（multipart，复用 BlobStore）。
+/// 字段：file（单个图片）。校验类型 ∈ {png,jpeg,webp,gif} 且 ≤10MiB。
+/// 返回 { image_id, url, content_type, size, data_uri? }，url 供 image_url 直接引用。
+async fn upload_image_handler(
+    State(state): State<Arc<AppState>>,
+    identity: UserIdentity,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let blob = match &state.blob_store {
+        Some(b) => b.clone(),
+        None => {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "BlobStore 未启用" })))
+        }
+    };
+    // 读取单个 file 字段（累积到内存）。
+    let mut file: Option<(String, Vec<u8>)> = None;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("multipart 解析失败: {e}") })))
+            }
+        };
+        let declared_ct = field.content_type().map(|s| s.to_string());
+        match field.bytes().await {
+            Ok(b) => file = Some((declared_ct.unwrap_or_default(), b.to_vec())),
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("读取文件失败: {e}") })))
+            }
+        }
+    }
+    let (declared_ct, bytes) = match file {
+        Some(v) => v,
+        None => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "未收到图片（字段名 file）" }))),
+    };
+    if bytes.len() > IMAGE_UPLOAD_MAX_BYTES {
+        return (StatusCode::PAYLOAD_TOO_LARGE, Json(json!({ "error": "图片超过 10MiB 上限" })));
+    }
+    // 优先信任声明的 content_type；缺省时按内容嗅探。
+    let ext = match image_ext_from_ct(&declared_ct).or_else(|| sniff_image_ext(&bytes)) {
+        Some(e) => e,
+        None => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "仅支持 png/jpeg/webp/gif 图片" }))),
+    };
+    let ct = image_ct_from_ext(ext).to_string();
+    let tenant = identity.tenant_id.clone();
+    let uuid = uuid::Uuid::new_v4().simple().to_string();
+    let key = format!("images/tenant:{tenant}/{uuid}.{ext}");
+    if let Err(e) = blob.put(&key, &bytes, &ct).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("图片落盘失败: {e}") })));
+    }
+    // image_id 编码 tenant 与文件名（tenant__uuid.ext），raw 代理据此还原受控 key。
+    let image_id = format!("{tenant}__{uuid}.{ext}");
+    let raw_url = format!("/api/v1/images/{image_id}/raw");
+    let data_uri = if bytes.len() <= IMAGE_DATA_URI_MAX_BYTES {
+        Some(format!("data:{};base64,{}", ct, STANDARD.encode(&bytes)))
+    } else {
+        None
+    };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "image_id": image_id,
+            "url": raw_url,
+            "content_type": ct,
+            "size": bytes.len(),
+            "data_uri": data_uri,
+        })),
+    )
+}
+
+/// GET /api/v1/images/:image_id/raw — 经 core 代理从 BlobStore 返回图片（不暴露 MinIO）。
+/// image_id 形如 `<tenant>__<uuid>.<ext>`，还原受控 key `images/tenant:<tenant>/<uuid>.<ext>`。
+async fn image_raw_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(image_id): axum::extract::Path<String>,
+) -> Response {
+    let (tenant, fname) = match image_id.split_once("__") {
+        Some((t, f)) if !t.is_empty() && !f.is_empty() => (t, f),
+        _ => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "非法 image_id" }))).into_response()
+        }
+    };
+    // 防路径穿越：文件名段不得含分隔符或相对路径片段。
+    if tenant.contains('/') || fname.contains('/') || fname.contains("..") {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "非法 image_id" }))).into_response();
+    }
+    let ext = fname.rsplit('.').next().unwrap_or("");
+    let ct = image_ct_from_ext(ext).to_string();
+    let key = format!("images/tenant:{tenant}/{fname}");
+    let blob = match &state.blob_store {
+        Some(b) => b.clone(),
+        None => {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "BlobStore 未启用" }))).into_response()
+        }
+    };
+    match blob.get(&key).await {
+        Ok(bytes) => (StatusCode::OK, [(header::CONTENT_TYPE, ct)], bytes).into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, Json(json!({ "error": "图片不存在" }))).into_response(),
+    }
+}
+
+/// 模型连通性测试请求体：resource_id 定位型号(+其 provider);provider_id 可显式覆盖。
+#[derive(Deserialize)]
+struct ModelTestRequest {
+    #[serde(default)]
+    provider_id: String,
+    #[serde(default)]
+    resource_id: String,
+    /// chat|vision|embedding;缺省按 resource.modalities 首项或 "chat"。
+    #[serde(default)]
+    modality: String,
+}
+
+/// 32x32 纯白 PNG(base64),vision 连通性测试的最小图片载荷。
+/// 注:部分 VL 模型(如 Qwen3-VL)要求图片每边 > 28px,且校验 PNG 完整性,故用合法 32x32 而非 1x1。
+const TEST_PIXEL_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAJklEQVR42u3NMQ0AAAwDoPo33arYsQQMkB6LQCAQCAQCgUAg+BIMi1X0ptsIcT0AAAAASUVORK5CYII=";
+
+/// POST /api/v1/models/test — provider/resource 连通性测试。
+/// Body: { provider_id?, resource_id, modality? }。返回 { ok, http_status, latency_ms, dimension? }。
+/// 绝不回显 api_key;错误信息不含 Authorization。
+async fn test_model_handler(
+    State(_state): State<Arc<AppState>>,
+    Json(req): Json<ModelTestRequest>,
+) -> impl IntoResponse {
+    let m = crate::config::settings::Settings::load_models();
+    let resource = m.resources.iter().find(|r| r.id == req.resource_id).cloned();
+    let provider_id = if !req.provider_id.is_empty() {
+        req.provider_id.clone()
+    } else {
+        resource.as_ref().map(|r| r.provider_id.clone()).unwrap_or_default()
+    };
+    let provider = match m.providers.iter().find(|p| p.id == provider_id) {
+        Some(p) => p.clone(),
+        None => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "provider 未找到（检查 provider_id/resource_id）" })))
+        }
+    };
+    if provider.base_url.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "provider.base_url 未配置" })));
+    }
+    let model = resource.as_ref().map(|r| r.model.clone()).unwrap_or_default();
+    // modality 优先 body → resource.modalities 首项 → chat。
+    let modality = if !req.modality.is_empty() {
+        req.modality.clone()
+    } else {
+        resource.as_ref().and_then(|r| r.modalities.first().cloned()).unwrap_or_else(|| "chat".to_string())
+    };
+    if model.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "resource.model 为空，无法测试" })));
+    }
+    let base = provider.base_url.trim_end_matches('/').to_string();
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(provider.timeout_seconds.clamp(3, 60)))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("HTTP 客户端构造失败: {e}") })))
+        }
+    };
+    let started = std::time::Instant::now();
+    let (url, body) = match modality.as_str() {
+        "embedding" => (
+            format!("{base}/v1/embeddings"),
+            json!({ "model": model, "input": "ping" }),
+        ),
+        "vision" => (
+            format!("{base}/v1/chat/completions"),
+            json!({
+                "model": model,
+                "max_tokens": 1,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": "ping" },
+                        { "type": "image_url", "image_url": { "url": format!("data:image/png;base64,{TEST_PIXEL_PNG_B64}") } }
+                    ]
+                }]
+            }),
+        ),
+        _ => (
+            format!("{base}/v1/chat/completions"),
+            json!({ "model": model, "max_tokens": 1, "messages": [{ "role": "user", "content": "ping" }] }),
+        ),
+    };
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", provider.api_key))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await;
+    let latency_ms = started.elapsed().as_millis() as u64;
+    match resp {
+        Ok(r) => {
+            let http_status = r.status().as_u16();
+            let ok = r.status().is_success();
+            let mut out = json!({ "ok": ok, "http_status": http_status, "latency_ms": latency_ms });
+            // embedding 成功时回传维度;其余 modality 不解析 body。
+            if ok && modality == "embedding" {
+                if let Ok(v) = r.json::<Value>().await {
+                    if let Some(dim) = v
+                        .get("data")
+                        .and_then(|d| d.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|e| e.get("embedding"))
+                        .and_then(|e| e.as_array())
+                        .map(|a| a.len())
+                    {
+                        out["dimension"] = json!(dim);
+                    }
+                }
+            }
+            (StatusCode::OK, Json(out))
+        }
+        // 错误信息仅取网络层原因(不含 Authorization/请求头)。
+        Err(e) => (
+            StatusCode::OK,
+            Json(json!({ "ok": false, "http_status": 0, "latency_ms": latency_ms, "error": e.to_string() })),
+        ),
     }
 }
 

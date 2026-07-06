@@ -666,7 +666,7 @@ Output only JSON, no other content."#,
         let model = self.runner.gateway.get_model("default");
         let messages = vec![crate::gateway::unified_gateway::ChatMessage {
             role: "user".to_string(),
-            content: prompt,
+            content: prompt.into(),
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -867,7 +867,7 @@ Output only JSON, no other content."#,
         let model = self.runner.gateway.get_model("default");
         let messages = vec![crate::gateway::unified_gateway::ChatMessage {
             role: "user".to_string(),
-            content: prompt,
+            content: prompt.into(),
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -1012,7 +1012,7 @@ Complexity definitions:
         let model = self.runner.gateway.get_model("default");
         let messages = vec![crate::gateway::unified_gateway::ChatMessage {
             role: "user".to_string(),
-            content: prompt,
+            content: prompt.into(),
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -1404,12 +1404,12 @@ Complexity definitions:
                             continue;
                         }
                         if msg.role == "assistant" && found_first_user {
-                            return Some(msg.content.clone());
+                            return Some(msg.content.as_text());
                         }
                     }
                     msgs.iter().rev()
                         .find(|m| m.role == "assistant")
-                        .map(|m| m.content.clone())
+                        .map(|m| m.content.as_text())
                 })
             }
         } else {
@@ -2123,7 +2123,7 @@ Output only JSON."#,
         let model = self.runner.gateway.get_model("default");
         let messages = vec![crate::gateway::unified_gateway::ChatMessage {
             role: "user".to_string(),
-            content: decompose_prompt,
+            content: decompose_prompt.into(),
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -2392,7 +2392,7 @@ Notes:
         let model = self.runner.gateway.get_model("default");
         let messages = vec![ChatMessage {
             role: "user".to_string(),
-            content: prompt,
+            content: prompt.into(),
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -2724,7 +2724,7 @@ Notes:
         let model = self.runner.gateway.get_model("default");
         let messages = vec![ChatMessage {
             role: "user".to_string(),
-            content: prompt,
+            content: prompt.into(),
             name: None,
             tool_calls: None,
             tool_call_id: None,

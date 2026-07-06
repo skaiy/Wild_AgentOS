@@ -67,7 +67,8 @@ impl ToolResultAging {
             }
 
             let msg = &messages[msg_idx];
-            if msg.content.len() < self.compress_threshold {
+            let msg_text = msg.content.as_text();
+            if msg_text.len() < self.compress_threshold {
                 continue; // Skip small results
             }
 
@@ -76,7 +77,7 @@ impl ToolResultAging {
                 _ => continue,
             };
 
-            let original_len = msg.content.len();
+            let original_len = msg_text.len();
 
             if rev_position < microtool_end {
                 // Second-oldest batch: try micro-tool reference compression
@@ -92,25 +93,25 @@ impl ToolResultAging {
                     messages[msg_idx].content = format!(
                         "[Compressed {} bytes] Full result available via `{}` tool\nIRI: {}",
                         original_len, micro_tool_name, iri,
-                    );
+                    ).into();
                 } else {
                     // No micro-tool, use brief summary
-                    let preview: String = msg.content.chars().take(150).collect();
+                    let preview: String = msg_text.chars().take(150).collect();
                     messages[msg_idx].content = format!(
                         "[Old result {} bytes] {}...",
                         original_len, preview
-                    );
+                    ).into();
                 }
             } else {
                 // Oldest batch: replace with brief summary directly
-                let preview: String = msg.content.chars().take(100).collect();
+                let preview: String = msg_text.chars().take(100).collect();
                 messages[msg_idx].content = format!(
                     "[Historical result {} bytes] {}...",
                     original_len, preview
-                );
+                ).into();
             }
 
-            freed += original_len.saturating_sub(messages[msg_idx].content.len());
+            freed += original_len.saturating_sub(messages[msg_idx].content.as_text().len());
             aged += 1;
         }
 
@@ -133,7 +134,7 @@ mod tests {
     fn make_tool_msg(content: &str, call_id: &str) -> ChatMessage {
         ChatMessage {
             role: "tool".to_string(),
-            content: content.to_string(),
+            content: content.into(),
             name: None,
             tool_calls: None,
             tool_call_id: Some(call_id.to_string()),
@@ -144,7 +145,7 @@ mod tests {
     fn make_system_msg() -> ChatMessage {
         ChatMessage {
             role: "system".to_string(),
-            content: "sys".to_string(),
+            content: "sys".into(),
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -177,7 +178,7 @@ mod tests {
         // call_0/1 rev_position 4/3 < microtool_end(6) → [Old result] prefix
         assert_eq!(aged, 2, "should age 2 oldest results");
 
-        let contents: Vec<&str> = msgs.iter().filter(|m| m.role == "tool").map(|m| m.content.as_str()).collect();
+        let contents: Vec<String> = msgs.iter().filter(|m| m.role == "tool").map(|m| m.content.as_text()).collect();
         assert!(contents[0].starts_with("[Old result"), "call_0 oldest should be compressed");
         assert!(contents[1].starts_with("[Old result"), "call_1 oldest should be compressed");
         assert!(contents[2].starts_with("x"), "call_2 should remain full (recent)");
@@ -210,7 +211,7 @@ mod tests {
         // call_0(rev=3) < keep_full? NO, < microtool_end(3)? NO → oldest → [Historical result]
         assert_eq!(aged, 3);
 
-        let contents: Vec<&str> = msgs.iter().filter(|m| m.role == "tool").map(|m| m.content.as_str()).collect();
+        let contents: Vec<String> = msgs.iter().filter(|m| m.role == "tool").map(|m| m.content.as_text()).collect();
         // call_0 (idx 0 in msgs, oldest): rev=3 >= microtool_end → [Historical result]
         assert!(contents[0].starts_with("[Historical result"), "call_0 oldest should be brief summary");
         // call_1 (idx 1): rev=2 < microtool_end → [Old result]

@@ -193,7 +193,7 @@ impl SkillCreator {
         let messages = vec![
             ChatMessage {
                 role: "system".to_string(),
-                content: SKILL_CREATOR_SYSTEM_PROMPT.to_string(),
+                content: SKILL_CREATOR_SYSTEM_PROMPT.into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -201,7 +201,7 @@ impl SkillCreator {
             },
             ChatMessage {
                 role: "user".to_string(),
-                content: user_message,
+                content: user_message.into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -239,7 +239,7 @@ impl SkillCreator {
         let messages = vec![
             ChatMessage {
                 role: "system".to_string(),
-                content: MARKDOWN_CONVERTER_SYSTEM_PROMPT.to_string(),
+                content: MARKDOWN_CONVERTER_SYSTEM_PROMPT.into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -247,7 +247,7 @@ impl SkillCreator {
             },
             ChatMessage {
                 role: "user".to_string(),
-                content: user_message,
+                content: user_message.into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,

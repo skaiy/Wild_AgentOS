@@ -365,7 +365,7 @@ impl super::AgentRunner {
                         .as_ref()
                         .map(|calls| calls.iter().map(|tc| tc.function.name.as_str()).collect())
                         .unwrap_or_default();
-                    Some((tool_names.join(", "), w[1].content.clone()))
+                    Some((tool_names.join(", "), w[1].content.as_text()))
                 } else {
                     None
                 }
@@ -411,7 +411,7 @@ Output the summary report directly, not in JSON format."#,
         let model = self.gateway.get_model(&agent.role.to_string().to_lowercase());
         let req_messages = vec![ChatMessage {
             role: "user".to_string(),
-            content: prompt,
+            content: prompt.into(),
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -736,7 +736,7 @@ Output the summary report directly, not in JSON format."#,
         let mut messages: Vec<ChatMessage> = vec![
             ChatMessage {
                 role: "system".to_string(),
-                content: system_content,
+                content: system_content.into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -762,7 +762,7 @@ Output the summary report directly, not in JSON format."#,
             );
             messages.push(ChatMessage {
                 role: "system".to_string(),
-                content: format!("# 📡 Agent Perception\n\n{}", perception_text),
+                content: format!("# 📡 Agent Perception\n\n{}", perception_text).into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -802,7 +802,7 @@ Output the summary report directly, not in JSON format."#,
                 )
             } else {
                 context_msg
-            },
+            }.into(),
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -883,7 +883,7 @@ Output the summary report directly, not in JSON format."#,
                 warn!("[turn {}] soft limit warning: ~8 turns remaining (max={})", turn, effective_max_turns);
                 messages.push(ChatMessage {
                     role: "user".to_string(),
-                    content: "【Turn Limit Notice】Please control execution turns. Limited turns remain. Focus on the core task, avoid unnecessary tool calls, and finish as soon as possible.".to_string(),
+                    content: "【Turn Limit Notice】Please control execution turns. Limited turns remain. Focus on the core task, avoid unnecessary tool calls, and finish as soon as possible.".into(),
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,
@@ -896,7 +896,7 @@ Output the summary report directly, not in JSON format."#,
                 warn!("[turn {}] soft limit final warning: ~3 turns remaining (max={})", turn, effective_max_turns);
                 messages.push(ChatMessage {
                     role: "user".to_string(),
-                    content: "【Turn Limit Urgent】Only 3 turns remaining. Please finish your current work and output the final result immediately. Do not initiate new tool calls.".to_string(),
+                    content: "【Turn Limit Urgent】Only 3 turns remaining. Please finish your current work and output the final result immediately. Do not initiate new tool calls.".into(),
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,
@@ -940,7 +940,7 @@ Output the summary report directly, not in JSON format."#,
                     }
                     messages.push(ChatMessage {
                         role: "user".to_string(),
-                        content: "【System Force-Finish】Maximum execution turns reached. Please output your final summary and results immediately. Do not call any more tools. If there are incomplete tool executions, base your summary on the results already available.".to_string(),
+                        content: "【System Force-Finish】Maximum execution turns reached. Please output your final summary and results immediately. Do not call any more tools. If there are incomplete tool executions, base your summary on the results already available.".into(),
                         name: None,
                         tool_calls: None,
                         tool_call_id: None,
@@ -984,8 +984,8 @@ Output the summary report directly, not in JSON format."#,
                             (agg_summary, Some(Value::String(agg_content)),
                              if !best_content_iri.is_empty() { Some(best_content_iri.clone()) } else { None })
                         } else if let Some(last) = messages.iter().rev().find(|m| m.role == "assistant") {
-                            (Self::generate_auto_summary(&last.content),
-                             Some(Value::String(last.content.clone())), None)
+                            (Self::generate_auto_summary(&last.content.as_text()),
+                             Some(Value::String(last.content.as_text())), None)
                         } else {
                             ("Task not completed".to_string(), None, None)
                         };
@@ -1048,7 +1048,7 @@ Output the summary report directly, not in JSON format."#,
                 );
                 messages.push(ChatMessage {
                     role: "user".to_string(),
-                    content: recovery_msg,
+                    content: recovery_msg.into(),
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,
@@ -1075,7 +1075,7 @@ Output the summary report directly, not in JSON format."#,
                     for entry in &pending {
                         messages.push(ChatMessage {
                             role: "user".to_string(),
-                            content: entry.content.clone(),
+                            content: entry.content.clone().into(),
                             name: None,
                             tool_calls: None,
                             tool_call_id: None,
@@ -1192,7 +1192,7 @@ Output the summary report directly, not in JSON format."#,
 
                 let summary_note = ChatMessage {
                     role: "user".to_string(),
-                    content: summary_text,
+                    content: summary_text.into(),
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,
@@ -1216,11 +1216,12 @@ Output the summary report directly, not in JSON format."#,
                 );
                 if let Some(sys_msg) = messages.first_mut() {
                     if sys_msg.role == "system" {
+                        let c = sys_msg.content.as_text_mut();
                         // Replace rather than append: remove old ToolGuard block to prevent cumulative bloat per turn
-                        if let Some(pos) = sys_msg.content.find("\n\n[ToolGuard Constraint Directive]") {
-                            sys_msg.content.truncate(pos);
+                        if let Some(pos) = c.find("\n\n[ToolGuard Constraint Directive]") {
+                            c.truncate(pos);
                         }
-                        sys_msg.content.push_str(&prompt);
+                        c.push_str(&prompt);
                     }
                 }
                 guard_pending_pre_injections.clear();
@@ -1717,7 +1718,7 @@ Output the summary report directly, not in JSON format."#,
                             .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content));
                         messages.push(ChatMessage {
                             role: "assistant".to_string(),
-                            content: asst_summary,
+                            content: asst_summary.into(),
                             name: None,
                             tool_calls: Some(
                                 calls
@@ -1925,7 +1926,7 @@ Output the summary report directly, not in JSON format."#,
                                     warn!("[tool] {} ToolGuard intercepted: {}", name, guard_msg);
                                     messages.push(ChatMessage {
                                         role: "tool".to_string(),
-                                        content: format!("[ToolGuard Intercepted] Tool {} result rejected by security system. {}", name, guard_msg),
+                                        content: format!("[ToolGuard Intercepted] Tool {} result rejected by security system. {}", name, guard_msg).into(),
                                         name: None,
                                         tool_calls: None,
                                         tool_call_id: Some(c.id.clone()),
@@ -1934,7 +1935,7 @@ Output the summary report directly, not in JSON format."#,
                                 } else {
                                     messages.push(ChatMessage {
                                         role: "tool".to_string(),
-                                        content: result_str,
+                                        content: result_str.into(),
                                         name: None,
                                         tool_calls: None,
                                         tool_call_id: Some(c.id.clone()),
@@ -1969,7 +1970,7 @@ Output the summary report directly, not in JSON format."#,
                             .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content));
                         messages.push(ChatMessage {
                             role: "assistant".to_string(),
-                            content: asst_summary,
+                            content: asst_summary.into(),
                             name: None,
                             tool_calls: None,
                             tool_call_id: None,
@@ -1997,7 +1998,7 @@ Output the summary report directly, not in JSON format."#,
                         .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content));
                     messages.push(ChatMessage {
                         role: "assistant".to_string(),
-                        content: asst_summary,
+                        content: asst_summary.into(),
                         name: None,
                         tool_calls: None,
                         tool_call_id: None,
@@ -2025,7 +2026,7 @@ Output the summary report directly, not in JSON format."#,
                         .unwrap_or_else(|| Self::generate_auto_summary(&parsed.content));
                     messages.push(ChatMessage {
                         role: "assistant".to_string(),
-                        content: asst_summary,
+                        content: asst_summary.into(),
                         name: None,
                         tool_calls: None,
                         tool_call_id: None,
@@ -2065,8 +2066,8 @@ Output the summary report directly, not in JSON format."#,
                  if !best_content_iri.is_empty() { Some(best_content_iri.clone()) } else { None })
             } else if let Some(last) = messages.iter().rev().find(|m| m.role == "assistant") {
                 ("partial_success".to_string(),
-                 Self::generate_auto_summary(&last.content),
-                 Some(Value::String(last.content.clone())), None)
+                 Self::generate_auto_summary(&last.content.as_text()),
+                 Some(Value::String(last.content.as_text())), None)
             } else if tc > 0 {
                 ("partial_success".to_string(),
                  format!("Task partially completed. Executed {} turns, {} tool calls, {} remaining. Errors: {}.", turn, tc, effective_max_turns.saturating_sub(turn), errs.len()),
