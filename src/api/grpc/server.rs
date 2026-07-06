@@ -369,6 +369,7 @@ impl AgentOSService {
                         "modalities": r.modalities,
                         "enabled": r.enabled,
                         "context_window": r.context_window,
+                        "dimension": r.dimension,
                         "supports_tools": r.supports_tools,
                         "supports_reasoning": r.supports_reasoning,
                         "supports_vision": r.supports_vision,

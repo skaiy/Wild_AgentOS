@@ -461,6 +461,9 @@ pub struct ModelResource {
     pub enabled: bool,
     #[serde(default)]
     pub context_window: Option<u32>,
+    /// 向量维度(仅 embedding 模态有意义)；桥接为生效向量时写入 embedding 配置。
+    #[serde(default)]
+    pub dimension: Option<usize>,
     #[serde(default)]
     pub supports_tools: bool,
     #[serde(default)]
