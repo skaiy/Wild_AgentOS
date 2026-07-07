@@ -21,7 +21,7 @@ use crate::skill_graph::types::SkillLinkType;
 /// 1. **Subgraph extraction**: From each observed skill, traverse reverse
 ///    prerequisite/extends edges to build a candidate subgraph.
 /// 2. **Posterior computation**: For each candidate node:
-///    ```
+///    ```text
 ///    P(root | observed) ∝ P(observed | root) × P(root)
 ///    ```
 ///    where P(observed | root) = product of propagation probabilities along

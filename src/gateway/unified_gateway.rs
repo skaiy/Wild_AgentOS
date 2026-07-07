@@ -112,7 +112,7 @@ impl UnifiedGateway {
             default_model: RwLock::new(settings.default_model.clone()),
             timeout_seconds: settings.timeout_seconds,
             max_retries: settings.max_retries,
-            retry_base_ms: 500,
+            retry_base_ms: settings.retry_base_ms,
         })
     }
 
@@ -324,10 +324,6 @@ impl UnifiedGateway {
             return true;
         }
         
-        if model_lower.contains("claude") && model_lower.contains("extended-thinking") {
-            return true;
-        }
-        
         if model_lower.contains("gemini") && model_lower.contains("thinking") {
             return true;
         }
@@ -406,6 +402,7 @@ mod tests {
             default_model: "deepseek-v4-flash".to_string(),
             timeout_seconds: 30,
             max_retries: 3,
+            retry_base_ms: 500,
             model_mapping: HashMap::from([
                 ("planning".to_string(), "deepseek-v4-pro".to_string()),
                 ("default".to_string(), "deepseek-v4-flash".to_string()),
@@ -425,6 +422,7 @@ mod tests {
             default_model: "deepseek-v4-flash".to_string(),
             timeout_seconds: 30,
             max_retries: 3,
+            retry_base_ms: 500,
             model_mapping: HashMap::from([("default".to_string(), "deepseek-v4-flash".to_string())]),
         };
 

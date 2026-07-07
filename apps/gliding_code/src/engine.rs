@@ -102,11 +102,16 @@ impl CodeCliEngine {
                 .map_err(|e| anyhow::anyhow!("Blackboard 创建失败: {}", e))?,
         );
 
+        // Load agent-os config (config.yaml + AGENT_OS_* env vars) for tunable
+        // parameters; fall back to Defaults when no config file is present.
+        let loaded_settings = glidinghorse::config::Settings::load().ok();
+        let settings = loaded_settings.clone().unwrap_or_default();
+
         // Initialize HyperspaceEngine-backed vector store for semantic search
         let embed: Arc<dyn glidinghorse::memory::embedding_service::EmbeddingService> =
-            match glidinghorse::config::Settings::load() {
-                Ok(settings) => create_embedding_service_from_config(&settings.embedding),
-                Err(_) => Arc::new(FallbackEmbeddingService::new()),
+            match &loaded_settings {
+                Some(s) => create_embedding_service_from_config(&s.embedding),
+                None => Arc::new(FallbackEmbeddingService::new()),
             };
         let hyperspace_path = config.data_dir.as_ref()
             .map(|d| format!("{}/hyperspace", d))
@@ -120,9 +125,11 @@ impl CodeCliEngine {
             .map_err(|e| anyhow::anyhow!("HyperspaceStore 初始化失败: {}", e))?,
         );
 
+        let agent_settings = settings.agents.clone();
+
         let proj = Arc::new(ProjectionEngine::with_vector_store(
             l2.clone(),
-            500,
+            agent_settings.max_projection_size,
             Some(vector_store),
         ));
         let core_config = CoreConfig::default();
@@ -143,7 +150,6 @@ impl CodeCliEngine {
 
         let skills = Arc::new(SkillRegistry::new());
         let skills_for_engine = skills.clone();
-        let agent_settings = AgentSettings::default();
 
         let workspace_root = std::path::PathBuf::from(&config.workspace);
 
@@ -166,7 +172,7 @@ impl CodeCliEngine {
             l0.clone(),
             mm_for_runner,
             tmpl.clone(),
-            agent_settings,
+            agent_settings.clone(),
         ).with_prompt_loader(glidinghorse::core::prompt_loader::PromptLoader::new(
             Default::default(),
             tmpl.clone(),
@@ -213,7 +219,10 @@ impl CodeCliEngine {
         ));
 
         // ── TimelineStore (temporal event recording for graph mutations) ──
-        let timeline = Arc::new(TimelineStore::new(1000, 10));
+        let timeline = Arc::new(TimelineStore::new(
+            agent_settings.snapshot_frequency,
+            agent_settings.max_full_snapshots,
+        ));
 
         let event_bus = Arc::new(EventBus::new(100));
 
@@ -512,7 +521,6 @@ impl CodeCliEngine {
             n if n.contains("deepseek") => 65536,
             n if n.contains("gpt-4") || n.contains("gpt4") => 128000,
             n if n.contains("gpt-3.5") => 16385,
-            n if n.contains("claude") => 200000,
             n if n.contains("gemini") => 1_048_576,
             n if n.contains("llama") || n.contains("qwen") => 128000,
             _ => 128000,

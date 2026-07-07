@@ -62,6 +62,7 @@ impl WorkerConfig {
                 default_model: "deepseek-v4-flash".to_string(),
                 timeout_seconds: 300,
                 max_retries: 3,
+                retry_base_ms: 500,
                 model_mapping: Default::default(),
             }
         });
@@ -137,6 +138,7 @@ impl AgentOsWorker {
                 default_model: "deepseek-v4-flash".to_string(),
                 timeout_seconds: 300,
                 max_retries: 3,
+                retry_base_ms: 500,
                 model_mapping: Default::default(),
             }
         });

@@ -30,6 +30,7 @@ fn create_test_runner() -> AgentRunner {
         default_model: "deepseek-v4-pro".to_string(),
         timeout_seconds: 30,
         max_retries: 3,
+        retry_base_ms: 500,
         model_mapping: std::collections::HashMap::new(),
     };
     let gateway = Arc::new(UnifiedGateway::new(&gateway_settings).unwrap());

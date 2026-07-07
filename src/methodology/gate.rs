@@ -88,13 +88,13 @@ pub struct MethodologyGate {
 impl MethodologyGate {
     /// Create a new gate with the given methodology registry.
     ///
-    /// `max_active` limits concurrent active methodologies (default 20).
-    pub fn new(registry: MethodologyRegistry) -> Self {
+    /// `max_active` limits concurrent active methodologies.
+    pub fn new(registry: MethodologyRegistry, max_active: usize) -> Self {
         Self {
             registry,
             active: Vec::new(),
             bindings: Vec::new(),
-            max_active: 20,
+            max_active,
         }
     }
 
@@ -858,7 +858,7 @@ mod tests {
     
 
     fn test_gate() -> MethodologyGate {
-        MethodologyGate::new(MethodologyRegistry::new())
+        MethodologyGate::new(MethodologyRegistry::new(), 20)
     }
 
     fn test_context(point: HookPoint, role: &str, tool_name: Option<&str>) -> HookContext {

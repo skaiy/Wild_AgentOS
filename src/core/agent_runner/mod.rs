@@ -294,7 +294,7 @@ impl AgentRunner {
         templates: Arc<TemplateEngine>,
         agent_settings: AgentSettings,
     ) -> Self {
-        let projection = Arc::new(ProjectionEngine::new(blackboard.clone(), 500));
+        let projection = Arc::new(ProjectionEngine::new(blackboard.clone(), agent_settings.max_projection_size));
         let sharing = Arc::new(SharingProtocol::new());
         let hook_manager = Arc::new(HookManager::new());
         ToolGuard::new().register_hooks(&hook_manager);
@@ -302,7 +302,7 @@ impl AgentRunner {
         // Initialize MethodologyGate with constitution bindings + EvolutionEngine
         let methodology_gate = {
             let registry = MethodologyRegistry::new();
-            let mut gate = MethodologyGate::new(registry);
+            let mut gate = MethodologyGate::new(registry, agent_settings.max_active);
             gate.register_constitution_bindings(&ConstitutionRegistry::new());
             let evolution = EvolutionEngineHandle::new(EvolutionEngine::new());
             let handle = MethodologyGateHandle::new(gate).with_evolution(evolution);

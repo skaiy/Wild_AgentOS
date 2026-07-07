@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::Deserialize;
-use config::{Config, ConfigError, Environment};
+use config::{Config, ConfigError, Environment, File, FileFormat};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Settings {
@@ -65,8 +65,12 @@ pub struct GatewaySettings {
     pub default_model: String,
     pub timeout_seconds: u64,
     pub max_retries: u32,
+    #[serde(default = "default_retry_base_ms")]
+    pub retry_base_ms: u64,
     pub model_mapping: std::collections::HashMap<String, String>,
 }
+
+fn default_retry_base_ms() -> u64 { 500 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct MemorySettings {
@@ -144,9 +148,25 @@ pub struct AgentSettings {
     pub template_path: Option<String>,
     #[serde(default = "default_max_pdca_cycles")]
     pub max_pdca_cycles: u32,
+    /// Maximum number of concurrently active methodologies (MethodologyGate).
+    #[serde(default = "default_max_active")]
+    pub max_active: usize,
+    /// TimelineStore: take a full snapshot every N mutations.
+    #[serde(default = "default_snapshot_frequency")]
+    pub snapshot_frequency: u64,
+    /// TimelineStore: maximum full snapshots to retain.
+    #[serde(default = "default_max_full_snapshots")]
+    pub max_full_snapshots: usize,
+    /// L3 ProjectionEngine maximum projection size.
+    #[serde(default = "default_max_projection_size")]
+    pub max_projection_size: usize,
 }
 
 fn default_max_pdca_cycles() -> u32 { 7 }
+fn default_max_active() -> usize { 20 }
+fn default_snapshot_frequency() -> u64 { 1000 }
+fn default_max_full_snapshots() -> usize { 10 }
+fn default_max_projection_size() -> usize { 500 }
 
 impl Default for AgentSettings {
     fn default() -> Self {
@@ -159,6 +179,10 @@ impl Default for AgentSettings {
             event_bus_capacity: 100,
             template_path: None,
             max_pdca_cycles: 7,
+            max_active: 20,
+            snapshot_frequency: 1000,
+            max_full_snapshots: 10,
+            max_projection_size: 500,
         }
     }
 }
@@ -721,6 +745,7 @@ impl Default for Settings {
                 default_model: "deepseek-v4-flash".to_string(),
                 timeout_seconds: 30,
                 max_retries: 3,
+                retry_base_ms: 500,
                 model_mapping: std::collections::HashMap::from([
                     ("planning".to_string(), "deepseek-v4-pro".to_string()),
                     ("execution".to_string(), "deepseek-v4-pro".to_string()),
@@ -774,16 +799,7 @@ impl Default for Settings {
                 max_iterations_before_alert: 10,
                 error_rate_threshold: 0.5,
             },
-            agents: AgentSettings {
-                max_iterations: 10,
-                parallel_execution: true,
-                max_parallel_agents: 10,
-                timeout_seconds: 300,
-                api_timeout_seconds: 120,
-                event_bus_capacity: 100,
-                template_path: None,
-                max_pdca_cycles: 7,
-            },
+            agents: AgentSettings::default(),
             api: ApiSettings {
                 grpc_addr: "0.0.0.0:50051".to_string(),
                 http_addr: "0.0.0.0:8080".to_string(),
@@ -856,5 +872,90 @@ mod tests {
     fn test_logging_settings_default_has_redb_in_init() {
         let settings = LoggingSettings::default();
         assert_eq!(settings.level, "info");
+    }
+
+    #[test]
+    fn test_gateway_settings_deserializes_retry_base_ms() {
+        let yaml = r#"
+            base_url: "https://api.deepseek.com"
+            api_key: "sk-test"
+            default_model: "deepseek-v4-flash"
+            timeout_seconds: 300
+            max_retries: 3
+            retry_base_ms: 750
+            model_mapping: {}
+        "#;
+        let cfg = Config::builder()
+            .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+            .build()
+            .unwrap();
+        let settings: GatewaySettings = cfg.try_deserialize().unwrap();
+        assert_eq!(settings.retry_base_ms, 750);
+    }
+
+    #[test]
+    fn test_gateway_settings_retry_base_ms_default() {
+        let yaml = r#"
+            base_url: "https://api.deepseek.com"
+            api_key: "sk-test"
+            default_model: "deepseek-v4-flash"
+            timeout_seconds: 300
+            max_retries: 3
+            model_mapping: {}
+        "#;
+        let cfg = Config::builder()
+            .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+            .build()
+            .unwrap();
+        let settings: GatewaySettings = cfg.try_deserialize().unwrap();
+        // retry_base_ms omitted -> serde default 500
+        assert_eq!(settings.retry_base_ms, 500);
+    }
+
+    #[test]
+    fn test_agent_settings_deserializes_tunables() {
+        let yaml = r#"
+            max_iterations: 10
+            parallel_execution: true
+            max_parallel_agents: 10
+            timeout_seconds: 300
+            api_timeout_seconds: 120
+            event_bus_capacity: 100
+            max_pdca_cycles: 7
+            max_active: 42
+            snapshot_frequency: 2000
+            max_full_snapshots: 5
+            max_projection_size: 1024
+        "#;
+        let cfg = Config::builder()
+            .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+            .build()
+            .unwrap();
+        let settings: AgentSettings = cfg.try_deserialize().unwrap();
+        assert_eq!(settings.max_active, 42);
+        assert_eq!(settings.snapshot_frequency, 2000);
+        assert_eq!(settings.max_full_snapshots, 5);
+        assert_eq!(settings.max_projection_size, 1024);
+    }
+
+    #[test]
+    fn test_agent_settings_tunables_default() {
+        let yaml = r#"
+            max_iterations: 10
+            parallel_execution: true
+            max_parallel_agents: 10
+            timeout_seconds: 300
+            api_timeout_seconds: 120
+            event_bus_capacity: 100
+        "#;
+        let cfg = Config::builder()
+            .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+            .build()
+            .unwrap();
+        let settings: AgentSettings = cfg.try_deserialize().unwrap();
+        assert_eq!(settings.max_active, 20);
+        assert_eq!(settings.snapshot_frequency, 1000);
+        assert_eq!(settings.max_full_snapshots, 10);
+        assert_eq!(settings.max_projection_size, 500);
     }
 }

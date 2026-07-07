@@ -45,7 +45,7 @@ struct Cli {
     #[arg(long = "mcp-server", value_name = "NAME=URL", help = "MCP server config (repeatable, format name=url, e.g. --mcp-server chrome=http://localhost:3000/sse)")]
     mcp_server: Vec<String>,
 
-    #[arg(long = "mcp-server-stdio", value_name = "NAME=JSON", help = "MCP Stdio server config (repeatable, format name=json, e.g. --mcp-server-stdio chrome='{\"command\":\"npx\",\"args\":[\"-y\",\"@anthropic/chrome-mcp\"]}')")]
+    #[arg(long = "mcp-server-stdio", value_name = "NAME=JSON", help = "MCP Stdio server config (repeatable, format name=json, e.g. --mcp-server-stdio my-server='{\"command\":\"npx\",\"args\":[\"-y\",\"@modelcontextprotocol/server-filesystem\"]}')")]
     mcp_server_stdio: Vec<String>,
 }
 

@@ -193,10 +193,19 @@ mod tests {
 
     #[test]
     fn test_rag_search_no_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", dir.path());
+
         let input = json!({
             "query": "Test query"
         });
         let result = execute_rag_search(&input).unwrap();
         assert_eq!(result["count"].as_u64().unwrap(), 0);
+
+        match orig_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
     }
 }
