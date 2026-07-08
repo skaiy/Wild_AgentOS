@@ -1088,19 +1088,19 @@ sequenceDiagram
     participant TE as ToolExecutor<br/>(机关)
     
     User->>SA: 提交任务（"构建一个 REST API"）
-    Note over SA: 如同诸葛亮规划<br/>北伐
+    Note over SA: Supervisor 接收任务
     SA->>SA: 分析复杂度（5W2H）
     SA->>PA: 执行规划阶段
     PA->>L2: 写入执行计划（RDF 节点）
     PA-->>SA: 返回战略路线图
     SA->>DA: 按计划执行
-    Note over DA: 如同流马<br/>负重上山
+    Note over DA: 执行任务并调用工具
     DA->>TE: 调用工具（file_write, bash）
     TE->>L2: 自动图谱化结果 → RDF
     DA->>L2: 写入代码产物
     DA-->>SA: 返回实施结果
     SA->>L0: 归档任务摘要
-    Note over L0: 为未来的远征<br/>保存智慧
+    Note over L0: 归档任务与历史上下文
     SA-->>User: 交付最终结果
 ```
 

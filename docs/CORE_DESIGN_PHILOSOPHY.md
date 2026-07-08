@@ -584,20 +584,3 @@ Together, they create a system that is both **powerful** (handles complex multi-
 | **CPU Cache-Inspired Memory** | L0 (disk) / L1 (context) / L2 (working set) / L3 (projection) | Balances performance, capacity, and token economy |
 | **Page Fault Pattern** | Summary in L2, full contents in L0, load on demand | Keeps active context small while preserving full fidelity |
 | **Unified Knowledge Graph** | All subsystems share single Oxigraph store via named graphs | Enables cross-domain queries and consistent identity |
-
-### Architecture Philosophy
-
-```
-Wild AgentOS = Ancient Wisdom × Modern Technology
-
-Wooden Ox & Wild AgentOS (木牛流马) → Autonomous transport harness
-    ↓
-Agent Harness → Multi-agent orchestration infrastructure
-    ↓
-Core Innovation:
-    • 5W2H + PDCA: Universal frameworks for all executable work
-    • JSON-LD + Harness: Bridging LLM simplicity with semantic web standards
-    • Unified KG: Single source of truth across skills, memories, tasks, and code
-```
-
-This design honors Zhuge Liang's legacy of building adaptive systems that extend human capability, now applied to the realm of AI agent orchestration.

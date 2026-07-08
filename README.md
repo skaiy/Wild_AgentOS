@@ -5,7 +5,6 @@
 
 **An Industrial-Grade AI Agent Operating System Built in Rust**  [![Star on GitHub](https://img.shields.io/github/stars/skaiy/Wild_AgentOS?style=flat)](https://github.com/skaiy/Wild_AgentOS)
 
-*Inspired by Zhuge Liang's Wooden Ox and Gliding Horse — Ancient Ingenuity Meets Modern AI*
 
 [![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -42,7 +41,7 @@ We are proud to announce the **v0.1.2 release** of Wild AgentOS.
 
 ## What Is Wild AgentOS?
 
-An **AI agent operating system** built in Rust that orchestrates multiple agents via the PDCA cycle, enabling coordinated, auditable, and self-improving systems. — much like how Zhuge Liang's **Wooden Ox and Gliding Horse** revolutionized logistics by harnessing mechanical power across treacherous terrain.
+An **AI agent operating system** built in Rust that orchestrates multiple agents via the PDCA cycle, enabling coordinated, auditable, and self-improving systems.
 
 > "We don't just build agents; we build the **infrastructure that harnesses their collective intelligence**."
 
@@ -60,31 +59,6 @@ An **AI agent operating system** built in Rust that orchestrates multiple agents
 | **Gateway** | `gRPC` · `HTTP (OpenAI-compatible)` · `MCP` | Production interface |
 | **Perception Engine** | `10 triggers` · `Anomaly dedup` · `5W2H constraint check` | Proactive monitoring |
 | **Agent Workflow** | `PA/DA/CA` · `Tool system` · `Checkpoint` · `Tracked actions` | Multi-agent execution |
-
----
-
-## 📖 The Story: From Ancient Wisdom to Modern Intelligence
-
-In the turbulent era of the Three Kingdoms (220–280 AD), the legendary strategist **Zhuge Liang** (诸葛亮), chancellor of the Shu Han state, faced a critical challenge: how to transport supplies efficiently through the treacherous mountain paths of Sichuan during his Northern Expeditions. Traditional wheeled carts struggled on narrow trails; human porters exhausted quickly.
-
-His solution — the **Wooden Ox (木牛)** and **Wild AgentOS (流马)** — were autonomous transport devices that could navigate difficult terrain with minimal human guidance. These mechanical wonders were not merely tools; they represented a paradigm shift — **autonomous systems that extended human capability**.
-
-### Bridging Past and Present
-
-Just as the Wild AgentOS served as an **intelligent harness** for transporting supplies across impossible terrain, **Wild AgentOS** serves as an **intelligent harness for AI agents**:
-
-| Ancient Innovation | Modern Implementation |
-|-------------------|----------------------|
-| **Autonomous Transport** | Self-directing agent workflows |
-| **Terrain Adaptation** | Dynamic complexity handling (7 levels) |
-| **Load Distribution** | Parallel agent execution |
-| **Minimal Guidance** | Proactive anomaly detection |
-| **Mechanical Reliability** | Rust's memory safety guarantees |
-
-> *"The wise adapt their methods to circumstances, just as water shapes its course according to the ground over which it flows."*  
-> — **Zhuge Liang**
-
-This ancient wisdom guides our design: **flexible orchestration that adapts to task complexity**, rather than rigid frameworks that force tasks into predefined molds.
 
 ---
 

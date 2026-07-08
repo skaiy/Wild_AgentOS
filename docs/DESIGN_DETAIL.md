@@ -1103,19 +1103,19 @@ sequenceDiagram
     participant TE as ToolExecutor<br/>(The Mechanism)
     
     User->>SA: Submit task ("Build a REST API")
-    Note over SA: Like Zhuge Liang planning<br/>the Northern Expedition
+    Note over SA: Supervisor receives task
     SA->>SA: Analyze complexity (5W2H)
     SA->>PA: Execute planning phase
     PA->>L2: Write execution plan (RDF node)
     PA-->>SA: Return strategic roadmap
     SA->>DA: Execute with plan
-    Note over DA: Like the Wild AgentOS<br/>carrying supplies uphill
+    Note over DA: Execute task and call tools
     DA->>TE: Call tools (file_write, bash)
     TE->>L2: Auto-graphify results → RDF
     DA->>L2: Write code artifacts
     DA-->>SA: Return implementation
     SA->>L0: Archive task summary
-    Note over L0: Preserving wisdom for<br/>future expeditions
+    Note over L0: Archive task and context
     SA-->>User: Deliver final result
 ```
 
