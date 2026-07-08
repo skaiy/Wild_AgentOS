@@ -5,7 +5,7 @@
 
 **An Industrial-Grade AI Agent Operating System Built in Rust**  [![Star on GitHub](https://img.shields.io/github/stars/skaiy/Wild_AgentOS?style=flat)](https://github.com/skaiy/Wild_AgentOS)
 
-*Inspired by Zhuge Liang's Wooden Ox and Wild AgentOS — Ancient Ingenuity Meets Modern AI*
+*Inspired by Zhuge Liang's Wooden Ox and Gliding Horse — Ancient Ingenuity Meets Modern AI*
 
 [![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -16,11 +16,6 @@
 ---
 
 [**English**](README.md) · [**中文**](README.zh.md) · [**Design Detail →**](docs/DESIGN_DETAIL.md)
-[**medium URL**](https://medium.com/@doiito-sun)
-[**中文稀土掘金**](https://juejin.cn/column/7647868075887165450)
-[**中文思否博客**](https://segmentfault.com/u/doiito/articles)
-[**中文CSDN博客**](https://blog.csdn.net/2604_96270735)
-[**B站播客**](https://space.bilibili.com/1547455799/lists)
 
 </div>
 
@@ -47,7 +42,7 @@ We are proud to announce the **v0.1.2 release** of Wild AgentOS.
 
 ## What Is Wild AgentOS?
 
-An **AI agent operating system** built in Rust that orchestrates multiple agents via the PDCA cycle, enabling coordinated, auditable, and self-improving systems. — much like how Zhuge Liang's **Wooden Ox and Wild AgentOS** revolutionized logistics by harnessing mechanical power across treacherous terrain.
+An **AI agent operating system** built in Rust that orchestrates multiple agents via the PDCA cycle, enabling coordinated, auditable, and self-improving systems. — much like how Zhuge Liang's **Wooden Ox and Gliding Horse** revolutionized logistics by harnessing mechanical power across treacherous terrain.
 
 > "We don't just build agents; we build the **infrastructure that harnesses their collective intelligence**."
 
@@ -298,24 +293,3 @@ All contributors are expected to adhere to our [Code of Conduct](docs/CODE_OF_CO
 ## 📄 License
 
 MIT License — see [LICENSE](LICENSE).
-
----
-
-<div align="center">
-
-Star ⭐ if you find this useful — join us in building the infrastructure for tomorrow's AI.
-
-[![GitHub stars](https://img.shields.io/github/stars/skaiy/Wild_AgentOS.svg?style=social&label=Star)](https://github.com/skaiy/Wild_AgentOS)
-
-*"Wisdom is not inherited; it is built upon the shoulders of those who came before."*
-
-</div>
-
-
-<a href="https://www.star-history.com/?repos=skaiy%2FWild_AgentOS&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=skaiy/Wild_AgentOS&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=skaiy/Wild_AgentOS&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=skaiy/Wild_AgentOS&type=date&legend=top-left" />
- </picture>
-</a>

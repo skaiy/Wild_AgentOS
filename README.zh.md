@@ -16,11 +16,6 @@
 ---
 
 [**中文**] · [**English**](README.md) · [**设计细节 →**](docs/DESIGN_DETAIL.zh.md)
-[**medium URL**](https://medium.com/@doiito-sun)
-[**中文稀土掘金**](https://juejin.cn/column/7647868075887165450)
-[**中文思否博客**](https://segmentfault.com/u/doiito/articles)
-[**中文CSDN博客**](https://blog.csdn.net/2604_96270735)
-[**B站播客**](https://space.bilibili.com/1547455799/lists)
 
 </div>
 
@@ -298,23 +293,3 @@ git push origin feat/my-feature
 ## 📄 许可证
 
 MIT License — 详见 [LICENSE](LICENSE)。
-
----
-
-<div align="center">
-
-觉得有用就点个 ⭐ —— 和我们一起构建未来 AI 的基础设施。
-
-[![GitHub stars](https://img.shields.io/github/stars/skaiy/Wild_AgentOS.svg?style=social&label=Star)](https://github.com/skaiy/Wild_AgentOS)
-
-*"智慧并非继承而来；它建立在先辈的肩膀之上。"*
-
-</div>
-
-<a href="https://www.star-history.com/?repos=skaiy%2FWild_AgentOS&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=skaiy/Wild_AgentOS&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=skaiy/Wild_AgentOS&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=skaiy/Wild_AgentOS&type=date&legend=top-left" />
- </picture>
-</a>
