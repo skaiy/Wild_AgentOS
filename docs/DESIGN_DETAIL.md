@@ -1,6 +1,6 @@
-# Gliding Horse Agent OS — Design Detail
+# Wild AgentOS — Design Detail
 
-> *This document describes the core architectural design and key innovations of Gliding Horse Agent OS. For a concise project overview, see [README.md](../README.md).*
+> *This document describes the core architectural design and key innovations of Wild AgentOS. For a concise project overview, see [README.md](../README.md).*
 
 ---
 
@@ -8,7 +8,7 @@
 
 ### 1.1 What Makes It Different?
 
-Traditional PDCA (Plan-Do-Check-Act) is a **management methodology** for process improvement. Gliding Horse Agent OS implements a **generalized computational PDCA** that transcends management and becomes a **universal task execution model** adaptable to any complexity level.
+Traditional PDCA (Plan-Do-Check-Act) is a **management methodology** for process improvement. Wild AgentOS implements a **generalized computational PDCA** that transcends management and becomes a **universal task execution model** adaptable to any complexity level.
 
 ```mermaid
 graph TB
@@ -18,7 +18,7 @@ graph TB
         T3["Manual handoffs"]
     end
     
-    subgraph "Gliding Horse Generalized PDCA"
+    subgraph "Wild AgentOS Generalized PDCA"
         G1["Recursive cycles<br/>Agent-autonomous"]
         G2["Adaptive phases<br/>Emergency/Exploratory modes"]
         G3["Event-driven transitions<br/>Perception-triggered"]
@@ -78,7 +78,7 @@ stateDiagram-v2
 
 ### 2.1 Revolutionary Design Inspired by Computer Architecture
 
-Unlike conventional agent frameworks with flat context windows, Gliding Horse implements a **four-layer hierarchical memory system** directly inspired by CPU cache hierarchies (L1/L2/L3 caches + disk storage).
+Unlike conventional agent frameworks with flat context windows, Wild AgentOS implements a **four-layer hierarchical memory system** directly inspired by CPU cache hierarchies (L1/L2/L3 caches + disk storage).
 
 ```mermaid
 graph TB
@@ -173,7 +173,7 @@ Most agent frameworks use plain JSON for data exchange, leading to:
 - ❌ No semantic typing (can't do polymorphic discovery)
 - ❌ Fixed structure (can't control token budget via depth)
 
-Gliding Horse uses **JSON-LD 1.1 (W3C standard)** as the universal data bus, providing six core capabilities:
+Wild AgentOS uses **JSON-LD 1.1 (W3C standard)** as the universal data bus, providing six core capabilities:
 
 ```mermaid
 graph LR
@@ -467,7 +467,7 @@ This design achieves:
 
 **The Foundation of All Structured Thinking**
 
-Gliding Horse Agent OS is built on **two universal frameworks** that are essential for handling any task:
+Wild AgentOS is built on **two universal frameworks** that are essential for handling any task:
 
 1. **5W2H (What, Why, Who, When, Where, How, How Much)** - The **Task Ontology**
    - Answers: "What exactly needs to be done?"
@@ -554,7 +554,7 @@ sequenceDiagram
 
 ### 4.2 Beyond Free-Text Prompts
 
-Traditional agents accept unstructured prompts, leading to ambiguous goals and unauditable execution. Gliding Horse introduces **5W2H task ontology** as the standardized metadata framework for all non-trivial tasks.
+Traditional agents accept unstructured prompts, leading to ambiguous goals and unauditable execution. Wild AgentOS introduces **5W2H task ontology** as the standardized metadata framework for all non-trivial tasks.
 
 ```mermaid
 graph TB
@@ -703,7 +703,7 @@ Matched historical 5W2H subgraphs are injected into SA decision context:
 
 ### 5.1 Beyond Static Skill Libraries
 
-Traditional agent frameworks treat skills as static function libraries. Gliding Horse implements a **dynamic cognitive knowledge network** where skills evolve through usage, gain experience fragments, and self-organize via semantic links.
+Traditional agent frameworks treat skills as static function libraries. Wild AgentOS implements a **dynamic cognitive knowledge network** where skills evolve through usage, gain experience fragments, and self-organize via semantic links.
 
 ```mermaid
 graph TB
@@ -1090,7 +1090,7 @@ graph TB
     Tools --> Memory
 ```
 
-### 11.2 Data Flow: The Modern Gliding Horse in Action
+### 11.2 Data Flow: The Modern Wild AgentOS in Action
 
 ```mermaid
 sequenceDiagram
@@ -1109,7 +1109,7 @@ sequenceDiagram
     PA->>L2: Write execution plan (RDF node)
     PA-->>SA: Return strategic roadmap
     SA->>DA: Execute with plan
-    Note over DA: Like the Gliding Horse<br/>carrying supplies uphill
+    Note over DA: Like the Wild AgentOS<br/>carrying supplies uphill
     DA->>TE: Call tools (file_write, bash)
     TE->>L2: Auto-graphify results → RDF
     DA->>L2: Write code artifacts
@@ -1121,4 +1121,4 @@ sequenceDiagram
 
 ---
 
-> *This document focuses on the architectural design and system innovations of Gliding Horse Agent OS. For a quick-start guide, application showcase, and project overview, see the [README.md](../README.md).*
+> *This document focuses on the architectural design and system innovations of Wild AgentOS. For a quick-start guide, application showcase, and project overview, see the [README.md](../README.md).*

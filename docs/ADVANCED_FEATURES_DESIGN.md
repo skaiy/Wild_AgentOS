@@ -1,6 +1,6 @@
 # Advanced Feature Design: Root Cause Analysis, Timeline Versioning, Temporal Hypergraph, GNN
 
-> Design document for implementing 4 advanced skill graph features on Gliding Horse Agent OS.
+> Design document for implementing 4 advanced skill graph features on Wild AgentOS.
 >
 > **Status**: Draft for review
 > **Target modules**: `src/skill_graph/`, `src/causal/`, `src/temporal/`

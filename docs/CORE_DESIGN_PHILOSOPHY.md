@@ -2,7 +2,7 @@
 
 ## Document Purpose
 
-This document provides in-depth explanations of three foundational design decisions in Gliding Horse Agent OS that complement the main README.md. These concepts are critical to understanding why the system is architected the way it is.
+This document provides in-depth explanations of three foundational design decisions in Wild AgentOS that complement the main README.md. These concepts are critical to understanding why the system is architected the way it is.
 
 ---
 
@@ -10,7 +10,7 @@ This document provides in-depth explanations of three foundational design decisi
 
 ### 1.1 Two Pillars of Structured Execution
 
-Gliding Horse Agent OS is built on **two universal frameworks** that are essential for handling any task:
+Wild AgentOS is built on **two universal frameworks** that are essential for handling any task:
 
 1. **5W2H (What, Why, Who, When, Where, How, How Much)** - The **Task Ontology**
    - Answers: "What exactly needs to be done?"
@@ -119,7 +119,7 @@ Ambiguity in any dimension leads to:
 
 ### 1.3 PDCA: The Generalized Execution Model
 
-Unlike traditional management PDCA, Gliding Horse implements a **generalized computational PDCA** that adapts to task complexity:
+Unlike traditional management PDCA, Wild AgentOS implements a **generalized computational PDCA** that adapts to task complexity:
 
 **Seven Complexity Levels:**
 
@@ -137,7 +137,7 @@ Unlike traditional management PDCA, Gliding Horse implements a **generalized com
 
 ### 1.4 Specialized Models as Skill Extensions
 
-In Gliding Horse Agent OS, specialized models like SWOT, 5 Whys, or SMART are implemented as **reusable Skills** within the Skill Graph system. They are invoked when the 5W2H metadata indicates their applicability:
+In Wild AgentOS, specialized models like SWOT, 5 Whys, or SMART are implemented as **reusable Skills** within the Skill Graph system. They are invoked when the 5W2H metadata indicates their applicability:
 
 ```json
 {
@@ -232,7 +232,7 @@ Result: L1/L2 stay lean, full fidelity preserved in L0, on-demand loading via IR
 
 **Analogy to CPU Virtual Memory:**
 
-| Concept | CPU Architecture | Gliding Horse Memory |
+| Concept | CPU Architecture | Wild AgentOS Memory |
 |---------|-----------------|---------------------|
 | Working Set | RAM (fast, limited) | L2 Oxigraph (fast, ~2ms) |
 | Page Table | Virtual→Physical mapping | IRI references |
@@ -288,7 +288,7 @@ This design separates concerns:
 
 ### 3.1 Integration Architecture
 
-Gliding Horse Agent OS implements a **unified knowledge graph** that seamlessly integrates five core subsystems through JSON-LD and Oxigraph:
+Wild AgentOS implements a **unified knowledge graph** that seamlessly integrates five core subsystems through JSON-LD and Oxigraph:
 
 ```mermaid
 graph TB
@@ -453,7 +453,7 @@ WHERE {
 
 ## 4. Skill-Knowledge Graph Fusion: Self-Evolving Cognitive Architecture
 
-This is a fundamental architectural innovation that sets Gliding Horse apart from all comparable systems. In conventional designs, Skills are static instruction files and Knowledge is externally retrieved text chunks — the two are mutually isolated. Gliding Horse, via its JSON‑LD semantic bus, uniformly represents all skills, knowledge fragments, and experiential lessons as graph nodes, making the Skill Graph and Knowledge Graph naturally converge into one.
+This is a fundamental architectural innovation that sets Wild AgentOS apart from all comparable systems. In conventional designs, Skills are static instruction files and Knowledge is externally retrieved text chunks — the two are mutually isolated. Wild AgentOS, via its JSON‑LD semantic bus, uniformly represents all skills, knowledge fragments, and experiential lessons as graph nodes, making the Skill Graph and Knowledge Graph naturally converge into one.
 
 ### 4.1 Three Levels of Self-Evolution
 
@@ -465,7 +465,7 @@ This is a fundamental architectural innovation that sets Gliding Horse apart fro
 
 ### 4.2 Comparison with Alternative Systems
 
-| Dimension | Other Agent Frameworks | Gliding Horse |
+| Dimension | Other Agent Frameworks | Wild AgentOS |
 |-----------|----------------------|---------------|
 | **Skill Organization** | Static Markdown files or code functions, requiring manual maintenance | JSON‑LD graph nodes with 6 semantic link types, traversable and inferable |
 | **Knowledge & Experience** | Vector store text chunks isolated from skills, no structural correlation | Experience fragments as sub-graphs attached to skill nodes, auto-mounted and auto-injected |
@@ -481,7 +481,7 @@ The industry pain point is that most systems choose one route or the other, or s
 
 ### 4.4 The Unified Solution: JSON‑LD IRI as the "Unified Address Bus"
 
-Gliding Horse fundamentally solves this fragmentation:
+Wild AgentOS fundamentally solves this fragmentation:
 
 ```mermaid
 graph TB
@@ -564,7 +564,7 @@ This design **reconstructs the Agent from a "one-shot prompt engineering object"
 
 ## Summary
 
-These four design pillars—**5W2H + PDCA as universal frameworks**, **JSON-LD simplified usage via Harness Engine**, **Universal Knowledge Graph integration**, and **JSON-LD as Unified Semantic Bus**—form the cognitive backbone of Gliding Horse Agent OS. They enable:
+These four design pillars—**5W2H + PDCA as universal frameworks**, **JSON-LD simplified usage via Harness Engine**, **Universal Knowledge Graph integration**, and **JSON-LD as Unified Semantic Bus**—form the cognitive backbone of Wild AgentOS. They enable:
 
 1. **Structured Intent Modeling**: Every task is precisely defined (5W2H) and systematically executed (PDCA)
 2. **Efficient LLM Interaction**: Simple JSON inputs (think/contents/summary) translated to rich JSON-LD outputs
@@ -588,9 +588,9 @@ Together, they create a system that is both **powerful** (handles complex multi-
 ### Architecture Philosophy
 
 ```
-Gliding Horse Agent OS = Ancient Wisdom × Modern Technology
+Wild AgentOS = Ancient Wisdom × Modern Technology
 
-Wooden Ox & Gliding Horse (木牛流马) → Autonomous transport harness
+Wooden Ox & Wild AgentOS (木牛流马) → Autonomous transport harness
     ↓
 Agent Harness → Multi-agent orchestration infrastructure
     ↓

@@ -2,7 +2,7 @@
 
 ## Our Pledge
 
-We as members, contributors, and leaders pledge to make participation in the Gliding Horse project and our community a harassment-free experience for everyone, regardless of age, body size, visible or invisible disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, religion, or sexual identity and orientation.
+We as members, contributors, and leaders pledge to make participation in the Wild AgentOS project and our community a harassment-free experience for everyone, regardless of age, body size, visible or invisible disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, religion, or sexual identity and orientation.
 
 We pledge to act and interact in ways that contribute to an open, welcoming, diverse, inclusive, and healthy community.
 
@@ -84,4 +84,4 @@ For answers to common questions about this code of conduct, see the FAQ at [http
 
 ---
 
-**Gliding Horse** is a project that combines a Rust core, Go services, Temporal workflows, a React frontend, and VS Code extensions — all backed by PostgreSQL. Our community spans systems programmers, web developers, and AI practitioners. We value thoughtful, constructive collaboration across all these domains, and we expect all participants to help us maintain a welcoming and professional environment.
+**Wild AgentOS** is a project that combines a Rust core, Go services, Temporal workflows, a React frontend, and VS Code extensions — all backed by PostgreSQL. Our community spans systems programmers, web developers, and AI practitioners. We value thoughtful, constructive collaboration across all these domains, and we expect all participants to help us maintain a welcoming and professional environment.

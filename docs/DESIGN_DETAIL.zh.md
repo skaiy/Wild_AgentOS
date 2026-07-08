@@ -1,4 +1,4 @@
-# Gliding Horse Agent OS — 设计细节
+# Wild AgentOS — 设计细节
 
 > *本文是 [DESIGN_DETAIL.md](DESIGN_DETAIL.md) 的中文翻译。有关项目概述，请参阅 [README.md](../README.md) 或 [README.zh.md](../README.zh.md)。*
 
@@ -8,7 +8,7 @@
 
 ### 1.1 有何不同？
 
-传统 PDCA（计划-执行-检查-改进）是一种用于流程改进的**管理方法论**。Gliding Horse Agent OS 实现了**通用化计算型 PDCA**，它超越了管理范畴，成为一种适应任何复杂度的**通用任务执行模型**。
+传统 PDCA（计划-执行-检查-改进）是一种用于流程改进的**管理方法论**。Wild AgentOS 实现了**通用化计算型 PDCA**，它超越了管理范畴，成为一种适应任何复杂度的**通用任务执行模型**。
 
 ```mermaid
 graph TB
@@ -18,7 +18,7 @@ graph TB
         T3["手动交接"]
     end
     
-    subgraph "Gliding Horse 通用化 PDCA"
+    subgraph "Wild AgentOS 通用化 PDCA"
         G1["递归循环<br/>智能体自主"]
         G2["自适应阶段<br/>紧急/探索模式"]
         G3["事件驱动转换<br/>感知触发"]
@@ -78,7 +78,7 @@ stateDiagram-v2
 
 ### 2.1 受计算机架构启发的革命性设计
 
-与传统智能体框架的扁平上下文窗口不同，Gliding Horse 实现了**五层分层记忆系统**，直接受 CPU 缓存层级结构（L1/L2/L3 缓存 + RAM + 磁盘存储）启发。
+与传统智能体框架的扁平上下文窗口不同，Wild AgentOS 实现了**五层分层记忆系统**，直接受 CPU 缓存层级结构（L1/L2/L3 缓存 + RAM + 磁盘存储）启发。
 
 ```mermaid
 graph TB
@@ -173,7 +173,7 @@ sequenceDiagram
 - ❌ 缺乏语义类型（无法进行多态发现）
 - ❌ 结构固定（无法通过深度控制 Token 预算）
 
-Gliding Horse 使用 **JSON-LD 1.1（W3C 标准）** 作为通用数据总线，提供六项核心能力：
+Wild AgentOS 使用 **JSON-LD 1.1（W3C 标准）** 作为通用数据总线，提供六项核心能力：
 
 ```mermaid
 graph LR
@@ -467,7 +467,7 @@ scheduler.schedule_writeback(session_id, block_counter);
 
 **所有结构化思维的基础**
 
-Gliding Horse Agent OS 建立在**两个通用框架**之上，它们是处理任何任务的基础：
+Wild AgentOS 建立在**两个通用框架**之上，它们是处理任何任务的基础：
 
 1. **5W2H（What-做什么、Why-为什么、Who-谁做、When-何时、Where-何地、How-怎么做、How Much-多少资源）** — **任务本体**
    - 回答："到底需要做什么？"
@@ -554,7 +554,7 @@ sequenceDiagram
 
 ### 4.2 超越自由文本提示
 
-传统智能体接受非结构化提示，导致目标模糊和执行不可审计。Gliding Horse 引入 **5W2H 任务本体**作为所有非平凡任务的标准化元数据框架。
+传统智能体接受非结构化提示，导致目标模糊和执行不可审计。Wild AgentOS 引入 **5W2H 任务本体**作为所有非平凡任务的标准化元数据框架。
 
 ```mermaid
 graph TB
@@ -703,7 +703,7 @@ LIMIT 5
 
 ### 5.1 超越静态技能库
 
-传统智能体框架将技能视为静态函数库。Gliding Horse 实现了**动态认知知识网络**，其中技能通过使用而进化，积累经验片段，并通过语义链接自组织。
+传统智能体框架将技能视为静态函数库。Wild AgentOS 实现了**动态认知知识网络**，其中技能通过使用而进化，积累经验片段，并通过语义链接自组织。
 
 ```mermaid
 graph TB
@@ -1106,4 +1106,4 @@ sequenceDiagram
 
 ---
 
-> *本文档聚焦于 Gliding Horse Agent OS 的架构设计和系统创新。有关快速入门指南、应用展示和项目概述，请参阅 [README.md](../README.md) 或 [README.zh.md](../README.zh.md)。*
+> *本文档聚焦于 Wild AgentOS 的架构设计和系统创新。有关快速入门指南、应用展示和项目概述，请参阅 [README.md](../README.md) 或 [README.zh.md](../README.zh.md)。*

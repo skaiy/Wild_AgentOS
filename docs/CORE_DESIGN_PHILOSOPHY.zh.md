@@ -8,7 +8,7 @@
 
 ### 1.1 结构化执行的两大支柱
 
-Gliding Horse Agent OS 建立在**两个通用框架**之上，它们是处理任何任务的基础：
+Wild AgentOS 建立在**两个通用框架**之上，它们是处理任何任务的基础：
 
 1. **5W2H（What-做什么、Why-为什么、Who-谁做、When-何时、Where-何地、How-怎么做、How Much-多少资源）** — **任务本体**
    - 回答："到底需要做什么？"
@@ -117,7 +117,7 @@ sequenceDiagram
 
 ### 1.3 PDCA：通用化执行模型
 
-与传统管理型 PDCA 不同，Gliding Horse 实现了**通用化计算型 PDCA**，能够适应任务复杂度：
+与传统管理型 PDCA 不同，Wild AgentOS 实现了**通用化计算型 PDCA**，能够适应任务复杂度：
 
 **七个复杂度级别：**
 
@@ -135,7 +135,7 @@ sequenceDiagram
 
 ### 1.4 专业模型作为技能扩展
 
-在 Gliding Horse Agent OS 中，SWOT、5 Whys、SMART 等专业模型被实现为技能图谱系统中的**可复用技能**。当 5W2H 元数据表明适用时，它们被调用：
+在 Wild AgentOS 中，SWOT、5 Whys、SMART 等专业模型被实现为技能图谱系统中的**可复用技能**。当 5W2H 元数据表明适用时，它们被调用：
 
 ```json
 {
@@ -230,7 +230,7 @@ flowchart TB
 
 **类比 CPU 虚拟内存：**
 
-| 概念 | CPU 架构 | Gliding Horse 内存 |
+| 概念 | CPU 架构 | Wild AgentOS 内存 |
 |---------|-----------------|---------------------|
 | 工作集 | RAM（快速、有限） | L2 Oxigraph（快速，~2ms）|
 | 页表 | 虚拟→物理映射 | IRI 引用 |
@@ -286,7 +286,7 @@ l2_manager.index_summary(&jsonld_node["@id"], &llm_output.summary)?;
 
 ### 3.1 集成架构
 
-Gliding Horse Agent OS 实现了**统一知识图谱**，通过 JSON-LD 和 Oxigraph 无缝集成五个核心子系统：
+Wild AgentOS 实现了**统一知识图谱**，通过 JSON-LD 和 Oxigraph 无缝集成五个核心子系统：
 
 ```mermaid
 graph TB
@@ -451,7 +451,7 @@ WHERE {
 
 ## 4. 技能图谱与知识图谱融合：自进化认知架构
 
-这是 Gliding Horse 区别于所有同类系统的一项根本性架构创新。传统设计中，技能（Skills）是静态指令文件，知识（Knowledge）是外部检索的文本块，两者彼此割裂。Gliding Horse 基于 JSON‑LD 语义总线，将技能、知识碎片、经验教训统一表达为图节点，使 Skill Graph 与 Knowledge Graph 天然融为一体。
+这是 Wild AgentOS 区别于所有同类系统的一项根本性架构创新。传统设计中，技能（Skills）是静态指令文件，知识（Knowledge）是外部检索的文本块，两者彼此割裂。Wild AgentOS 基于 JSON‑LD 语义总线，将技能、知识碎片、经验教训统一表达为图节点，使 Skill Graph 与 Knowledge Graph 天然融为一体。
 
 ### 4.1 三层自进化能力
 
@@ -463,7 +463,7 @@ WHERE {
 
 ### 4.2 与同类系统的对比
 
-| 维度 | 其他 Agent 框架 | Gliding Horse |
+| 维度 | 其他 Agent 框架 | Wild AgentOS |
 |------|----------------|---------------|
 | **技能组织** | 静态 Markdown 文件或代码函数，需人工维护 | JSON‑LD 图节点，6 种语义链接，可遍历、可推理 |
 | **知识经验** | 独立于技能的向量库文本块，无结构化关联 | 经验碎片作为技能节点的附属图节点，自动挂载注入 |
@@ -479,7 +479,7 @@ WHERE {
 
 ### 4.4 统一方案：JSON‑LD IRI 作为"统一地址总线"
 
-Gliding Horse 从根本上解决了这个割裂问题：
+Wild AgentOS 从根本上解决了这个割裂问题：
 
 ```mermaid
 graph TB
@@ -562,7 +562,7 @@ flowchart LR
 
 ## 总结
 
-这四个设计支柱——**5W2H + PDCA 作为通用框架**、**通过 Harness 引擎简化 JSON-LD 使用**、**通用知识图谱集成**、以及 **JSON-LD 作为统一语义总线**——构成了 Gliding Horse Agent OS 的认知骨干。它们实现了：
+这四个设计支柱——**5W2H + PDCA 作为通用框架**、**通过 Harness 引擎简化 JSON-LD 使用**、**通用知识图谱集成**、以及 **JSON-LD 作为统一语义总线**——构成了 Wild AgentOS 的认知骨干。它们实现了：
 
 1. **结构化意图建模**：每个任务精确定义（5W2H）并系统执行（PDCA）
 2. **高效的 LLM 交互**：简单 JSON 输入（think/contents/summary）转换为丰富的 JSON-LD 输出
@@ -586,7 +586,7 @@ flowchart LR
 ### 架构哲学
 
 ```
-Gliding Horse Agent OS = 古老智慧 × 现代技术
+Wild AgentOS = 古老智慧 × 现代技术
 
 木牛流马 → 自主运输驾驭
     ↓

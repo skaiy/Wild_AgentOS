@@ -6,7 +6,7 @@
 
 ### 现状
 
-Gliding Horse Agent OS 已有：
+Wild AgentOS 已有：
 
 - **技能图谱**：7,500+ LOC 动态语义网络，6 类链接类型，Learn/Reduce 自举学习，冲突检测
 - **五层记忆**：MESI 一致性协议的 L0→L3 层次化存储
