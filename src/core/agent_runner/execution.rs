@@ -1247,7 +1247,6 @@ Output the summary report directly, not in JSON format."#,
                 let current_tools = self
                     .tool_executor
                     .read()
-                    .expect("tool_executor RwLock poisoned")
                     .tool_definitions_for_role(&agent.role.to_string());
                 let tools = if current_tools.is_empty() { None } else { Some(current_tools) };
                 // 流式调用：逐 token 推送 LLM_CONTENT 供任务控制台「逐字输出」，

@@ -568,7 +568,7 @@ pub struct StreamEventResponse {
 pub fn open_vector_store(
     embedding: &crate::config::settings::EmbeddingSettings,
 ) -> SharedVectorStore {
-    let embed = crate::memory::embedding_service::create_embedding_service_from_config(embedding);
+    let embed = crate::memory::embedding_service::create_embedding_service_from_config(embedding, 30);
     let vdir = data_dir().join("vector_store");
     match HyperspaceStore::open(&vdir, embed) {
         Ok(s) => Arc::new(arc_swap::ArcSwapOption::from_pointee(s)),
@@ -1010,9 +1010,11 @@ fn hot_reload_models(state: &Arc<AppState>) {
 async fn hot_reload_embedding(
     state: &Arc<AppState>,
 ) -> Result<(usize, usize, bool, usize), String> {
-    let embedding = crate::config::settings::Settings::load_embedding();
+    let settings = crate::config::settings::Settings::load().unwrap_or_default();
+    let embedding = settings.embedding.clone();
+    let timeout = settings.agents.embedding_timeout_secs;
     let new_embed =
-        crate::memory::embedding_service::create_embedding_service_from_config(&embedding);
+        crate::memory::embedding_service::create_embedding_service_from_config(&embedding, timeout);
     let new_dim = new_embed.dimension();
     let old_dim = state.vector_store.load_full().map(|s| s.dimension());
     let dim_changed = old_dim != Some(new_dim);
@@ -6116,6 +6118,7 @@ mod tests {
             default_model: "test-model".into(),
             timeout_seconds: 30,
             max_retries: 1,
+            retry_base_ms: 500,
             model_mapping: std::collections::HashMap::new(),
         })
         .unwrap()
@@ -6446,6 +6449,7 @@ mod skill_manifest_tests {
                 default_model: "test-model".into(),
                 timeout_seconds: 30,
                 max_retries: 1,
+                retry_base_ms: 500,
                 model_mapping: std::collections::HashMap::new(),
             })
             .unwrap(),

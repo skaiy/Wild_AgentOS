@@ -195,9 +195,7 @@ impl ToolExecutor {
 
     /// 注入向量知识库，使 `kb_vector_search` 工具可对向量库做语义检索。
     pub fn set_vector_store(&mut self, store: Arc<crate::memory::HyperspaceStore>) {
-        if let Ok(mut vs) = self.vector_store.write() {
-            *vs = Some(store);
-        }
+        *self.vector_store.write() = Some(store);
     }
 
     /// Notify workspace_monitor that a file was read externally (e.g., via read_full_result).
@@ -622,7 +620,7 @@ impl ToolExecutor {
             },
             "required": ["query"]
         }), Arc::new(move |input: Value| {
-            let vstore = vector_store_for_search.read().ok().and_then(|g| g.clone());
+            let vstore = vector_store_for_search.read().clone();
             Box::pin(async move { builtins::execute_kb_vector_search(input, vstore).await })
         }), all);
 

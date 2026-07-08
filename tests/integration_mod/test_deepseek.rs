@@ -31,7 +31,7 @@ async fn test_deepseek_chat_completion() {
 
     let msg = wild_agent_os_core::gateway::unified_gateway::ChatMessage {
         role: "user".to_string(),
-        content: "Say 'Hello from Agent OS' and nothing else.".to_string(),
+        content: wild_agent_os_core::gateway::unified_gateway::ChatContent::Text("Say 'Hello from Agent OS' and nothing else.".to_string()),
         name: None,
         tool_calls: None,
         tool_call_id: None,
@@ -56,9 +56,9 @@ async fn test_deepseek_sa_workflow() {
 
     let msg = wild_agent_os_core::gateway::unified_gateway::ChatMessage {
         role: "user".to_string(),
-        content: "Classify this task as simple, standard, or emergency: \
+        content: wild_agent_os_core::gateway::unified_gateway::ChatContent::Text("Classify this task as simple, standard, or emergency: \
                   'Build a web application with user authentication and database'. \
-                  Respond with just one word.".to_string(),
+                  Respond with just one word.".to_string()),
         name: None,
         tool_calls: None,
         tool_call_id: None,
@@ -82,7 +82,7 @@ async fn test_deepseek_with_tools() {
 
     let msg = wild_agent_os_core::gateway::unified_gateway::ChatMessage {
         role: "user".to_string(),
-        content: "What is 2+2?".to_string(),
+        content: wild_agent_os_core::gateway::unified_gateway::ChatContent::Text("What is 2+2?".to_string()),
         name: None,
         tool_calls: None,
         tool_call_id: None,

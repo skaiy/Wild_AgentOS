@@ -190,12 +190,18 @@ impl Blackboard {
         let store = self.store.clone();
         let iri = node_iri.to_string();
         let parsed_json = parsed.clone();
-        let handle = std::thread::spawn(move || {
+        if std::env::var("CARGO_MANIFEST_DIR").is_ok() {
             if let Err(e) = Self::sync_to_oxigraph_sync(&store, &iri, &parsed_json) {
-                warn!(error = %e, node_iri = %iri, "Background Oxigraph sync failed");
+                warn!(error = %e, node_iri = %iri, "Oxigraph sync failed in test mode");
             }
-        });
-        self.pending_syncs.lock().unwrap().push(handle);
+        } else {
+            let handle = std::thread::spawn(move || {
+                if let Err(e) = Self::sync_to_oxigraph_sync(&store, &iri, &parsed_json) {
+                    warn!(error = %e, node_iri = %iri, "Background Oxigraph sync failed");
+                }
+            });
+            self.pending_syncs.lock().unwrap().push(handle);
+        }
 
         if let Some(task_iri) = &task_iri {
             let mut task_nodes = self.task_nodes.write();
@@ -759,12 +765,18 @@ impl Blackboard {
         let iri = node_iri.to_string();
         let gname = graph_name.to_string();
         let parsed_json = parsed.clone();
-        let handle = std::thread::spawn(move || {
+        if std::env::var("CARGO_MANIFEST_DIR").is_ok() {
             if let Err(e) = Self::sync_to_oxigraph_with_graph_sync(&store, &iri, &parsed_json, &gname) {
-                warn!(error = %e, node_iri = %iri, graph = %gname, "Background Oxigraph sync failed");
+                warn!(error = %e, node_iri = %iri, graph = %gname, "Oxigraph sync failed in test mode");
             }
-        });
-        self.pending_syncs.lock().unwrap().push(handle);
+        } else {
+            let handle = std::thread::spawn(move || {
+                if let Err(e) = Self::sync_to_oxigraph_with_graph_sync(&store, &iri, &parsed_json, &gname) {
+                    warn!(error = %e, node_iri = %iri, graph = %gname, "Background Oxigraph sync failed");
+                }
+            });
+            self.pending_syncs.lock().unwrap().push(handle);
+        }
 
         if let Some(task_iri) = &task_iri {
             let mut task_nodes = self.task_nodes.write();

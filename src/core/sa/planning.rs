@@ -285,7 +285,7 @@ Output only JSON, no other content."#,
         let model = self.runner.gateway.get_model("default");
         let messages = vec![crate::gateway::unified_gateway::ChatMessage {
             role: "user".to_string(),
-            content: prompt,
+            content: crate::gateway::unified_gateway::ChatContent::text(prompt),
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -558,7 +558,7 @@ Output only JSON, no other content."#,
         let model = self.runner.gateway.get_model("default");
         let messages = vec![crate::gateway::unified_gateway::ChatMessage {
             role: "user".to_string(),
-            content: prompt,
+            content: crate::gateway::unified_gateway::ChatContent::text(prompt),
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -706,7 +706,7 @@ Complexity definitions:
         let model = self.runner.gateway.get_model("default");
         let messages = vec![crate::gateway::unified_gateway::ChatMessage {
             role: "user".to_string(),
-            content: prompt,
+            content: crate::gateway::unified_gateway::ChatContent::text(prompt),
             name: None,
             tool_calls: None,
             tool_call_id: None,
