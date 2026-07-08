@@ -249,7 +249,7 @@ pub struct AgentRunner {
     pub l0_store: Arc<L0Store>,
     pub memory_manager: Arc<tokio::sync::Mutex<MemoryManager>>,
     pub templates: Arc<TemplateEngine>,
-    pub tool_executor: Arc<std::sync::RwLock<ToolExecutor>>,
+    pub tool_executor: Arc<parking_lot::RwLock<ToolExecutor>>,
     pub agent_settings: AgentSettings,
     pub hook_manager: Arc<HookManager>,
     pub projection: Arc<ProjectionEngine>,
@@ -327,7 +327,7 @@ impl AgentRunner {
             tool_executor: {
                 let mut exe = ToolExecutor::new();
                 exe.set_projection_engine(projection.clone());
-                Arc::new(std::sync::RwLock::new(exe))
+                Arc::new(parking_lot::RwLock::new(exe))
             },
             agent_settings,
             hook_manager,
@@ -496,10 +496,9 @@ impl AgentRunner {
     /// Called once after AgentRunner construction and all sub-components are ready.
     pub fn finalize_setup(&self) {
         
-        if let Ok(executor) = self.tool_executor.read() {
-            if let Some(wm) = executor.get_workspace_monitor() {
-                wm.set_perception_store(Arc::new(self.perception_store.clone()));
-            }
+        let executor = self.tool_executor.read();
+        if let Some(wm) = executor.get_workspace_monitor() {
+            wm.set_perception_store(Arc::new(self.perception_store.clone()));
         }
     }
 }

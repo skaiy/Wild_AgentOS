@@ -192,6 +192,7 @@ impl StreamingProcessor {
 pub struct MessageStream {
     response: Response,
     processor: StreamingProcessor,
+    #[allow(dead_code)]
     buffer: Vec<u8>,
 }
 

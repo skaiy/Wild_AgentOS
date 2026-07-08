@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub mod core;
 pub mod gateway;
 pub mod memory;

@@ -606,7 +606,8 @@ Output the summary report directly, not in JSON format."#,
 
         // Inject workspace file inventory into perception store so the agent
         // knows what files exist before it starts.
-        if let Ok(executor) = self.tool_executor.read() {
+        {
+            let executor = self.tool_executor.read();
             if let Some(wm) = executor.get_workspace_monitor() {
                 wm.inject_file_perception();
             }
@@ -672,7 +673,6 @@ Output the summary report directly, not in JSON format."#,
         let tools = self
             .tool_executor
             .read()
-            .expect("tool_executor RwLock poisoned")
             .tool_definitions_for_role(&agent.role.to_string());
 
         info!(
@@ -1105,7 +1105,6 @@ Output the summary report directly, not in JSON format."#,
                         let current_tools = self
                             .tool_executor
                             .read()
-                            .expect("tool_executor RwLock poisoned")
                             .tool_definitions_for_role(&agent.role.to_string());
                         if current_tools.is_empty() { None } else { Some(current_tools) }
                     },
@@ -1662,10 +1661,7 @@ Output the summary report directly, not in JSON format."#,
                             }
 
                             let handler = {
-                                let executor = self.tool_executor.read().unwrap_or_else(|e| {
-                                    warn!("ToolExecutor read lock poisoned (exec handler): {}", e);
-                                    e.into_inner()
-                                });
+                                let executor = self.tool_executor.read();
                                 executor.try_get_handler(name)
                             };
                             let started_at = std::time::Instant::now();

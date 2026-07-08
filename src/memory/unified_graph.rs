@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use oxigraph::model::{BlankNode, Literal, NamedNode, Quad, Term};
+use oxigraph::model::{Literal, NamedNode, Quad, Term};
 use oxigraph::sparql::QueryResults;
 use oxigraph::store::Store;
 use parking_lot::RwLock;
@@ -169,40 +169,6 @@ impl UnifiedGraphStore {
     fn parse_uri(&self, uri: &str) -> NamedNode {
         NamedNode::new_unchecked(uri)
     }
-
-    fn parse_term(&self, value: &str) -> Term {
-        if value.starts_with("iri://") || value.starts_with("http://") || value.starts_with("https://") {
-            Term::NamedNode(self.parse_uri(value))
-        } else if value.starts_with("_:") {
-            Term::BlankNode(BlankNode::new_unchecked(value))
-        } else if value.starts_with('"') {
-            if let Some(end_quote) = value.rfind('"') {
-                if end_quote > 0 {
-                    let literal_content = &value[1..end_quote];
-                    if let Some(lang_offset) = value[end_quote..].find("@") {
-                        let lang = &value[end_quote + lang_offset..];
-                        return Term::Literal(Literal::new_language_tagged_literal_unchecked(literal_content, lang));
-                    } else if let Some(type_offset) = value[end_quote..].find("^^") {
-                        let type_uri = &value[end_quote + type_offset + 2..];
-                        if let Ok(node) = NamedNode::new(type_uri.trim_start_matches('<').trim_end_matches('>')) {
-                            return Term::Literal(Literal::new_typed_literal(literal_content, node));
-                        }
-                    }
-                    return Term::Literal(Literal::new_simple_literal(literal_content));
-                }
-            }
-            Term::Literal(Literal::new_simple_literal(value))
-        } else if let Ok(_n) = value.parse::<i64>() {
-            Term::Literal(Literal::new_typed_literal(value, NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer")))
-        } else if let Ok(_f) = value.parse::<f64>() {
-            Term::Literal(Literal::new_typed_literal(value, NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#double")))
-        } else if value == "true" || value == "false" {
-            Term::Literal(Literal::new_typed_literal(value, NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean")))
-        } else {
-            Term::Literal(Literal::new_simple_literal(value))
-        }
-    }
-
     fn term_to_string(&self, term: &Term) -> String {
         match term {
             Term::NamedNode(node) => node.as_str().to_string(),

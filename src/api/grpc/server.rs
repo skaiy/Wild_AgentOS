@@ -373,7 +373,7 @@ impl AgentOSService {
 
         {
             let ug_store = self.unified_graph.store();
-            let mut executor = runner.tool_executor.write().expect("tool_executor RwLock poisoned");
+            let mut executor = runner.tool_executor.write();
             executor.set_unified_kg_store(ug_store);
             // set workspace_monitor on ToolExecutor
             if let Some(ref wm) = workspace_monitor_opt {

@@ -22,9 +22,13 @@ pub struct CachedPrompt {
 
 pub struct DynamicPromptEngine {
     template_engine: Arc<TemplateEngine>,
+    #[allow(dead_code)]
     prompt_builder: SystemPromptBuilder,
+    #[allow(dead_code)]
     l0_store: Option<Arc<L0Store>>,
+    #[allow(dead_code)]
     prompt_cache: HashMap<String, CachedPrompt>,
+    #[allow(dead_code)]
     cache_ttl: chrono::Duration,
 }
 

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 
 use serde::Deserialize;
@@ -67,20 +67,7 @@ pub struct ToolSearchInput {
     pub query: String,
     pub max_results: Option<usize>,
 }
-
 type ToolFn = Arc<dyn Fn(Value) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>> + Send + Sync>;
-
-/// Wrap a synchronous tool function as an async ToolFn
-fn sync_tool<F>(f: F) -> ToolFn
-where
-    F: Fn(Value) -> Result<Value, String> + Send + Sync + 'static,
-{
-    let f = Arc::new(f);
-    Arc::new(move |input| {
-        let f = Arc::clone(&f);
-        Box::pin(async move { f(input) })
-    })
-}
 
 /// Wrap a synchronous tool function (takes &Value) as an async ToolFn
 fn sync_tool_ref<F>(f: F) -> ToolFn
@@ -90,6 +77,7 @@ where
     let f = Arc::new(f);
     Arc::new(move |input| {
         let f = Arc::clone(&f);
+
         Box::pin(async move { f(&input) })
     })
 }
@@ -109,15 +97,15 @@ pub struct MicroToolContext {
 pub struct ToolExecutor {
     tools: HashMap<String, ToolFn>,
     tool_descriptions: Vec<ToolDescription>,
-    kg_store: Arc<RwLock<KnowledgeGraphStore>>,
-    projection_engine: Arc<std::sync::RwLock<Option<Arc<crate::memory::l3_projection::ProjectionEngine>>>>,
-    micro_tool_contexts: Arc<std::sync::RwLock<HashMap<String, MicroToolContext>>>,
-    micro_tool_data: Arc<std::sync::RwLock<HashMap<String, serde_json::Value>>>,
+    kg_store: Arc<std::sync::RwLock<KnowledgeGraphStore>>,
+    projection_engine: Arc<parking_lot::RwLock<Option<Arc<crate::memory::l3_projection::ProjectionEngine>>>>,
+    micro_tool_contexts: Arc<parking_lot::RwLock<HashMap<String, MicroToolContext>>>,
+    micro_tool_data: Arc<parking_lot::RwLock<HashMap<String, serde_json::Value>>>,
     syscall_gate: Option<crate::core::syscall_gate::SyscallGate>,
     permission_policy: Option<PermissionPolicy>,
     hook_runner: Option<HookRunner>,
     tool_group_manager: Option<ToolGroupManager>,
-    workspace_monitor: Arc<std::sync::RwLock<Option<Arc<WorkspaceMonitor>>>>,
+    workspace_monitor: Arc<parking_lot::RwLock<Option<Arc<WorkspaceMonitor>>>>,
 }
 
 // Max micro-tool descriptions cap — removes oldest entries when exceeded.
@@ -141,30 +129,28 @@ pub struct ToolDescription {
 
 impl ToolExecutor {
     pub fn new() -> Self {
-        let kg_store = Arc::new(RwLock::new(
+        let kg_store = Arc::new(std::sync::RwLock::new(
             KnowledgeGraphStore::new().expect("Failed to create knowledge graph store")
         ));
         let mut exe = Self {
             tools: HashMap::new(),
             tool_descriptions: Vec::new(),
             kg_store,
-            projection_engine: Arc::new(std::sync::RwLock::new(None)),
-            micro_tool_contexts: Arc::new(std::sync::RwLock::new(HashMap::new())),
-            micro_tool_data: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            projection_engine: Arc::new(parking_lot::RwLock::new(None)),
+            micro_tool_contexts: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            micro_tool_data: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             syscall_gate: None,
             permission_policy: None,
             hook_runner: None,
             tool_group_manager: None,
-            workspace_monitor: Arc::new(std::sync::RwLock::new(None)),
+            workspace_monitor: Arc::new(parking_lot::RwLock::new(None)),
         };
         exe.register_builtins();
         exe
     }
     
     pub fn set_projection_engine(&mut self, engine: Arc<crate::memory::l3_projection::ProjectionEngine>) {
-        if let Ok(mut pe) = self.projection_engine.write() {
-            *pe = Some(engine);
-        }
+        *self.projection_engine.write() = Some(engine);
     }
     
     pub fn set_tool_group_manager(&mut self, manager: ToolGroupManager) {
@@ -173,7 +159,7 @@ impl ToolExecutor {
 
     /// Replace internal KnowledgeGraphStore with a unified Oxigraph Store
     pub fn set_unified_kg_store(&mut self, store: Arc<oxigraph::store::Store>) {
-        self.kg_store = Arc::new(RwLock::new(
+        self.kg_store = Arc::new(std::sync::RwLock::new(
             KnowledgeGraphStore::with_shared_store(store).expect("Failed to create shared KG Store")
         ));
     }
@@ -191,28 +177,25 @@ impl ToolExecutor {
     }
 
     pub fn set_workspace_monitor(&mut self, monitor: Arc<WorkspaceMonitor>) {
-        if let Ok(mut wm) = self.workspace_monitor.write() {
-            *wm = Some(monitor);
-        }
+        *self.workspace_monitor.write() = Some(monitor);
     }
 
     pub fn get_workspace_monitor(&self) -> Option<Arc<WorkspaceMonitor>> {
-        self.workspace_monitor.read().ok().and_then(|g| g.clone())
+        self.workspace_monitor.read().clone()
     }
 
     /// Get a reference to the internal KnowledgeGraphStore for shared use
     /// (e.g. by FusedRootCauseEngine for SPARQL semantic neighbor traversal).
-    pub fn knowledge_graph_store(&self) -> Arc<RwLock<KnowledgeGraphStore>> {
+    pub fn knowledge_graph_store(&self) -> Arc<std::sync::RwLock<KnowledgeGraphStore>> {
         self.kg_store.clone()
     }
 
     /// Notify workspace_monitor that a file was read externally (e.g., via read_full_result).
     /// This helps the cache/diff system recognize the file as already-read on subsequent file_read.
     pub fn mark_file_external_read(&self, path: &str) {
-        if let Ok(guard) = self.workspace_monitor.read() {
-            if let Some(ref wm) = *guard {
-                wm.mark_file_read_external(path);
-            }
+        let guard = self.workspace_monitor.read();
+        if let Some(ref wm) = *guard {
+            wm.mark_file_read_external(path);
         }
     }
 
@@ -289,24 +272,24 @@ impl ToolExecutor {
                 let has_offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) > 0;
                 let has_limit = input.get("limit").is_some();
                 let result = builtins::execute_file_read(input).await?;
-                if let Ok(guard) = ws.read() {
-                    if let Some(ref wm) = *guard {
-                        if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
-                            let read_mode = match mode.as_str() {
-                                "force_refresh" => crate::tools::workspace_monitor::ReadMode::ForceRefresh,
-                                "diff" => crate::tools::workspace_monitor::ReadMode::Diff,
-                                "changed_only" => crate::tools::workspace_monitor::ReadMode::ChangedOnly,
-                                _ => {
-                                    // auto: use diff if file is already cached, else full
-                                    let inv = wm.inventory.read();
-                                    let entry = inv.get_entry(path);
-                                    match entry {
-                                        Some(e) if e.read_count > 0 => crate::tools::workspace_monitor::ReadMode::Diff,
-                                        _ => crate::tools::workspace_monitor::ReadMode::Full,
-                                    }
+                let guard = ws.read();
+                if let Some(ref wm) = *guard {
+                    if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
+                        let read_mode = match mode.as_str() {
+                            "force_refresh" => crate::tools::workspace_monitor::ReadMode::ForceRefresh,
+                            "diff" => crate::tools::workspace_monitor::ReadMode::Diff,
+                            "changed_only" => crate::tools::workspace_monitor::ReadMode::ChangedOnly,
+                            _ => {
+                                // auto: use diff if file is already cached, else full
+                                let inv = wm.inventory.read();
+                                let entry = inv.get_entry(path);
+                                match entry {
+                                    Some(e) if e.read_count > 0 => crate::tools::workspace_monitor::ReadMode::Diff,
+                                    _ => crate::tools::workspace_monitor::ReadMode::Full,
                                 }
-                            };
-                            if let Ok(read_result) = wm.read_file(path, read_mode) {
+                            }
+                        };
+                        if let Ok(read_result) = wm.read_file(path, read_mode) {
                                 let mut result = result;
                                 if let Some(diff) = &read_result.unified_diff {
                                     result.as_object_mut().map(|obj| {
@@ -345,7 +328,6 @@ impl ToolExecutor {
                             }
                         }
                     }
-                }
                 Ok(result)
             })
         }), all);
@@ -358,11 +340,10 @@ impl ToolExecutor {
             Box::pin(async move {
                 let result = builtins::execute_file_write(input).await?;
                 if result.get("success") == Some(&Value::Bool(true)) {
-                    if let Ok(guard) = ws.read() {
-                        if let Some(ref wm) = *guard {
-                            if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
-                                wm.mark_file_written(path);
-                            }
+                    let guard = ws.read();
+                    if let Some(ref wm) = *guard {
+                        if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
+                            wm.mark_file_written(path);
                         }
                     }
                 }
@@ -376,9 +357,9 @@ impl ToolExecutor {
         }), Arc::new(move |_: Value| {
             let ws = ws_status.clone();
             Box::pin(async move {
-                if let Ok(guard) = ws.read() {
-                    if let Some(ref wm) = *guard {
-                        let inv = wm.inventory.read();
+                let guard = ws.read();
+                if let Some(ref wm) = *guard {
+                    let inv = wm.inventory.read();
                         let all = inv.list_all();
                         let total = all.len();
 
@@ -410,7 +391,6 @@ impl ToolExecutor {
                             "by_language": by_language,
                         }));
                     }
-                }
                 // Fallback if no workspace_monitor available
                 Ok(json!({"total_files": 0, "stale_count": 0, "written_unread_count": 0, "message": "Workspace monitor not available"}))
             })
@@ -423,12 +403,12 @@ impl ToolExecutor {
             let ws = ws_list.clone();
             Box::pin(async move {
                 let mut result = builtins::execute_file_list(input).await?;
-                if let Ok(guard) = ws.read() {
-                    if let Some(ref wm) = *guard {
-                        if let Some(entries) = result.get_mut("entries").and_then(|e| e.as_array_mut()) {
-                            for entry in entries.iter_mut() {
-                                let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                                let inv = wm.inventory.read();
+                let guard = ws.read();
+                if let Some(ref wm) = *guard {
+                    if let Some(entries) = result.get_mut("entries").and_then(|e| e.as_array_mut()) {
+                        for entry in entries.iter_mut() {
+                            let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                            let inv = wm.inventory.read();
                                 if let Some(file_entry) = inv.get_entry(name) {
                                     entry.as_object_mut().map(|obj| {
                                         obj.insert("state".to_string(), Value::String(file_entry.state.as_str().to_string()));
@@ -438,7 +418,6 @@ impl ToolExecutor {
                             }
                         }
                     }
-                }
                 Ok(result)
             })
         }), all);
@@ -465,11 +444,10 @@ impl ToolExecutor {
             Box::pin(async move {
                 let result = builtins::execute_file_edit(input).await?;
                 if result.get("success") == Some(&Value::Bool(true)) {
-                    if let Ok(guard) = ws.read() {
-                        if let Some(ref wm) = *guard {
-                            if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
-                                wm.mark_file_written(path);
-                            }
+                    let guard = ws.read();
+                    if let Some(ref wm) = *guard {
+                        if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
+                            wm.mark_file_written(path);
                         }
                     }
                 }
@@ -713,7 +691,7 @@ impl ToolExecutor {
                     .get("node_iri")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| "Missing node_iri parameter".to_string())?;
-                let guard = proj.read().map_err(|e| format!("Projection engine read lock failed: {}", e))?;
+                let guard = proj.read();
                 let engine = guard.as_ref()
                     .ok_or_else(|| "Projection engine not initialized".to_string())?;
                 let result = engine.read_node(node_iri)
@@ -814,9 +792,7 @@ impl ToolExecutor {
         let data = Arc::clone(&self.micro_tool_data);
         let tool_name_owned = tool_name.to_string();
         
-        if let Ok(mut ctx_guard) = contexts.write() {
-            ctx_guard.insert(tool_name.to_string(), context.clone());
-        }
+        contexts.write().insert(tool_name.to_string(), context.clone());
         
         let description = if tool_name.starts_with("read_full_result_") {
             format!("Read full tool result. call_id: {}", context.call_id)
@@ -844,11 +820,11 @@ impl ToolExecutor {
             let offset = input["offset"].as_u64().unwrap_or(0) as usize;
             let limit = input["limit"].as_u64().unwrap_or(100) as usize;
 
-            let ctx_guard = contexts.read().map_err(|e| format!("Failed to acquire context lock: {}", e))?;
+            let ctx_guard = contexts.read();
             let ctx = ctx_guard.get(&tool_name_owned)
                 .ok_or_else(|| format!("Micro-tool context not found: {}", tool_name_owned))?;
 
-            let data_guard = data.read().map_err(|e| format!("Failed to acquire data lock: {}", e))?;
+            let data_guard = data.read();
             let stored_data = data_guard.get(&ctx.storage_key)
                 .ok_or_else(|| format!("Micro-tool data not found: {}", ctx.storage_key))?;
 
@@ -926,18 +902,12 @@ impl ToolExecutor {
 
     /// Store micro-tool data
     pub fn store_micro_tool_data(&self, storage_key: &str, data: serde_json::Value) {
-        if let Ok(mut guard) = self.micro_tool_data.write() {
-            guard.insert(storage_key.to_string(), data);
-        }
+        self.micro_tool_data.write().insert(storage_key.to_string(), data);
     }
 
     /// Get list of registered micro-tools
     pub fn get_micro_tool_names(&self) -> Vec<String> {
-        if let Ok(guard) = self.micro_tool_contexts.read() {
-            guard.keys().cloned().collect()
-        } else {
-            Vec::new()
-        }
+        self.micro_tool_contexts.read().keys().cloned().collect()
     }
 
     pub async fn execute(&self, name: &str, input: Value) -> Result<Value, String> {
@@ -1021,13 +991,13 @@ impl ToolExecutor {
 
     /// Build a dynamic fallback handler for micro-tools (reads from micro_tool_data / micro_tool_contexts)
     fn make_micro_tool_fallback_handler(&self, name: &str) -> Option<ToolFn> {
-        let ctx_guard = self.micro_tool_contexts.read().ok()?;
+        let ctx_guard = self.micro_tool_contexts.read();
         let ctx = ctx_guard.get(name)?.clone();
         let storage_key = ctx.storage_key.clone();
         let call_id = ctx.call_id.clone();
         drop(ctx_guard);
 
-        let data_guard = self.micro_tool_data.read().ok()?;
+        let data_guard = self.micro_tool_data.read();
         let stored_data = data_guard.get(&storage_key)?.clone();
         drop(data_guard);
 

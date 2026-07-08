@@ -85,6 +85,7 @@ pub struct WorkspaceMonitor {
     pub inventory: Arc<RwLock<FileInventory>>,
     pub content_store: Arc<ContentStore>,
     pub snapshot_manager: Arc<SnapshotManager>,
+    #[allow(dead_code)]
     watch_engine: Option<WatchEngine>,
     event_bus: Option<Arc<EventBus>>,
     perception_store: RwLock<Option<Arc<PerceptionStore>>>,

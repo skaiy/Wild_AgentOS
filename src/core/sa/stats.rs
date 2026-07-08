@@ -1,15 +1,12 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use crate::core::agent_runner::TaskResult;
-use crate::core::event_bus::EventBus;
-use crate::CoreError;
 
 use super::agent::SupervisorAgent;
 use super::types::*;
 
 impl SupervisorAgent {
+    #[allow(dead_code)]
     pub fn get_cycle_status(&self, cycle_id: &str) -> Option<&CycleState> {
         self.active_cycles.get(cycle_id)
     }
@@ -55,6 +52,7 @@ impl SupervisorAgent {
         (l1, l3)
     }
 
+    #[allow(dead_code)]
     fn query_historical_5w2h(&self, limit: usize) -> Vec<(String, crate::core::five_w2h::Task5W2H)> {
         let mut results = Vec::new();
         let tags = vec!["5w2h".to_string(), "frozen".to_string()];
@@ -72,6 +70,7 @@ impl SupervisorAgent {
         results
     }
 
+    #[allow(dead_code)]
     fn match_similar_tasks(
         &self,
         current_what: &str,
@@ -93,6 +92,7 @@ impl SupervisorAgent {
         scored.into_iter().take(top_k).collect()
     }
 
+    #[allow(dead_code)]
     fn text_similarity(a: &str, b: &str) -> f32 {
         let a_lower = a.to_lowercase();
         let b_lower = b.to_lowercase();
@@ -114,6 +114,7 @@ impl SupervisorAgent {
         }
     }
 
+    #[allow(dead_code)]
     fn format_historical_experience(
         &self,
         similar: &[(String, crate::core::five_w2h::Task5W2H, f32)],

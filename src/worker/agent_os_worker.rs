@@ -229,8 +229,7 @@ impl AgentOsWorker {
         
         // Set workspace_monitor on ToolExecutor
         if let Some(ref wm) = workspace_monitor_opt {
-            let mut executor = runner.tool_executor.write().expect("tool_executor RwLock poisoned");
-            executor.set_workspace_monitor(wm.clone());
+            runner.tool_executor.write().set_workspace_monitor(wm.clone());
         }
         
         // Finalize AgentRunner initialization wiring: perception_store → WorkspaceMonitor

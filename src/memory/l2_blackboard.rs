@@ -71,6 +71,9 @@ pub struct Blackboard {
     agent_registry: RwLock<HashMap<String, AgentStatus>>,
     // Battle map: Resource lock table
     resource_locks: RwLock<Vec<ResourceLock>>,
+
+    /// Pending Oxigraph sync thread handles — joined on flush_oxigraph()
+    pending_syncs: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 
 impl Blackboard {
@@ -90,6 +93,7 @@ impl Blackboard {
             permission_matrix: PermissionMatrix::new(),
             agent_registry: RwLock::new(HashMap::new()),
             resource_locks: RwLock::new(Vec::new()),
+            pending_syncs: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -108,6 +112,7 @@ impl Blackboard {
             permission_matrix: PermissionMatrix::new(),
             agent_registry: RwLock::new(HashMap::new()),
             resource_locks: RwLock::new(Vec::new()),
+            pending_syncs: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -168,10 +173,18 @@ impl Blackboard {
 
         self.node_cache.insert(node_iri.to_string(), Arc::new(node));
 
-        self.sync_to_oxigraph(node_iri, &parsed)
-            .map_err(|e| CoreError::OxigraphSyncFailed {
-                message: format!("Failed to sync node {} to oxigraph: {}", node_iri, e),
-            })?;
+        // Defer Oxigraph sync to background thread to avoid blocking the write path.
+        // The in-memory cache returns immediately; sync errors are logged but not propagated
+        // since the node is already available via cache + indices.
+        let store = self.store.clone();
+        let iri = node_iri.to_string();
+        let parsed_json = parsed.clone();
+        let handle = std::thread::spawn(move || {
+            if let Err(e) = Self::sync_to_oxigraph_sync(&store, &iri, &parsed_json) {
+                warn!(error = %e, node_iri = %iri, "Background Oxigraph sync failed");
+            }
+        });
+        self.pending_syncs.lock().unwrap().push(handle);
 
         if let Some(task_iri) = &task_iri {
             let mut task_nodes = self.task_nodes.write();
@@ -283,7 +296,9 @@ impl Blackboard {
         triples
     }
 
-    fn sync_to_oxigraph(&self, node_iri: &str, parsed: &serde_json::Value) -> Result<(), CoreError> {
+    /// Background-sync a node to Oxigraph (called from std::thread::spawn).
+    /// Uses build_triples + SPARQL UPDATE to keep ogx in sync with the cache.
+    fn sync_to_oxigraph_sync(store: &Store, node_iri: &str, parsed: &serde_json::Value) -> Result<(), CoreError> {
         let triples = Self::build_triples(node_iri, parsed);
 
         if !triples.is_empty() {
@@ -293,7 +308,7 @@ impl Blackboard {
                 subject,
                 triples.join("\n")
             );
-            self.store.update(&combined_sparql)
+            store.update(&combined_sparql)
                 .map_err(|e| CoreError::SparqlError {
                     message: format!("Failed to execute atomic DELETE+INSERT: {}", e),
                 })?;
@@ -728,10 +743,17 @@ impl Blackboard {
 
         self.node_cache.insert(node_iri.to_string(), Arc::new(node));
 
-        self.sync_to_oxigraph_with_graph(node_iri, &parsed, graph_name)
-            .map_err(|e| CoreError::OxigraphSyncFailed {
-                message: format!("Failed to sync node {} to oxigraph graph {}: {}", node_iri, graph_name, e),
-            })?;
+        // Defer Oxigraph sync to background thread (avoids blocking the write path)
+        let store = self.store.clone();
+        let iri = node_iri.to_string();
+        let gname = graph_name.to_string();
+        let parsed_json = parsed.clone();
+        let handle = std::thread::spawn(move || {
+            if let Err(e) = Self::sync_to_oxigraph_with_graph_sync(&store, &iri, &parsed_json, &gname) {
+                warn!(error = %e, node_iri = %iri, graph = %gname, "Background Oxigraph sync failed");
+            }
+        });
+        self.pending_syncs.lock().unwrap().push(handle);
 
         if let Some(task_iri) = &task_iri {
             let mut task_nodes = self.task_nodes.write();
@@ -791,8 +813,9 @@ impl Blackboard {
         Ok(())
     }
 
-    fn sync_to_oxigraph_with_graph(
-        &self,
+    /// Background-sync to Oxigraph with named graph (called from std::thread::spawn).
+    fn sync_to_oxigraph_with_graph_sync(
+        store: &Store,
         node_iri: &str,
         parsed: &serde_json::Value,
         graph_name: &str,
@@ -806,13 +829,22 @@ impl Blackboard {
                 "DELETE WHERE {{ GRAPH {} {{ {} ?p ?o . }} }}; INSERT DATA {{ GRAPH {} {{ {} }} }}",
                 graph, subject, graph, triples.join("\n")
             );
-            self.store.update(&combined_sparql)
+            store.update(&combined_sparql)
                 .map_err(|e| CoreError::SparqlError {
                     message: format!("Failed to execute atomic DELETE+INSERT in named graph: {}", e),
                 })?;
         }
 
         Ok(())
+    }
+
+    /// Wait for all pending background Oxigraph syncs to complete.
+    /// Useful before querying Oxigraph directly after writes.
+    pub fn flush_oxigraph(&self) {
+        let handles = std::mem::take(&mut *self.pending_syncs.lock().unwrap());
+        for h in handles {
+            let _ = h.join();
+        }
     }
 
     pub fn query_graph(&self, graph_name: &str, sparql: &str) -> Result<Vec<serde_json::Value>, CoreError> {
@@ -1706,6 +1738,7 @@ mod tests {
         let config = CoreConfig::default();
         let json_ld = r#"{"@id":"iri://task/t1/node_1","@type":"Test","status":"running"}"#;
         bb.write_node("iri://task/t1/node_1", json_ld, &config).unwrap();
+        bb.flush_oxigraph();
 
         let results = bb.query("SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10").unwrap();
         assert!(!results.is_empty(), "SPARQL query should return results after write_node");
@@ -1859,6 +1892,7 @@ mod tests {
         
         bb.write_node_to_graph("iri://test/node_1", json_ld1, "system:plan", &config).unwrap();
         bb.write_node_to_graph("iri://test/node_2", json_ld2, "system:execution", &config).unwrap();
+        bb.flush_oxigraph();
         
         let plan_results = bb.query_graph("system:plan", "?s ?p ?o").unwrap();
         assert!(!plan_results.is_empty(), "Plan graph should have nodes");
@@ -1895,6 +1929,7 @@ mod tests {
         bb.write_node("iri://test/node_1", json_ld1, &config).unwrap();
         bb.write_node("iri://test/node_2", json_ld2, &config).unwrap();
         bb.write_node("iri://test/node_3", json_ld3, &config).unwrap();
+        bb.flush_oxigraph();
         
         let plan_nodes = bb.query_by_types(&["Plan".to_string()]).unwrap();
         assert_eq!(plan_nodes.len(), 2);
@@ -1972,6 +2007,7 @@ mod tests {
         
         let json_ld = r#"{"@id":"iri://test/1","@type":"Test","value":42}"#;
         bb.write_node_to_graph("iri://test/node_1", json_ld, "system:plan", &config).unwrap();
+        bb.flush_oxigraph();
         
         let node = bb.read_node("iri://test/node_1").unwrap().unwrap();
         assert_eq!(node.named_graph, Some("system:plan".to_string()));
@@ -2230,6 +2266,7 @@ mod tests {
             timestamp: chrono::Utc::now(),
         };
         bb.publish_coordination(&msg).unwrap();
+        bb.flush_oxigraph();
 
         let msgs = bb.read_coordination_messages().unwrap();
         assert!(!msgs.is_empty(), "Should have at least one coordination message, got {} messages", msgs.len());
@@ -2243,6 +2280,7 @@ mod tests {
         bb.register_agent("agent_x", "DA", "iri://task/snap");
         bb.update_agent_status("agent_x", AgentActivity::Working, Some("testing snapshot"));
         bb.publish_agent_snapshot_to_shared("agent_x").unwrap();
+        bb.flush_oxigraph();
         let results = bb.query_graph("blackboard:shared", "?s ?p ?o").unwrap();
         assert!(!results.is_empty(), "blackboard:shared should have snapshot data");
     }
@@ -2331,6 +2369,7 @@ mod tests {
             timestamp: chrono::Utc::now(),
         };
         bb.publish_coordination(&msg).unwrap();
+        bb.flush_oxigraph();
 
         // Filter with past timestamp should include the message
         let msgs = bb.read_coordination_messages_since(&past).unwrap();

@@ -8,6 +8,7 @@ use tracing::{debug, info, warn};
 
 use crate::core::event_bus::EventBus;
 use crate::core::perception_store::{PerceptionEntry, PerceptionSource, PerceptionStore};
+use crate::memory::hyperspace_store::HyperspaceStore;
 use crate::memory::l0_store::{L0Entry, L0Store, MesiState};
 use crate::CoreError;
 
@@ -118,11 +119,13 @@ impl PerceptionConfig {
 
 pub struct ProactiveEngine {
     cache: HashMap<String, (DateTime<Utc>, Value)>,
-    config: PerceptionConfig,
+    pub(crate) config: PerceptionConfig,
     anomaly_history: Vec<(String, DateTime<Utc>)>,
     l0: Arc<L0Store>,
+    #[allow(dead_code)]
     event_bus: Arc<EventBus>,
-    perception_store: Option<Arc<PerceptionStore>>,
+    pub(crate) perception_store: Option<Arc<PerceptionStore>>,
+    pub(crate) hyperspace: Option<Arc<HyperspaceStore>>,
 }
 
 impl ProactiveEngine {
@@ -134,6 +137,7 @@ impl ProactiveEngine {
             l0,
             event_bus,
             perception_store: None,
+            hyperspace: None,
         }
     }
 
@@ -149,12 +153,21 @@ impl ProactiveEngine {
             l0,
             event_bus,
             perception_store: None,
+            hyperspace: None,
         }
     }
 
     /// Set proactive perception store, enabling ProactiveEngine to inject alert perception data into Agent
     pub fn with_perception_store(mut self, store: Arc<PerceptionStore>) -> Self {
         self.perception_store = Some(store);
+        self
+    }
+
+    /// Set HyperspaceStore for semantic experience retrieval.
+    /// When configured, experience queries use embedding-based semantic search
+    /// instead of L0 tag-based substring matching.
+    pub fn with_hyperspace_store(mut self, store: Arc<HyperspaceStore>) -> Self {
+        self.hyperspace = Some(store);
         self
     }
 
@@ -201,7 +214,45 @@ impl ProactiveEngine {
         }
     }
 
-    fn query_relevant_experiences_from_l0(&self, query: &str) -> Vec<serde_json::Value> {
+    fn query_relevant_experiences(&self, query: &str) -> Vec<serde_json::Value> {
+        // When HyperspaceStore is available, use semantic search with time decay
+        if let Some(ref hs) = self.hyperspace {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let result = handle.block_on(async {
+                    // Wrap query to give the embedding model more context
+                    let augmented_query = format!("agent experience: {}", query);
+                    // Use time-decay search: λ=0.5 means experiences are halved in score every ~1.4h
+                    // Filter to only "experience" tagged entries with "experience" JSON-LD type
+                    let filter = crate::memory::hyperspace_store::HybridSearchFilter::new()
+                        .with_must_tags(vec!["experience".to_string()])
+                        .with_jsonld_types(vec!["Experience".to_string()])
+                        .with_min_importance(0.05);
+                    hs.search_with_time_decay(&augmented_query, &filter, 0.5, 5).await
+                });
+                match result {
+                    Ok(entries) => {
+                        return entries.iter()
+                            .filter_map(|entry| {
+                                // ScoredEntry has iri, text, score, tags, importance, jsonld_types, stored_at
+                                // The full experience JSON was stored in L0, indexed by IRI
+                                if !entry.iri.is_empty() {
+                                    if let Ok(Some(l0_entry)) = self.l0.retrieve(&entry.iri) {
+                                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&l0_entry.content) {
+                                            return Some(val);
+                                        }
+                                    }
+                                }
+                                None
+                            })
+                            .take(5)
+                            .collect();
+                    }
+                    Err(_) => {} // Fall through to L0 fallback
+                }
+            }
+        }
+
+        // Fallback: L0 tag-based + substring matching (original behavior)
         let results = match self.l0.search_by_tags(&["experience".to_string()]) {
             Ok(r) => r,
             Err(_) => return Vec::new(),
@@ -269,7 +320,7 @@ impl ProactiveEngine {
 
         let mut analysis = self.analyze_task(user_input);
 
-        let experiences = self.query_relevant_experiences_from_l0(user_input);
+        let experiences = self.query_relevant_experiences(user_input);
         analysis.relevant_experience_hints = experiences.iter()
             .filter_map(|e| e.get("scenario").and_then(|s| s.as_str()).map(|s| s.to_string()))
             .take(5)
@@ -387,9 +438,10 @@ impl ProactiveEngine {
                 }
             }
             let content = serde_json::to_string(&experience_json).unwrap_or_default();
+            let hs_content = content.clone();
             if !content.is_empty() {
                 let entry = L0Entry {
-                    iri: iri,
+                    iri: iri.clone(),
                     content,
                     importance: experience.success_rating,
                     access_count: 0,
@@ -405,6 +457,23 @@ impl ProactiveEngine {
                     hyperspace_point_id: None,
                 };
                 let _ = self.l0.store_entry(&entry);
+
+                // Also store to HyperspaceStore for semantic retrieval when available
+                if let Some(ref hs) = self.hyperspace {
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        let hs_tags = experience.tags.clone();
+                        let _ = handle.block_on(async {
+                            hs.upsert_with_metadata(
+                                &iri,
+                                &hs_content,
+                                &hs_tags,
+                                Some(experience.success_rating as f32),
+                                Some(&["Experience".to_string()]),
+                                None,
+                            ).await
+                        });
+                    }
+                }
             }
 
             return Some(experience);

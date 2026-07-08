@@ -301,9 +301,12 @@ impl IncrementalJsonParser {
 
 #[derive(Debug, Default)]
 pub struct StreamingFieldParser {
+    #[allow(dead_code)]
     thought_parser: IncrementalJsonParser,
     content_parser: IncrementalJsonParser,
+    #[allow(dead_code)]
     summary_parser: IncrementalJsonParser,
+    #[allow(dead_code)]
     current_field: Option<String>,
     thought: String,
     content: String,

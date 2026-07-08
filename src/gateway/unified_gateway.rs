@@ -90,6 +90,7 @@ pub struct UnifiedGateway {
     client: Client,
     model_mapping: RwLock<HashMap<String, String>>,
     default_model: RwLock<String>,
+    #[allow(dead_code)]
     timeout_seconds: u64,
     max_retries: u32,
     retry_base_ms: u64,

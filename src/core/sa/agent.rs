@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::broadcast;
-use tracing::info;
 
 use crate::core::agent_runner::AgentRunner;
 use crate::core::event_bus::{Event, EventBus};
@@ -12,18 +11,21 @@ use crate::jsonld::type_router::TypeRouter;
 use crate::memory::l2_blackboard::Blackboard;
 use crate::memory::prefetch_engine::PrefetchEngine;
 use crate::memory::scheduler::MemoryScheduler;
+use crate::memory::hyperspace_store::HyperspaceStore;
 use crate::memory::EmbeddingService;
 use crate::perception::proactive_engine::ProactiveEngine;
 use crate::templates::template_engine::TemplateEngine;
 use crate::tools::sharing::SharingProtocol;
 use crate::tools::skill_registry::SkillRegistry;
-use crate::CoreError;
 
 use super::types::CycleState;
 
 pub struct SupervisorAgent {
     pub(super) runner: Arc<AgentRunner>,
+    /// Planned: used for SA prompt generation and skill discovery.
+    #[allow(dead_code)]
     pub(super) template_engine: Arc<TemplateEngine>,
+    #[allow(dead_code)]
     pub(super) skills: Arc<SkillRegistry>,
     pub(super) event_bus: Arc<EventBus>,
     pub(super) event_receiver: Option<broadcast::Receiver<Event>>,
@@ -129,6 +131,12 @@ impl SupervisorAgent {
         if let Some(runner) = Arc::get_mut(&mut self.runner) {
             *runner = runner.clone().with_embedder(embedder);
         }
+        self
+    }
+
+    /// Attach HyperspaceStore to the perception engine for semantic experience retrieval.
+    pub fn with_perception_hyperspace(mut self, store: Arc<HyperspaceStore>) -> Self {
+        self.perception.hyperspace = Some(store);
         self
     }
 

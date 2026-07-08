@@ -58,6 +58,7 @@ pub struct ContentStore {
     /// redb database for storing historical versions (path → versioned content).
     version_store: Option<Database>,
     /// Maximum cache size in bytes (approximate).
+    #[allow(dead_code)]
     max_cache_bytes: usize,
 }
 

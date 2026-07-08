@@ -228,6 +228,7 @@ impl Default for MCPToolRegistry {
 }
 
 pub struct MCPServer {
+    #[allow(dead_code)]
     name: String,
     tools: Arc<MCPToolRegistry>,
     resources: RwLock<HashMap<String, MCPResource>>,

@@ -10,6 +10,7 @@ use super::{GraphifyResult, SchemaAnalysis};
 
 pub struct GraphifyEngine {
     store: KnowledgeGraphStore,
+    #[allow(dead_code)]
     max_entities: usize,
 }
 

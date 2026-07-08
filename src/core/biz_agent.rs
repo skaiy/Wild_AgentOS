@@ -47,7 +47,9 @@ pub struct BizAgent {
     pub agent_md: String,
     pub config: AgentConfig,
     runner: Arc<AgentRunner>,
+    #[allow(dead_code)]
     session: Option<L1Session>,
+    #[allow(dead_code)]
     sub_agents: Vec<BizAgent>,
     sub_results: Vec<TaskResult>,
 }

@@ -205,8 +205,7 @@ impl CodeCliEngine {
 
         // Extract the ToolExecutor's KGS, create FusedRootCauseEngine, and upgrade the runner
         let inner_store = {
-            let executor = runner.tool_executor.read()
-                .expect("tool_executor RwLock poisoned");
+            let executor = runner.tool_executor.read();
             executor.knowledge_graph_store()
                 .read().expect("kg_store RwLock poisoned")
                 .store_arc().clone()
@@ -282,7 +281,7 @@ impl CodeCliEngine {
 
         // 注入 WorkspaceMonitor 到 ToolExecutor
         if let Some(ref wm) = workspace_monitor {
-            let mut executor = runner.tool_executor.write().expect("tool_executor RwLock poisoned");
+            let mut executor = runner.tool_executor.write();
             executor.set_workspace_monitor(wm.clone());
         }
 

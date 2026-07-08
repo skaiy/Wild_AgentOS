@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::core::agent_instance::{AgentInstance, AgentRole};
 use crate::core::sa::PlanStep;
@@ -22,10 +22,7 @@ impl super::AgentRunner {
         };
 
         let tools_list = if step.tools_allowed.is_empty() {
-            self.tool_executor.read().unwrap_or_else(|e| {
-                warn!("ToolExecutor read lock poisoned: {}", e);
-                e.into_inner()
-            }).list_tools(&role.to_string())
+            self.tool_executor.read().list_tools(&role.to_string())
         } else {
             step.tools_allowed.clone()
         };
@@ -134,6 +131,9 @@ impl super::AgentRunner {
         agent_md
     }
 
+    /// Create an L1 session for the given agent/task.
+    /// Planned for SA integration — currently unused.
+    #[allow(dead_code)]
     pub(super) async fn create_session(&self, agent: &AgentInstance, ctx: &TaskContext) -> L1Session {
         self.memory_manager.lock().await.create_session(
             &agent.agent_id,
@@ -289,10 +289,7 @@ impl super::AgentRunner {
     ) -> String {
         let role_name = role.to_string();
         let role_lower = role_name.to_lowercase();
-        let tools_list = self.tool_executor.read().unwrap_or_else(|e| {
-            warn!("ToolExecutor read lock poisoned (build_system_prompt): {}", e);
-            e.into_inner()
-        }).list_tools(&role_name);
+        let tools_list = self.tool_executor.read().list_tools(&role_name);
 
         let supports_reasoning = self.gateway.supports_native_reasoning(model);
         let _format_constraint = if supports_reasoning {
@@ -467,10 +464,7 @@ impl super::AgentRunner {
 
     pub(super) fn build_readable_tool_menu(&self, role: &AgentRole) -> String {
         let role_str = role.to_string();
-        let tool_defs = self.tool_executor.read().unwrap_or_else(|e| {
-            warn!("ToolExecutor read lock poisoned (build_readable_tool_menu): {}", e);
-            e.into_inner()
-        }).tool_definitions_for_role(&role_str);
+        let tool_defs = self.tool_executor.read().tool_definitions_for_role(&role_str);
 
         if tool_defs.is_empty() {
             return String::new();
