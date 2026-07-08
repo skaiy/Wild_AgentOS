@@ -138,6 +138,7 @@ pub(super) fn get_action_handler(action: &InterventionAction) -> Option<ActionHa
 }
 
 /// Extract JSON from LLM output
+#[allow(dead_code)]
 fn extract_json(content: &str) -> &str {
     if content.starts_with('{') {
         content
@@ -153,8 +154,10 @@ fn extract_json(content: &str) -> &str {
 }
 
 /// Supplementary input action registry
+#[allow(dead_code)]
 type SupplementaryInputHandler = Box<dyn for<'a> Fn(&'a SupervisorAgent, SupplementaryInputAction, ActionParams, &'a str) -> Pin<Box<dyn Future<Output = Result<(), CoreError>> + Send + 'a>> + Send>;
 
+#[allow(dead_code)]
 fn get_supplementary_handler(action: &SupplementaryInputAction) -> Option<SupplementaryInputHandler> {
     match action {
         SupplementaryInputAction::AddContext => Some(Box::new(|sa, _action, _params, supplement| {

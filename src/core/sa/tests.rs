@@ -3,9 +3,16 @@ use super::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
     use tempfile::tempdir;
-    use crate::memory::memory_manager::MemoryManager;
+    use crate::core::agent_instance::AgentRole;
+    use crate::core::agent_runner::AgentRunner;
+    use crate::core::event_bus::EventBus;
     use crate::gateway::unified_gateway::UnifiedGateway;
+    use crate::memory::memory_manager::MemoryManager;
+    use crate::templates::template_engine::TemplateEngine;
+    use crate::tools::skill_registry::SkillRegistry;
 
     fn make_sa_with_tempdir() -> (SupervisorAgent, tempfile::TempDir) {
         let dir = tempdir().unwrap();
@@ -24,6 +31,7 @@ mod tests {
             default_model: "deepseek-v4-flash".to_string(),
             timeout_seconds: 30,
             max_retries: 3,
+            retry_base_ms: 500,
             model_mapping: HashMap::new(),
         };
         let gateway = Arc::new(UnifiedGateway::new(&settings).unwrap());

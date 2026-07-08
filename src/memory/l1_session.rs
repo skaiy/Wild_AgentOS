@@ -34,7 +34,7 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 ///
 /// Enhancement: Added hard threshold filtering (relevance_threshold + safe_window_seconds),
 /// entries with low relevance beyond the safe window are directly evicted without score ranking.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct EvictionConfig {
     pub recency_weight: f64,
     pub relevance_weight: f64,

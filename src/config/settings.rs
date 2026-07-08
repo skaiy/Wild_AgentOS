@@ -35,7 +35,24 @@ pub struct WorkspaceSettings {
     pub watch_enabled: bool,
     /// Content cache maximum bytes
     pub content_store_max_bytes: usize,
+    /// LRU content cache capacity (number of files).
+    #[serde(default = "default_content_cache_capacity")]
+    pub content_cache_capacity: usize,
+    /// Polling interval in ms (fallback when native watching unavailable).
+    #[serde(default = "default_poll_interval_ms")]
+    pub poll_interval_ms: u64,
+    /// Debounce window in ms for file events.
+    #[serde(default = "default_debounce_ms")]
+    pub debounce_ms: u64,
+    /// Maximum debounce wait in ms.
+    #[serde(default = "default_max_debounce_wait_ms")]
+    pub max_debounce_wait_ms: u64,
 }
+
+fn default_content_cache_capacity() -> usize { 1000 }
+fn default_poll_interval_ms() -> u64 { 5000 }
+fn default_debounce_ms() -> u64 { 500 }
+fn default_max_debounce_wait_ms() -> u64 { 5000 }
 
 impl Default for WorkspaceSettings {
     fn default() -> Self {
@@ -57,6 +74,10 @@ impl Default for WorkspaceSettings {
             ],
             watch_enabled: true,
             content_store_max_bytes: 64 * 1024 * 1024,
+            content_cache_capacity: default_content_cache_capacity(),
+            poll_interval_ms: default_poll_interval_ms(),
+            debounce_ms: default_debounce_ms(),
+            max_debounce_wait_ms: default_max_debounce_wait_ms(),
         }
     }
 }
@@ -68,8 +89,12 @@ pub struct GatewaySettings {
     pub default_model: String,
     pub timeout_seconds: u64,
     pub max_retries: u32,
+    #[serde(default = "default_retry_base_ms")]
+    pub retry_base_ms: u64,
     pub model_mapping: std::collections::HashMap<String, String>,
 }
+
+fn default_retry_base_ms() -> u64 { 500 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct MemorySettings {
@@ -93,6 +118,24 @@ pub struct L1Settings {
     pub max_tokens: usize,
     #[serde(default)]
     pub max_memory_mb: u64,
+    /// Override default L1 eviction recency weight (None = role-specific default).
+    #[serde(default)]
+    pub eviction_recency_weight: Option<f64>,
+    /// Override default L1 eviction relevance weight.
+    #[serde(default)]
+    pub eviction_relevance_weight: Option<f64>,
+    /// Override default L1 eviction cost weight.
+    #[serde(default)]
+    pub eviction_cost_weight: Option<f64>,
+    /// Override default L1 eviction relevance threshold.
+    #[serde(default)]
+    pub eviction_relevance_threshold: Option<f64>,
+    /// Override default L1 eviction safe window in seconds.
+    #[serde(default)]
+    pub eviction_safe_window_seconds: Option<i64>,
+    /// Override default L1 eviction beta fusion weight.
+    #[serde(default)]
+    pub eviction_beta: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -147,9 +190,41 @@ pub struct AgentSettings {
     pub template_path: Option<String>,
     #[serde(default = "default_max_pdca_cycles")]
     pub max_pdca_cycles: u32,
+    /// Maximum number of concurrently active methodologies (MethodologyGate).
+    #[serde(default = "default_max_active")]
+    pub max_active: usize,
+    /// TimelineStore: take a full snapshot every N mutations.
+    #[serde(default = "default_snapshot_frequency")]
+    pub snapshot_frequency: u64,
+    /// TimelineStore: maximum full snapshots to retain.
+    #[serde(default = "default_max_full_snapshots")]
+    pub max_full_snapshots: usize,
+    /// L3 ProjectionEngine maximum projection size.
+    #[serde(default = "default_max_projection_size")]
+    pub max_projection_size: usize,
+    /// SA intervention/LLM execution timeout in seconds (default 30).
+    #[serde(default = "default_sa_execution_timeout_secs")]
+    pub sa_execution_timeout_secs: u64,
+    /// Tool executor HTTP call timeout in seconds (default 60).
+    #[serde(default = "default_tool_timeout_secs")]
+    pub tool_timeout_secs: u64,
+    /// MCP client call timeout in seconds (default 30).
+    #[serde(default = "default_mcp_timeout_secs")]
+    pub mcp_timeout_secs: u64,
+    /// Embedding service call timeout in seconds (default 30).
+    #[serde(default = "default_embedding_timeout_secs")]
+    pub embedding_timeout_secs: u64,
 }
 
 fn default_max_pdca_cycles() -> u32 { 7 }
+fn default_max_active() -> usize { 20 }
+fn default_snapshot_frequency() -> u64 { 1000 }
+fn default_max_full_snapshots() -> usize { 10 }
+fn default_max_projection_size() -> usize { 500 }
+fn default_sa_execution_timeout_secs() -> u64 { 30 }
+fn default_tool_timeout_secs() -> u64 { 60 }
+fn default_mcp_timeout_secs() -> u64 { 30 }
+fn default_embedding_timeout_secs() -> u64 { 30 }
 
 impl Default for AgentSettings {
     fn default() -> Self {
@@ -162,6 +237,14 @@ impl Default for AgentSettings {
             event_bus_capacity: 100,
             template_path: None,
             max_pdca_cycles: 7,
+            max_active: 20,
+            snapshot_frequency: 1000,
+            max_full_snapshots: 10,
+            max_projection_size: 500,
+            sa_execution_timeout_secs: 30,
+            tool_timeout_secs: 60,
+            mcp_timeout_secs: 30,
+            embedding_timeout_secs: 30,
         }
     }
 }
@@ -790,7 +873,13 @@ impl Default for Settings {
                 default_model: String::new(),
                 timeout_seconds: 60,
                 max_retries: 3,
-                model_mapping: std::collections::HashMap::new(),
+                retry_base_ms: 500,
+                model_mapping: std::collections::HashMap::from([
+                    ("planning".to_string(), "deepseek-v4-pro".to_string()),
+                    ("execution".to_string(), "deepseek-v4-pro".to_string()),
+                    ("analysis".to_string(), "deepseek-v4-flash".to_string()),
+                    ("default".to_string(), "deepseek-v4-flash".to_string()),
+                ]),
             },
             memory: MemorySettings {
                 l0: L0Settings {
@@ -803,6 +892,12 @@ impl Default for Settings {
                     compression_threshold: 50,
                     max_tokens: 4096,
                     max_memory_mb: 0,
+                    eviction_recency_weight: None,
+                    eviction_relevance_weight: None,
+                    eviction_cost_weight: None,
+                    eviction_relevance_threshold: None,
+                    eviction_safe_window_seconds: None,
+                    eviction_beta: None,
                 },
                 l2: L2Settings {
                     max_node_size: 5_242_880,
@@ -838,16 +933,7 @@ impl Default for Settings {
                 max_iterations_before_alert: 10,
                 error_rate_threshold: 0.5,
             },
-            agents: AgentSettings {
-                max_iterations: 10,
-                parallel_execution: true,
-                max_parallel_agents: 10,
-                timeout_seconds: 300,
-                api_timeout_seconds: 120,
-                event_bus_capacity: 100,
-                template_path: None,
-                max_pdca_cycles: 7,
-            },
+            agents: AgentSettings::default(),
             api: ApiSettings {
                 grpc_addr: "0.0.0.0:50051".to_string(),
                 http_addr: "0.0.0.0:8080".to_string(),
@@ -1005,5 +1091,90 @@ mod tests {
         assert!(r.supports_vision);
         assert!(!r.supports_tools); // 默认 false
         assert_eq!(r.modalities, vec!["chat".to_string(), "vision".to_string()]);
+    }
+
+    #[test]
+    fn test_gateway_settings_deserializes_retry_base_ms() {
+        let yaml = r#"
+            base_url: "https://api.deepseek.com"
+            api_key: "sk-test"
+            default_model: "deepseek-v4-flash"
+            timeout_seconds: 300
+            max_retries: 3
+            retry_base_ms: 750
+            model_mapping: {}
+        "#;
+        let cfg = Config::builder()
+            .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+            .build()
+            .unwrap();
+        let settings: GatewaySettings = cfg.try_deserialize().unwrap();
+        assert_eq!(settings.retry_base_ms, 750);
+    }
+
+    #[test]
+    fn test_gateway_settings_retry_base_ms_default() {
+        let yaml = r#"
+            base_url: "https://api.deepseek.com"
+            api_key: "sk-test"
+            default_model: "deepseek-v4-flash"
+            timeout_seconds: 300
+            max_retries: 3
+            model_mapping: {}
+        "#;
+        let cfg = Config::builder()
+            .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+            .build()
+            .unwrap();
+        let settings: GatewaySettings = cfg.try_deserialize().unwrap();
+        // retry_base_ms omitted -> serde default 500
+        assert_eq!(settings.retry_base_ms, 500);
+    }
+
+    #[test]
+    fn test_agent_settings_deserializes_tunables() {
+        let yaml = r#"
+            max_iterations: 10
+            parallel_execution: true
+            max_parallel_agents: 10
+            timeout_seconds: 300
+            api_timeout_seconds: 120
+            event_bus_capacity: 100
+            max_pdca_cycles: 7
+            max_active: 42
+            snapshot_frequency: 2000
+            max_full_snapshots: 5
+            max_projection_size: 1024
+        "#;
+        let cfg = Config::builder()
+            .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+            .build()
+            .unwrap();
+        let settings: AgentSettings = cfg.try_deserialize().unwrap();
+        assert_eq!(settings.max_active, 42);
+        assert_eq!(settings.snapshot_frequency, 2000);
+        assert_eq!(settings.max_full_snapshots, 5);
+        assert_eq!(settings.max_projection_size, 1024);
+    }
+
+    #[test]
+    fn test_agent_settings_tunables_default() {
+        let yaml = r#"
+            max_iterations: 10
+            parallel_execution: true
+            max_parallel_agents: 10
+            timeout_seconds: 300
+            api_timeout_seconds: 120
+            event_bus_capacity: 100
+        "#;
+        let cfg = Config::builder()
+            .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+            .build()
+            .unwrap();
+        let settings: AgentSettings = cfg.try_deserialize().unwrap();
+        assert_eq!(settings.max_active, 20);
+        assert_eq!(settings.snapshot_frequency, 1000);
+        assert_eq!(settings.max_full_snapshots, 10);
+        assert_eq!(settings.max_projection_size, 500);
     }
 }

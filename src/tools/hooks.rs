@@ -222,6 +222,7 @@ impl LoggingHook {
 }
 
 pub struct TimingHook {
+    #[allow(dead_code)]
     timings: Arc<RwLock<HashMap<String, u64>>>,
 }
 
@@ -273,8 +274,11 @@ impl TimingHook {
 }
 
 pub struct RateLimitHook {
+    #[allow(dead_code)]
     max_calls: usize,
+    #[allow(dead_code)]
     window_seconds: u64,
+    #[allow(dead_code)]
     calls: Arc<RwLock<HashMap<String, Vec<u64>>>>,
 }
 
@@ -309,6 +313,7 @@ impl RateLimitHook {
 }
 
 pub struct MetricsHook {
+    #[allow(dead_code)]
     metrics: Arc<RwLock<HashMap<String, Vec<Value>>>>,
 }
 

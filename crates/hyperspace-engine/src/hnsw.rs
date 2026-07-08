@@ -93,7 +93,11 @@ pub struct IncrementalHNSW {
     max_layer: AtomicUsize,
     config: HnswConfig,
     generation: AtomicUsize,
-    visited_gen: Vec<usize>,
+    /// Per-node visited generation tag.
+    /// `Vec<AtomicUsize>` rather than `Vec<usize>` so that the generation-based
+    /// visited check is genuinely lock-free — concurrent readers (via e.g. RwLock)
+    /// can race-free compare-and-mark without a mutex.
+    visited_gen: Vec<AtomicUsize>,
 }
 
 impl IncrementalHNSW {
@@ -131,7 +135,7 @@ impl IncrementalHNSW {
         }
         if id_u >= self.visited_gen.len() {
             self.visited_gen
-                .resize(self.visited_gen.len().max(id_u + 1).max(1024), 0);
+                .resize_with(self.visited_gen.len().max(id_u + 1).max(1024), || AtomicUsize::new(0));
         }
 
         let ep = self.entry_point.load(Ordering::Relaxed);
@@ -276,10 +280,10 @@ impl IncrementalHNSW {
             for &nid in &self.get_neighbors(current, layer) {
                 let nu = nid as usize;
                 if nu < self.visited_gen.len() {
-                    if self.visited_gen[nu] == gen {
+                    if self.visited_gen[nu].load(Ordering::Relaxed) == gen {
                         continue;
                     }
-                    self.visited_gen[nu] = gen;
+                    self.visited_gen[nu].store(gen, Ordering::Relaxed);
                 }
                 let d = self.metric.distance(
                     query_node,
@@ -404,10 +408,10 @@ impl IncrementalHNSW {
             for &nid in &neighbors {
                 let nu = nid as usize;
                 if nu < self.visited_gen.len() {
-                    if self.visited_gen[nu] == gen {
+                    if self.visited_gen[nu].load(Ordering::Relaxed) == gen {
                         continue;
                     }
-                    self.visited_gen[nu] = gen;
+                    self.visited_gen[nu].store(gen, Ordering::Relaxed);
                 }
                 let d = self.metric.distance(query, &self.nodes[nid as usize].as_ref().unwrap().vector);
                 let pos = c
@@ -550,7 +554,7 @@ impl IncrementalHNSW {
         self.fix_max_layer();
         // Resize visited_gen
         self.visited_gen
-            .resize(self.visited_gen.len().max(self.nodes.len()).max(1024), 0);
+            .resize_with(self.visited_gen.len().max(self.nodes.len()).max(1024), || AtomicUsize::new(0));
     }
 }
 

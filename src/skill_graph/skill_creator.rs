@@ -669,6 +669,7 @@ Search the internet for information
             default_model: "test".to_string(),
             timeout_seconds: 30,
             max_retries: 1,
+            retry_base_ms: 500,
             model_mapping: Default::default(),
         }).unwrap());
         let graph_store = Arc::new(SkillGraphStore::new());
@@ -728,6 +729,7 @@ Search the internet for information
             default_model: "test".to_string(),
             timeout_seconds: 30,
             max_retries: 1,
+            retry_base_ms: 500,
             model_mapping: Default::default(),
         }).unwrap());
         let graph_store = Arc::new(SkillGraphStore::new());

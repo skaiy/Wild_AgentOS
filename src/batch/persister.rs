@@ -14,6 +14,7 @@ use crate::knowledge_graph::types::{RdfQuad, RdfValue};
 
 pub struct KnowledgePersister {
     kg_store: Option<Arc<KnowledgeGraphStore>>,
+    #[allow(dead_code)]
     memory_manager: Option<Arc<tokio::sync::Mutex<MemoryManager>>>,
     l0_store: Option<Arc<L0Store>>,
 }

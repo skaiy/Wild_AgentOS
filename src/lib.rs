@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub mod core;
 pub mod gateway;
 pub mod memory;
@@ -21,8 +19,17 @@ pub mod root_cause;
 pub mod blob;
 
 pub mod causal;
-pub mod temporal;
-pub mod gnn;
+/// Skill graph versioned snapshots & temporal hyperedges.
+///
+/// **Experimental** — API may change without notice.
+/// Renamed from `temporal` to `snapshots` for clarity.
+pub mod snapshots;
+
+/// Topological feature extraction & neighborhood aggregation.
+///
+/// **Experimental** — API may change without notice.
+/// Renamed from `gnn` to `graph_features` for clarity.
+pub mod graph_features;
 pub mod graph_backend;
 
 #[cfg(feature = "ontology")]

@@ -12,7 +12,9 @@ use crate::{CoreConfig, CoreError};
 
 struct PrefetchTask {
     entity_iri: String,
+    #[allow(dead_code)]
     intent: String,
+    #[allow(dead_code)]
     priority: f64,
 }
 

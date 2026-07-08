@@ -472,6 +472,15 @@ pub struct SkillGraphNode {
     pub security_info: Option<SkillSecurityInfo>,
     pub mcp_server_id: Option<String>,
     pub storage_tier: StorageTier,
+    /// When this skill node was created
+    #[serde(default = "Utc::now")]
+    pub created_at: DateTime<Utc>,
+    /// When this skill node was last modified
+    #[serde(default = "Utc::now")]
+    pub updated_at: DateTime<Utc>,
+    /// When this skill node was last used/activated, None if never used
+    #[serde(default)]
+    pub last_used_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -485,6 +494,7 @@ pub enum StorageTier {
 
 impl SkillGraphNode {
     pub fn new(skill_iri: &str, name: &str, description: &str) -> Self {
+        let now = Utc::now();
         Self {
             skill_iri: skill_iri.to_string(),
             name: name.to_string(),
@@ -501,6 +511,9 @@ impl SkillGraphNode {
             security_info: None,
             mcp_server_id: None,
             storage_tier: StorageTier::default(),
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
         }
     }
 
@@ -542,6 +555,18 @@ impl SkillGraphNode {
 
     pub fn with_storage_tier(mut self, tier: StorageTier) -> Self {
         self.storage_tier = tier;
+        self
+    }
+
+    /// Mark this skill as just used (sets `last_used_at` to now).
+    pub fn with_last_used(mut self) -> Self {
+        self.last_used_at = Some(Utc::now());
+        self
+    }
+
+    /// Update `updated_at` to now (used after modifications / re-index).
+    pub fn with_updated_at(mut self) -> Self {
+        self.updated_at = Utc::now();
         self
     }
 
@@ -768,6 +793,9 @@ pub struct MOCNode {
     pub skill_count: u32,
     pub entry_points: Vec<String>,
     pub sub_categories: Vec<String>,
+    /// When this MOC was created
+    #[serde(default = "Utc::now")]
+    pub created_at: DateTime<Utc>,
 }
 
 impl MOCNode {
@@ -779,6 +807,7 @@ impl MOCNode {
             skill_count: 0,
             entry_points: Vec::new(),
             sub_categories: Vec::new(),
+            created_at: Utc::now(),
         }
     }
 
@@ -1049,6 +1078,9 @@ pub struct Hyperedge {
     pub composition_type: CompositionType,
     pub weight: f32,
     pub metadata: HashMap<String, String>,
+    /// When this hyperedge was created
+    #[serde(default = "Utc::now")]
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1071,6 +1103,7 @@ impl Hyperedge {
             composition_type: CompositionType::Conjunction,
             weight: 1.0,
             metadata: HashMap::new(),
+            created_at: Utc::now(),
         }
     }
 

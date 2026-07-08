@@ -1,4 +1,4 @@
-use std::sync::RwLock;
+use parking_lot::RwLock;
 use tracing::debug;
 
 use crate::config::settings::ToolResultAgingSettings;
@@ -84,8 +84,7 @@ impl ToolResultAging {
                 let micro_tool_name = format!("read_full_result_{}", call_id);
                 let has_micro_tool = tool_executor
                     .read()
-                    .ok()
-                    .and_then(|exe| exe.try_get_handler(&micro_tool_name))
+                    .try_get_handler(&micro_tool_name)
                     .is_some();
 
                 if has_micro_tool {

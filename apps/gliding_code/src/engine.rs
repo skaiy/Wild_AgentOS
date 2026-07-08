@@ -1,17 +1,28 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
+use wild_agent_os_core::causal::engine::CausalEngine;
+use wild_agent_os_core::causal::fused::FusedRootCauseEngine;
+use wild_agent_os_core::causal::store::CausalModelStore;
 use wild_agent_os_core::config::{AgentSettings, McpServerConfig, McpStdioServerConfig};
 use wild_agent_os_core::core::agent_runner::TaskResult;
 use wild_agent_os_core::core::event_bus::{EventBus, Event};
 use wild_agent_os_core::core::sa::SupervisorAgent;
+use wild_agent_os_core::memory::l1_session::EvictionConfig;
 use wild_agent_os_core::gateway::UnifiedGateway;
+use wild_agent_os_core::graph_features::features::FeatureExtractor;
+use wild_agent_os_core::graph_backend::{GraphBackend, PetgraphBackend, SkillGraphSnapshotBackend};
+use wild_agent_os_core::knowledge_graph::store::KnowledgeGraphStore;
 use wild_agent_os_core::memory::embedding_service::{create_embedding_service_from_config, FallbackEmbeddingService};
 use wild_agent_os_core::memory::hyperspace_store::HyperspaceStore;
 use wild_agent_os_core::memory::l0_store::L0Store;
 use wild_agent_os_core::memory::l2_blackboard::Blackboard;
 use wild_agent_os_core::memory::l3_projection::ProjectionEngine;
 use wild_agent_os_core::memory::memory_manager::MemoryManager;
+use wild_agent_os_core::skill_graph::discovery::SkillDiscoveryEngine;
+use wild_agent_os_core::skill_graph::graph_algorithms::SkillGraphAlgorithms;
+use wild_agent_os_core::skill_graph::graph_store::SkillGraphStore;
+use wild_agent_os_core::snapshots::timeline::TimelineStore;
 use wild_agent_os_core::templates::template_engine::TemplateEngine;
 use wild_agent_os_core::tools::mcp_client::McpClient;
 use wild_agent_os_core::tools::skill_registry::SkillRegistry;
@@ -47,6 +58,16 @@ pub struct CodeCliEngine {
     skills: Arc<SkillRegistry>,
     mcp_client: Option<McpClient>,
     workspace_monitor: Option<Arc<WorkspaceMonitor>>,
+    /// Skill Graph Store — cognitive network
+    skill_graph: Arc<SkillGraphStore>,
+    /// Skill discovery engine (semantic search)
+    discovery_engine: Arc<SkillDiscoveryEngine>,
+    /// Feature extractor (GNN topological features)
+    feature_extractor: Arc<FeatureExtractor>,
+    /// Causal engine (Bayesian inference on skill graph)
+    causal_engine: Arc<CausalEngine>,
+    /// Timeline store (temporal event recording)
+    timeline: Arc<TimelineStore>,
 }
 
 impl CodeCliEngine {
@@ -82,11 +103,16 @@ impl CodeCliEngine {
                 .map_err(|e| anyhow::anyhow!("Blackboard 创建失败: {}", e))?,
         );
 
+        // Load agent-os config (config.yaml + AGENT_OS_* env vars) for tunable
+        // parameters; fall back to Defaults when no config file is present.
+        let loaded_settings = wild_agent_os_core::config::Settings::load().ok();
+        let settings = loaded_settings.clone().unwrap_or_default();
+
         // Initialize HyperspaceEngine-backed vector store for semantic search
         let embed: Arc<dyn wild_agent_os_core::memory::embedding_service::EmbeddingService> =
-            match wild_agent_os_core::config::Settings::load() {
-                Ok(settings) => create_embedding_service_from_config(&settings.embedding),
-                Err(_) => Arc::new(FallbackEmbeddingService::new()),
+            match &loaded_settings {
+                Some(s) => create_embedding_service_from_config(&s.embedding, s.agents.embedding_timeout_secs),
+                None => Arc::new(FallbackEmbeddingService::new()),
             };
         let hyperspace_path = config.data_dir.as_ref()
             .map(|d| format!("{}/hyperspace", d))
@@ -100,12 +126,38 @@ impl CodeCliEngine {
             .map_err(|e| anyhow::anyhow!("HyperspaceStore 初始化失败: {}", e))?,
         );
 
+        let agent_settings = settings.agents.clone();
+
         let proj = Arc::new(ProjectionEngine::with_vector_store(
             l2.clone(),
-            500,
+            agent_settings.max_projection_size,
             Some(vector_store),
         ));
-        let core_config = CoreConfig::default();
+        let core_config = CoreConfig {
+            max_node_size: settings.memory.l2.max_node_size,
+            max_projection_size: agent_settings.max_projection_size,
+            l0_storage_path: settings.memory.l0.path.clone(),
+            event_buffer_size: settings.agents.event_bus_capacity,
+            enable_metrics: true,
+            eviction_config: {
+                let l1 = &settings.memory.l1;
+                if l1.eviction_recency_weight.is_some()
+                    || l1.eviction_relevance_weight.is_some()
+                    || l1.eviction_cost_weight.is_some()
+                {
+                    Some(EvictionConfig {
+                        recency_weight: l1.eviction_recency_weight.unwrap_or(0.30),
+                        relevance_weight: l1.eviction_relevance_weight.unwrap_or(0.40),
+                        cost_weight: l1.eviction_cost_weight.unwrap_or(0.30),
+                        relevance_threshold: l1.eviction_relevance_threshold.unwrap_or(0.3),
+                        safe_window_seconds: l1.eviction_safe_window_seconds.unwrap_or(300),
+                        beta: l1.eviction_beta.unwrap_or(0.7),
+                    })
+                } else {
+                    None
+                }
+            },
+        };
         let mm = Arc::new(tokio::sync::Mutex::new(MemoryManager::new(
             l0.clone(),
             l2.clone(),
@@ -123,32 +175,96 @@ impl CodeCliEngine {
 
         let skills = Arc::new(SkillRegistry::new());
         let skills_for_engine = skills.clone();
-        let agent_settings = AgentSettings::default();
 
         let workspace_root = std::path::PathBuf::from(&config.workspace);
-        let runner = Arc::new(wild_agent_os_core::core::agent_runner::AgentRunner::new(
+        // ── Skill Graph Store — cognitive network ──
+        let skill_graph = Arc::new(
+            SkillGraphStore::new()
+                .with_blackboard(l2.clone())
+                .with_l0_store(l0.clone()),
+        );
+        let skill_graph_algorithms = Arc::new(SkillGraphAlgorithms::from_store(&skill_graph));
+
+        // ── PetgraphBackend (structural dimension for FusedRootCauseEngine) ──
+        let graph_backend: Arc<dyn GraphBackend> = Arc::new(PetgraphBackend::new(skill_graph.clone()));
+
+        // ── AgentRunner (without fused engine — upgraded below after kg_store is available) ──
+        let mut runner = wild_agent_os_core::core::agent_runner::AgentRunner::new(
             gateway,
             skills.clone(),
             l2.clone(),
             l0.clone(),
             mm_for_runner,
             tmpl.clone(),
-            agent_settings,
+            agent_settings.clone(),
         ).with_prompt_loader(wild_agent_os_core::core::prompt_loader::PromptLoader::new(
             Default::default(),
             tmpl.clone(),
-        )).with_workspace_root(workspace_root.clone()));
+        )).with_workspace_root(workspace_root.clone());
+
+        // Extract the ToolExecutor's KGS, create FusedRootCauseEngine, and upgrade the runner
+        let inner_store = {
+            let executor = runner.tool_executor.read();
+            executor.knowledge_graph_store()
+                .read().expect("kg_store RwLock poisoned")
+                .store_arc().clone()
+        };
+        {
+            let fused_kg = Arc::new(
+                KnowledgeGraphStore::with_shared_store(inner_store)
+                    .expect("Failed to create shared KG Store for FusedRootCauseEngine"),
+            );
+            let fused_rce = FusedRootCauseEngine::new(
+                Some(graph_backend.clone()),
+                Some(fused_kg),
+            );
+            runner = runner.with_fused_root_cause_engine(fused_rce);
+        }
+
+        // ── Skill Discovery Engine (semantic skill search via Hyperspace) ──
+        let discovery_engine = Arc::new(
+            SkillDiscoveryEngine::new(skill_graph.clone()),
+        );
+
+        // ── FeatureExtractor (GNN topological features for causal analysis) ──
+        use wild_agent_os_core::graph_backend::SkillGraphFeatureGraph;
+        let feature_graph = SkillGraphFeatureGraph::new(
+            skill_graph.clone(),
+            skill_graph_algorithms.clone(),
+        );
+        let feature_extractor = Arc::new(FeatureExtractor::new(Arc::new(feature_graph)));
+
+        // ── CausalEngine (Bayesian causal inference on skill graph) ──
+        let causal_model_store = Arc::new(CausalModelStore::new());
+        let causal_engine = Arc::new(CausalEngine::new(
+            causal_model_store,
+            graph_backend.clone(),
+        ));
+
+        // ── TimelineStore (temporal event recording for graph mutations) ──
+        let timeline = Arc::new(TimelineStore::new(
+            agent_settings.snapshot_frequency,
+            agent_settings.max_full_snapshots,
+        ));
 
         let event_bus = Arc::new(EventBus::new(100));
 
-        // 初始化 WorkspaceMonitor
+        // TimelineStore EventBus subscription deferred — requires a Tokio runtime.
+        // Subscribe via start_async_components() in process_task().
+
+        // 初始化 WorkspaceMonitor — 从 settings.workspace 读取配置
         let workspace_monitor: Option<Arc<WorkspaceMonitor>> = {
             let ws_config = WorkspaceMonitorConfig {
                 workspace_root,
+                content_store_max_bytes: settings.workspace.content_store_max_bytes,
+                content_cache_capacity: settings.workspace.content_cache_capacity,
+                watch_enabled: settings.workspace.watch_enabled,
+                poll_interval_ms: settings.workspace.poll_interval_ms,
+                debounce_ms: settings.workspace.debounce_ms,
+                max_debounce_wait_ms: settings.workspace.max_debounce_wait_ms,
+                exclude_patterns: settings.workspace.exclude_patterns.clone(),
                 ..Default::default()
             };
-            // 同步上下文中初始化：WatchEngine 原生监听（inotify 线程）无需 tokio，
-            // 异步消费者推迟到 start_async_components 在 runtime 中调用。
             match WorkspaceMonitor::initialize(ws_config, None, Some(event_bus.clone())) {
                 Ok(ws) => {
                     ws.register_hooks(&runner.hook_manager);
@@ -164,13 +280,14 @@ impl CodeCliEngine {
 
         // 注入 WorkspaceMonitor 到 ToolExecutor
         if let Some(ref wm) = workspace_monitor {
-            let mut executor = runner.tool_executor.write().expect("tool_executor RwLock poisoned");
+            let mut executor = runner.tool_executor.write();
             executor.set_workspace_monitor(wm.clone());
         }
 
         // 完成 AgentRunner 初始化接线：perception_store → WorkspaceMonitor
         runner.finalize_setup();
 
+        let runner = Arc::new(runner);
         let l2_bb = l2.clone();
         let sa = SupervisorAgent::with_pdca_cycles(
             runner,
@@ -180,14 +297,15 @@ impl CodeCliEngine {
             config.max_iterations,
             config.max_pdca_cycles,
         )
-        .with_memory(Some(l2), None, None);
+        .with_memory(Some(l2), None, None)
+        .with_execution_timeout(agent_settings.sa_execution_timeout_secs);
 
         let (prompt_tokens, completion_tokens, last_prompt_tokens, last_completion_tokens) = sa.token_usage_arcs();
 
         // MCP initialization — register HTTP and stdio servers from config
         let has_mcp = !config.mcp_servers.is_empty() || !config.mcp_stdio_servers.is_empty();
         let mcp_client = if has_mcp {
-            let mut client = McpClient::new();
+            let mut client = McpClient::with_timeout(agent_settings.mcp_timeout_secs);
             for server in &config.mcp_servers {
                 info!(name = %server.name, url = %server.url, "注册 MCP 服务器 (HTTP)");
                 client.register_server(&server.name, &server.url);
@@ -235,6 +353,11 @@ impl CodeCliEngine {
             skills: skills_for_engine,
             mcp_client,
             workspace_monitor,
+            skill_graph,
+            discovery_engine,
+            feature_extractor,
+            causal_engine,
+            timeline,
         })
     }
 
@@ -306,15 +429,31 @@ impl CodeCliEngine {
         let task_id = uuid::Uuid::new_v4().to_string();
         let task_iri = format!("iri://task/{}", task_id);
 
+        // Collect workspace file summary once for both paths
+        let ws_summary = self.workspace_monitor.as_ref()
+            .and_then(|wm| wm.get_file_inventory_summary());
+
         let result = if let Some(ref wf_path) = self.config.workflow_path {
             let wf_jsonld = std::fs::read_to_string(wf_path)
                 .map_err(|e| anyhow::anyhow!("读取工作流文件 '{}' 失败: {}", wf_path, e))?;
             let ctx = wild_agent_os_core::core::agent_runner::TaskContext::new(&task_iri, user_input, self.config.max_iterations)
                 .with_original_task(user_input)
                 .with_workflow(&wf_jsonld);
+            let ctx = if let Some(ref summary) = ws_summary {
+                ctx.with_workspace_summary(summary)
+            } else {
+                ctx
+            };
             self.sa.process_task_with_context(user_input, &task_iri, ctx).await?
         } else {
-            self.sa.process_task(user_input, &task_iri).await?
+            let ctx = wild_agent_os_core::core::agent_runner::TaskContext::new(&task_iri, user_input, self.config.max_iterations)
+                .with_original_task(user_input);
+            let ctx = if let Some(ref summary) = ws_summary {
+                ctx.with_workspace_summary(summary)
+            } else {
+                ctx
+            };
+            self.sa.process_task_with_context(user_input, &task_iri, ctx).await?
         };
 
         info!(
@@ -358,6 +497,31 @@ impl CodeCliEngine {
         self.workspace_monitor.clone()
     }
 
+    /// SkillGraphStore — cognitive network (node/link count, snapshots).
+    pub fn skill_graph(&self) -> Arc<SkillGraphStore> {
+        self.skill_graph.clone()
+    }
+
+    /// SkillDiscoveryEngine — semantic skill search via Hyperspace vectors.
+    pub fn discovery_engine(&self) -> Arc<SkillDiscoveryEngine> {
+        self.discovery_engine.clone()
+    }
+
+    /// FeatureExtractor — GNN topological features for causal analysis.
+    pub fn feature_extractor(&self) -> Arc<FeatureExtractor> {
+        self.feature_extractor.clone()
+    }
+
+    /// CausalEngine — Bayesian causal inference on the skill graph.
+    pub fn causal_engine(&self) -> Arc<CausalEngine> {
+        self.causal_engine.clone()
+    }
+
+    /// TimelineStore — versioned snapshots of skill graph mutations.
+    pub fn timeline(&self) -> Arc<TimelineStore> {
+        self.timeline.clone()
+    }
+
     /// Token counter Arcs (lock-free reads from TUI).
     /// Returns (total_prompt, total_completion, last_prompt, last_completion).
     pub fn token_arcs(&self) -> (Arc<AtomicU64>, Arc<AtomicU64>, Arc<AtomicU64>, Arc<AtomicU64>) {
@@ -388,7 +552,6 @@ impl CodeCliEngine {
             n if n.contains("deepseek") => 65536,
             n if n.contains("gpt-4") || n.contains("gpt4") => 128000,
             n if n.contains("gpt-3.5") => 16385,
-            n if n.contains("claude") => 200000,
             n if n.contains("gemini") => 1_048_576,
             n if n.contains("llama") || n.contains("qwen") => 128000,
             _ => 128000,
@@ -481,8 +644,16 @@ impl CodeCliEngine {
 
         use wild_agent_os_core::core::agent_runner::TaskContext;
 
+        let ws_summary = self.workspace_monitor.as_ref()
+            .and_then(|wm| wm.get_file_inventory_summary());
+
         let ctx = TaskContext::new(task_iri, user_input, self.config.max_iterations)
             .with_original_task(user_input);
+        let ctx = if let Some(ref summary) = ws_summary {
+            ctx.with_workspace_summary(summary)
+        } else {
+            ctx
+        };
         let ctx = if let Some(ref wf_path) = self.config.workflow_path {
             let wf_jsonld = std::fs::read_to_string(wf_path)
                 .map_err(|e| anyhow::anyhow!("读取工作流文件 '{}' 失败: {}", wf_path, e))?;
@@ -508,6 +679,12 @@ impl CodeCliEngine {
             "任务处理完成"
         );
 
+        // Snapshot the skill graph to the TimelineStore after each task,
+        // enabling temporal rollback and traceability of graph evolution.
+        let backend = SkillGraphSnapshotBackend::new(self.skill_graph.clone());
+        self.timeline.create_snapshot(&backend, &format!("task:{}", result.status.as_str()));
+
         Ok(result)
     }
 }
+

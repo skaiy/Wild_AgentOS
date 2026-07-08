@@ -73,6 +73,7 @@ impl CliConfig {
             default_model: model.clone(),
             timeout_seconds: 300,
             max_retries: 2,
+            retry_base_ms: 500,
             model_mapping: HashMap::from([
                 ("planning".to_string(), model.clone()),
                 ("execution".to_string(), model.clone()),
@@ -166,7 +167,7 @@ impl CliConfig {
     }
 
     /// 从 `MCP_STDIO__{NAME}` 环境变量加载 stdio MCP 服务器配置。
-    /// 值必须为 JSON 格式：{"command":"npx","args":["-y","@anthropic/chrome-mcp"],"env":{}}
+    /// 值必须为 JSON 格式：{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem"],"env":{}}
     fn load_mcp_stdio_servers() -> Vec<(String, McpStdioServerEntry)> {
         let mut servers = Vec::new();
         for (key, val) in std::env::vars() {

@@ -37,6 +37,8 @@ pub struct WorkerConfig {
     pub approval_config: Option<HumanApprovalConfig>,
     /// Workspace root directory (optional)
     pub workspace_root: Option<String>,
+    /// Event bus capacity
+    pub event_bus_capacity: usize,
 }
 
 impl Default for WorkerConfig {
@@ -48,6 +50,7 @@ impl Default for WorkerConfig {
             gateway: None,
             approval_config: None,
             workspace_root: None,
+            event_bus_capacity: 100,
         }
     }
 }
@@ -62,6 +65,7 @@ impl WorkerConfig {
                 default_model: "deepseek-v4-flash".to_string(),
                 timeout_seconds: 300,
                 max_retries: 3,
+                retry_base_ms: 500,
                 model_mapping: Default::default(),
             }
         });
@@ -103,6 +107,7 @@ impl WorkerConfig {
             workspace_root: std::env::var("AGENT_OS_WORKSPACE_ROOT").ok(),
             gateway,
             approval_config,
+            event_bus_capacity: 100,
         }
     }
 }
@@ -137,6 +142,7 @@ impl AgentOsWorker {
                 default_model: "deepseek-v4-flash".to_string(),
                 timeout_seconds: 300,
                 max_retries: 3,
+                retry_base_ms: 500,
                 model_mapping: Default::default(),
             }
         });
@@ -223,8 +229,7 @@ impl AgentOsWorker {
         
         // Set workspace_monitor on ToolExecutor
         if let Some(ref wm) = workspace_monitor_opt {
-            let mut executor = runner.tool_executor.write().expect("tool_executor RwLock poisoned");
-            executor.set_workspace_monitor(wm.clone());
+            runner.tool_executor.write().set_workspace_monitor(wm.clone());
         }
         
         // Finalize AgentRunner initialization wiring: perception_store → WorkspaceMonitor
@@ -234,7 +239,7 @@ impl AgentOsWorker {
             runner,
             templates_engine,
             skills,
-            Arc::new(EventBus::new(100)),
+            Arc::new(EventBus::new(config.event_bus_capacity)),
             20,
         ).with_memory(Some(blackboard), Some(prefetch), Some(scheduler));
         

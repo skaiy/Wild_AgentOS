@@ -110,8 +110,10 @@ pub struct WatchEngine {
     debouncer: Option<Debouncer<notify::RecommendedWatcher>>,
     polling_handle: Option<tokio::task::AbortHandle>,
     /// Configuration.
+    #[allow(dead_code)]
     config: WatchConfig,
     /// Reference to inventory for direct updates from the watcher callback.
+    #[allow(dead_code)]
     inventory: Option<Arc<RwLock<FileInventory>>>,
 }
 

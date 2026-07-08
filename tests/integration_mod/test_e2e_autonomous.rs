@@ -73,6 +73,7 @@ fn build_autonomous_system(max_iterations: u32, model: &str) -> (SupervisorAgent
         default_model: model.to_string(),
         timeout_seconds: 300,
         max_retries: 3,
+        retry_base_ms: 500,
         model_mapping: Default::default(),
     };
 

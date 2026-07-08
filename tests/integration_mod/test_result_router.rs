@@ -67,7 +67,7 @@ fn test_json_smart_truncate_array() {
     let json = serde_json::to_string(&items).unwrap();
     let result = summary::smart_truncate(&json, 500);
     assert!(result.len() < 600);
-    assert!(result.contains("截断"));
+    assert!(result.contains("truncated"));
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn test_json_smart_truncate_text() {
     let text = "line1\nline2\nline3\nline4\nline5\n".repeat(200);
     let result = summary::smart_truncate(&text, 1000);
     assert!(result.len() < 1100);
-    assert!(result.contains("截断"));
+    assert!(result.contains("truncated"));
 }
 
 #[test]
@@ -83,7 +83,7 @@ fn test_text_summary_generation() {
     let text = "line\n".repeat(1000);
     let summary_text = summary::generate_text_summary(&text, "test_tool", 200);
     assert!(summary_text.contains("test_tool"));
-    assert!(summary_text.contains("1000 行"));
+    assert!(summary_text.contains("1000 lines"));
     assert!(summary_text.contains("read_full_result"));
 }
 
@@ -189,7 +189,7 @@ fn test_full_pipeline_json_graphify() {
             &graphify_result.summary,
             &tools,
         );
-        assert!(msg.contains("数据摘要"));
+        assert!(msg.contains("Data summary"));
     }
 }
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -37,6 +37,9 @@ pub struct AgentStatus {
     pub status: String,
     pub turn: u32,
     pub iteration: u32,
+    /// When this status was reported
+    #[serde(default)]
+    pub timestamp: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,6 +247,7 @@ impl ExecutionEventEmitter {
                 status: status.to_string(),
                 turn,
                 iteration,
+                timestamp: Some(Utc::now()),
             }),
         };
         self.emit(event.clone());
@@ -520,6 +524,7 @@ mod tests {
                 status: "running".to_string(),
                 turn: 3,
                 iteration: 1,
+                timestamp: None,
             }),
         };
         state.update_from_event(&event);

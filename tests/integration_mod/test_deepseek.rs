@@ -17,6 +17,7 @@ fn get_gateway() -> Arc<UnifiedGateway> {
         default_model: "deepseek-v4-flash".to_string(),
         timeout_seconds: 60,
         max_retries: 2,
+        retry_base_ms: 500,
         model_mapping: Default::default(),
     };
 

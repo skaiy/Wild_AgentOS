@@ -5,8 +5,6 @@
 use chrono::{DateTime, Utc};
 use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tracing::{debug, info};
 
@@ -81,11 +79,15 @@ impl Default for L0Config {
     }
 }
 
-/// Compute content hash
+/// Compute SHA-256 content hash for content-addressed deduplication.
+/// Uses SHA-256 (same as workspace_monitor) — provides collision resistance
+/// and cross-process reproducibility that DefaultHasher cannot guarantee.
 fn compute_content_hash(content: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(content.as_bytes());
+    let result = hasher.finalize();
+    format!("sha256:{}", hex::encode(result))
 }
 
 /// Table definitions for L0 Store redb database.
@@ -98,6 +100,7 @@ pub struct L0Store {
     db: Database,
     #[allow(dead_code)]
     config: L0Config,
+    #[allow(dead_code)]
     entry_count: u64,
     /// Optional IRI registry reference (auto-registers @id after injection)
     iri_registry: Option<Arc<IriRegistry>>,

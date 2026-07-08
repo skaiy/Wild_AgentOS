@@ -96,6 +96,9 @@ pub struct TaskContext {
     pub tenant_id: Option<String>,
     /// PDCA cycle identifier for L2 blackboard filtered queries
     pub cycle_id: String,
+    /// Summary of workspace file inventory (set by CodeCliEngine before passing to SA).
+    /// Used by SA to decide verification-first routing when workspace has existing files.
+    pub workspace_file_summary: Option<String>,
 }
 
 impl TaskContext {
@@ -122,6 +125,7 @@ impl TaskContext {
             user_id: None,
             tenant_id: None,
             cycle_id: String::new(),
+            workspace_file_summary: None,
         }
     }
 
@@ -131,7 +135,6 @@ impl TaskContext {
         self.tenant_id = tenant_id;
         self
     }
-
     pub fn with_cycle_id(mut self, cycle_id: &str) -> Self {
         self.cycle_id = cycle_id.to_string();
         self
@@ -188,6 +191,12 @@ impl TaskContext {
             self.pending_steps.remove(pos);
         }
     }
+
+    /// Set workspace file inventory summary (from WorkspaceMonitor)
+    pub fn with_workspace_summary(mut self, summary: &str) -> Self {
+        self.workspace_file_summary = Some(summary.to_string());
+        self
+    }
 }
 
 impl Default for TaskContext {
@@ -214,6 +223,7 @@ impl Default for TaskContext {
             user_id: None,
             tenant_id: None,
             cycle_id: String::new(),
+            workspace_file_summary: None,
         }
     }
 }
@@ -253,7 +263,7 @@ pub struct AgentRunner {
     pub l0_store: Arc<L0Store>,
     pub memory_manager: Arc<tokio::sync::Mutex<MemoryManager>>,
     pub templates: Arc<TemplateEngine>,
-    pub tool_executor: Arc<std::sync::RwLock<ToolExecutor>>,
+    pub tool_executor: Arc<parking_lot::RwLock<ToolExecutor>>,
     pub agent_settings: AgentSettings,
     pub hook_manager: Arc<HookManager>,
     pub projection: Arc<ProjectionEngine>,
@@ -298,7 +308,7 @@ impl AgentRunner {
         templates: Arc<TemplateEngine>,
         agent_settings: AgentSettings,
     ) -> Self {
-        let projection = Arc::new(ProjectionEngine::new(blackboard.clone(), 500));
+        let projection = Arc::new(ProjectionEngine::new(blackboard.clone(), agent_settings.max_projection_size));
         let sharing = Arc::new(SharingProtocol::new());
         let hook_manager = Arc::new(HookManager::new());
         ToolGuard::new().register_hooks(&hook_manager);
@@ -306,7 +316,7 @@ impl AgentRunner {
         // Initialize MethodologyGate with constitution bindings + EvolutionEngine
         let methodology_gate = {
             let registry = MethodologyRegistry::new();
-            let mut gate = MethodologyGate::new(registry);
+            let mut gate = MethodologyGate::new(registry, agent_settings.max_active);
             gate.register_constitution_bindings(&ConstitutionRegistry::new());
             let evolution = EvolutionEngineHandle::new(EvolutionEngine::new());
             let handle = MethodologyGateHandle::new(gate).with_evolution(evolution);
@@ -331,7 +341,7 @@ impl AgentRunner {
             tool_executor: {
                 let mut exe = ToolExecutor::new();
                 exe.set_projection_engine(projection.clone());
-                Arc::new(std::sync::RwLock::new(exe))
+                Arc::new(parking_lot::RwLock::new(exe))
             },
             agent_settings,
             hook_manager,
@@ -500,10 +510,9 @@ impl AgentRunner {
     /// Called once after AgentRunner construction and all sub-components are ready.
     pub fn finalize_setup(&self) {
         
-        if let Ok(executor) = self.tool_executor.read() {
-            if let Some(wm) = executor.get_workspace_monitor() {
-                wm.set_perception_store(Arc::new(self.perception_store.clone()));
-            }
+        let executor = self.tool_executor.read();
+        if let Some(wm) = executor.get_workspace_monitor() {
+            wm.set_perception_store(Arc::new(self.perception_store.clone()));
         }
     }
 }

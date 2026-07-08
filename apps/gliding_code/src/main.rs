@@ -39,10 +39,13 @@ struct Cli {
     #[arg(long = "workflow", help = "Path to JSON-LD workflow definition file (optional, replaces LLM-generated plan)")]
     workflow: Option<String>,
 
+    #[arg(long = "daemon", help = "Run in daemon mode (Agent OS Worker — processes tasks from a Unix socket queue)")]
+    daemon: bool,
+
     #[arg(long = "mcp-server", value_name = "NAME=URL", help = "MCP server config (repeatable, format name=url, e.g. --mcp-server chrome=http://localhost:3000/sse)")]
     mcp_server: Vec<String>,
 
-    #[arg(long = "mcp-server-stdio", value_name = "NAME=JSON", help = "MCP Stdio server config (repeatable, format name=json, e.g. --mcp-server-stdio chrome='{\"command\":\"npx\",\"args\":[\"-y\",\"@anthropic/chrome-mcp\"]}')")]
+    #[arg(long = "mcp-server-stdio", value_name = "NAME=JSON", help = "MCP Stdio server config (repeatable, format name=json, e.g. --mcp-server-stdio my-server='{\"command\":\"npx\",\"args\":[\"-y\",\"@modelcontextprotocol/server-filesystem\"]}')")]
     mcp_server_stdio: Vec<String>,
 }
 
@@ -110,6 +113,10 @@ fn main() -> anyhow::Result<()> {
         cli.workflow,
     );
 
+    if cli.daemon {
+        return run_daemon();
+    }
+
     if cli.list_checkpoints {
         list_checkpoints(&config)?;
         return Ok(());
@@ -126,7 +133,20 @@ fn main() -> anyhow::Result<()> {
         code_cli::tui::App::new(config, log_buffer, None)?.run()?;
     }
 
+    return Ok(());
+
+// Run in daemon mode: spawn an Agent OS Worker that processes tasks
+// from a Unix socket queue.
+fn run_daemon() -> anyhow::Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    let config = glidinghorse::worker::WorkerConfig::from_env();
+    eprintln!("Agent OS Worker starting (queue={}, concurrency={})...",
+        config.queue_base_path, config.concurrency);
+    if let Err(e) = rt.block_on(glidinghorse::worker::run_worker(config)) {
+        eprintln!("Agent OS Worker terminated with error: {}", e);
+    }
     Ok(())
+}
 }
 
 fn run_single(config: code_cli::config::CliConfig, prompt: &str) -> anyhow::Result<()> {

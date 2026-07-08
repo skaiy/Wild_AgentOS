@@ -84,6 +84,7 @@ struct AstEntity {
     entity_type: String,
     description: Option<String>,
     properties: HashMap<String, serde_json::Value>,
+    #[allow(dead_code)]
     source_location: Option<String>,
 }
 

@@ -18,6 +18,7 @@ pub mod tracked_action;
 pub mod supplementary_store;
 pub mod perception_store;
 pub mod relevance_tracker;
+pub mod timeline;
 pub mod tool_result_aging;
 pub mod workflow;
 

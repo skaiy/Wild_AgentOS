@@ -15,6 +15,7 @@ use super::types::{
 
 /// DefenseInDepthManager converts root cause analysis into actionable defense recommendations.
 pub struct DefenseInDepthManager {
+    #[allow(dead_code)]
     config: RootCauseConfig,
 }
 

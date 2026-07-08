@@ -86,6 +86,7 @@ pub struct WorkspaceMonitor {
     pub inventory: Arc<RwLock<FileInventory>>,
     pub content_store: Arc<ContentStore>,
     pub snapshot_manager: Arc<SnapshotManager>,
+    #[allow(dead_code)]
     watch_engine: Option<WatchEngine>,
     event_bus: Option<Arc<EventBus>>,
     perception_store: RwLock<Option<Arc<PerceptionStore>>>,
@@ -512,6 +513,53 @@ impl WorkspaceMonitor {
             \n\"Externally modified\" files are those that have been read but rewritten externally — only re-read when necessary.\
             \ncache_hit(from_cache=true) means file content hasn't changed this round and was already provided earlier — skip re-reading and continue with existing content.".to_string();
         Some(format!("{}{}", summary, guidance))
+    }
+
+    /// Get a concise summary string of the workspace file inventory.
+    /// Returns "N files across M directories" with a breakdown by language.
+    /// Returns None when the inventory is empty.
+    pub fn get_file_inventory_summary(&self) -> Option<String> {
+        let inv = self.inventory.read();
+        let all = inv.list_all();
+        if all.is_empty() {
+            return None;
+        }
+
+        let total = all.len();
+
+        // Count unique directories
+        use std::collections::HashSet;
+        let dirs: HashSet<String> = all.iter()
+            .filter_map(|e| {
+                let parent = std::path::Path::new(&e.path).parent()?;
+                Some(parent.to_string_lossy().into_owned())
+            })
+            .collect();
+
+        // Count by language
+        let mut lang_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for entry in &all {
+            let lang = if entry.language == "unknown" { "other" } else { entry.language.as_str() };
+            *lang_counts.entry(lang).or_insert(0) += 1;
+        }
+
+        // Sort by count descending, take top 3
+        let mut lang_vec: Vec<(&str, usize)> = lang_counts.into_iter().collect();
+        lang_vec.sort_by(|a, b| b.1.cmp(&a.1));
+        let lang_summary = lang_vec.iter().take(3)
+            .map(|(l, c)| format!("{} {}", c, l))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let summary = if lang_vec.len() > 3 {
+            format!("{} files across {} directories ({} … +{} more)",
+                total, dirs.len(), lang_summary, lang_vec.len() - 3)
+        } else {
+            format!("{} files across {} directories ({})",
+                total, dirs.len(), lang_summary)
+        };
+
+        Some(summary)
     }
 
     /// Write current file status perception summary to PerceptionStore

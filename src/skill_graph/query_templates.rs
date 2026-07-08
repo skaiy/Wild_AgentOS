@@ -408,6 +408,7 @@ impl QueryEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
 
     #[test]
     fn test_query_template_id_from_str() {
@@ -467,6 +468,7 @@ mod tests {
             entry_points: vec!["iri://skills/jwt".to_string()],
             skill_count: 1,
             sub_categories: vec![],
+            created_at: Utc::now(),
         }).unwrap();
 
         let result = engine.execute(

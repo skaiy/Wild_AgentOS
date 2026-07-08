@@ -88,16 +88,32 @@ impl SignatureInfo {
             self.algorithm, self.signer_id
         );
 
-        if self.signature.is_empty() || self.public_key.is_empty() {
+        // Only ED25519 is supported; reject unknown/forged algorithm claims.
+        if self.algorithm.to_lowercase() != "ed25519" {
+            return Err(CoreError::ValidationFailed {
+                message: format!("Unsupported signature algorithm: {}", self.algorithm),
+            });
+        }
+
+        // Empty signature -> not signed.
+        if self.signature.is_empty() {
             return Ok(false);
         }
 
-        match self.algorithm.to_lowercase().as_str() {
-            "ed25519" => verify_ed25519(&self.public_key, content.as_bytes(), &self.signature),
-            other => Err(CoreError::ValidationFailed {
-                message: format!("不支持的签名算法: {}", other),
-            }),
-        }
+        // Delegate to the canonical ring ED25519 verifier used by SyscallGate
+        // (core::validation::SignatureVerifier), so skill signatures share the
+        // exact same cryptographic verification path instead of a stub.
+        use base64::Engine;
+        let public_key_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&self.public_key)
+            .map_err(|e| CoreError::ValidationFailed {
+                message: format!("Invalid public key encoding: {}", e),
+            })?;
+
+        let verifier = crate::core::validation::SignatureVerifier::new()
+            .with_public_key(public_key_bytes);
+
+        verifier.verify(content, &self.signature)
     }
 }
 
@@ -578,6 +594,43 @@ mod tests {
         assert_eq!(sig.algorithm, "ed25519");
         assert!(sig.signer_id.is_some());
         assert_eq!(sig.certificate_chain.len(), 1);
+    }
+
+    #[test]
+    fn test_signature_verify_ed25519_real() {
+        use base64::Engine;
+        use ring::signature::Ed25519KeyPair;
+        use ring::signature::KeyPair;
+
+        let rng = ring::rand::SystemRandom::new();
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("keygen");
+        let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse");
+        let public_key_b64 = base64::engine::general_purpose::STANDARD
+            .encode(key_pair.public_key().as_ref());
+
+        let content = "skill-graph-node-payload";
+        let signature = key_pair.sign(content.as_bytes());
+        let signature_b64 = base64::engine::general_purpose::STANDARD
+            .encode(signature.as_ref());
+
+        let sig = SignatureInfo::new("ed25519", &public_key_b64, &signature_b64);
+
+        // Valid signature verifies true.
+        assert!(sig.verify(content).expect("verify"));
+
+        // Tampered content fails verification.
+        assert!(!sig.verify("tampered-content").expect("verify"));
+
+        // Empty signature is treated as unsigned.
+        let unsigned = SignatureInfo::new("ed25519", &public_key_b64, "");
+        assert!(!unsigned.verify(content).expect("verify"));
+    }
+
+    #[test]
+    fn test_signature_verify_rejects_unknown_algorithm() {
+        let sig = SignatureInfo::new("rsa", "cHVibGlj", "c2lnbmF0dXJl");
+        let result = sig.verify("content");
+        assert!(matches!(result, Err(CoreError::ValidationFailed { .. })));
     }
 
     #[test]

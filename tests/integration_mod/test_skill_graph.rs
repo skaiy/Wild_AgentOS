@@ -430,6 +430,7 @@ fn test_skill_creator_register_axure_to_vue2() {
             default_model: "test".to_string(),
             timeout_seconds: 30,
             max_retries: 1,
+            retry_base_ms: 500,
             model_mapping: Default::default(),
         }).unwrap()
     );
@@ -520,6 +521,7 @@ fn test_skill_creator_register_axure_vue2_refactor() {
             default_model: "test".to_string(),
             timeout_seconds: 30,
             max_retries: 1,
+            retry_base_ms: 500,
             model_mapping: Default::default(),
         }).unwrap()
     );
@@ -563,6 +565,7 @@ fn test_skill_creator_two_skills_coexist() {
             default_model: "test".to_string(),
             timeout_seconds: 30,
             max_retries: 1,
+            retry_base_ms: 500,
             model_mapping: Default::default(),
         }).unwrap()
     );
@@ -677,6 +680,7 @@ fn test_skill_creator_json_ld_validity() {
             default_model: "test".to_string(),
             timeout_seconds: 30,
             max_retries: 1,
+            retry_base_ms: 500,
             model_mapping: Default::default(),
         }).unwrap()
     );
@@ -734,6 +738,7 @@ fn test_skill_creator_disclosure_levels() {
             default_model: "test".to_string(),
             timeout_seconds: 30,
             max_retries: 1,
+            retry_base_ms: 500,
             model_mapping: Default::default(),
         }).unwrap()
     );

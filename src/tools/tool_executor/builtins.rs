@@ -610,6 +610,7 @@ struct FileListInput {
 #[derive(Debug, Deserialize)]
 struct BashInput {
     command: String,
+    #[allow(dead_code)]
     description: Option<String>,
     timeout: Option<u64>,
 }
@@ -854,21 +855,6 @@ pub(super) async fn execute_bash(input: Value) -> Result<Value, String> {
             }
         };
         Ok(result)
-    }
-}
-
-fn read_with_timeout<R: std::io::Read + Send + 'static>(reader: Option<R>, timeout_ms: u64) -> String {
-    let Some(reader) = reader else {
-        return String::new();
-    };
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let output = std::io::read_to_string(reader).unwrap_or_default();
-        let _ = tx.send(output);
-    });
-    match rx.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
-        Ok(output) => output,
-        Err(_) => String::new(),
     }
 }
 
@@ -1222,6 +1208,7 @@ fn urlencode(s: &str) -> String {
 
 static SKILL_CREATOR_GATEWAY: OnceCell<std::sync::Arc<crate::gateway::unified_gateway::UnifiedGateway>> = OnceCell::new();
 
+#[allow(dead_code)]
 pub(crate) fn init_skill_creator_gateway(gateway: std::sync::Arc<crate::gateway::unified_gateway::UnifiedGateway>) {
     let _ = SKILL_CREATOR_GATEWAY.set(gateway);
 }

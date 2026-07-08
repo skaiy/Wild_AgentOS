@@ -10,13 +10,16 @@ use crate::jsonld::{generate_iri, validate_jsonld_node, JsonLdContext, JsonLdNod
 use crate::memory::l1_session::L1Session;
 use crate::tools::hooks::{HookContext, HookPoint, HookResult};
 use crate::tools::tool_executor::ToolExecutor;
-use crate::core::system_prompt::{SystemPromptBuilder, SystemPromptRegion, build_constitution_prompt};
+use crate::core::system_prompt::{SystemPromptBuilder, SystemPromptRegion, build_constitution_prompt, build_time_awareness_text};
 use crate::methodology::integration::MethodologyPromptInjector;
 use crate::CoreError;
 
 use super::{LlmParsedResponse, TaskContext, TaskResult, LLM_RESPONSE_FORMAT_NO_THOUGHT, LLM_RESPONSE_FORMAT_WITH_THOUGHT};
 
 impl super::AgentRunner {
+    /// Utility: extract summary from agent output.
+    /// Unused — kept for future SA result summarization.
+    #[allow(dead_code)]
     fn extract_summary(&self, content: &str, reasoning_content: Option<&str>) -> String {
         // Prefer extracting summary field from JSON first
         if let Ok(parsed) = serde_json::from_str::<Value>(content) {
@@ -328,6 +331,7 @@ impl super::AgentRunner {
         intersection as f64 / union as f64
     }
 
+    #[allow(dead_code)]
     pub(crate) fn parse_jsonld_response(&self, response: &str) -> Result<JsonLdNode, CoreError> {
         let parsed: Value =
             serde_json::from_str(response).map_err(|e| CoreError::InvalidJsonLd {
@@ -561,7 +565,14 @@ impl super::AgentRunner {
         let mut prompt_builder = SystemPromptBuilder::new();
         prompt_builder.set_region(SystemPromptRegion::RoleDefinition, agent_md.clone());
 
-        // Region 1.5: Workspace environment info
+        // Region 2: Time awareness — current time and session context
+        {
+            let session_start = session.created_at().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+            let time_text = build_time_awareness_text(Some(&session_start));
+            prompt_builder.set_region(SystemPromptRegion::TimeAwareness, time_text);
+        }
+
+        // Region 3: Workspace environment info
         if let Some(ref ws_root) = self.workspace_root {
             let env_info = format!(
                 "## Workspace\n\n- Workspace path: {}\n\
@@ -696,7 +707,6 @@ impl super::AgentRunner {
         let tools = self
             .tool_executor
             .read()
-            .expect("tool_executor RwLock poisoned")
             .tool_definitions_for_role(&agent.role.to_string());
 
         info!(
@@ -742,7 +752,6 @@ impl super::AgentRunner {
                         let current_tools = self
                             .tool_executor
                             .read()
-                            .expect("tool_executor RwLock poisoned")
                             .tool_definitions_for_role(&agent.role.to_string());
                         if current_tools.is_empty() { None } else { Some(current_tools) }
                     },
@@ -866,10 +875,7 @@ impl super::AgentRunner {
                             }
 
                             let handler = {
-                                let executor = self.tool_executor.read().unwrap_or_else(|e| {
-                                    warn!("ToolExecutor read lock poisoned (streaming handler): {}", e);
-                                    e.into_inner()
-                                });
+                                let executor = self.tool_executor.read();
                                 executor.try_get_handler(name)
                             };
                             let result = match handler {
@@ -1147,11 +1153,7 @@ impl super::AgentRunner {
 
     /// Store micro-tool data to both memory and L0 persistent storage
     fn store_micro_tool_data_persistent(&self, storage_key: &str, data: serde_json::Value) {
-        let exe = self.tool_executor.write().unwrap_or_else(|e| {
-            warn!("ToolExecutor write lock poisoned (store_micro_tool_data): {}", e);
-            e.into_inner()
-        });
-        exe.store_micro_tool_data(storage_key, data.clone());
+        self.tool_executor.write().store_micro_tool_data(storage_key, data.clone());
         // L0 persistence for cross-session availability
         if let Ok(data_str) = serde_json::to_string(&data) {
             let _ = self.l0_store.store(storage_key, &data_str);
@@ -1194,7 +1196,8 @@ impl super::AgentRunner {
                         entity_types: vec![],
                         preview_size: settings.preview_size,
                     };
-                    if let Ok(mut exe) = self.tool_executor.write() {
+                    {
+                        let mut exe = self.tool_executor.write();
                         exe.register_micro_tool(&read_tool_name, ctx);
                         // Notify workspace_monitor that the file was read via read_full_result
                         if tool_name == "file_read" {
@@ -1204,8 +1207,6 @@ impl super::AgentRunner {
                                 }
                             }
                         }
-                    } else {
-                        warn!("ToolExecutor write lock poisoned (register_micro_tool pt): skipping micro-tool registration");
                     }
                 }
                 format!("{}\nIRI: {}", result_str, iri)
@@ -1230,16 +1231,15 @@ impl super::AgentRunner {
                     entity_types: vec![],
                     preview_size: settings.preview_size,
                 };
-                let mut exe = self.tool_executor.write().unwrap_or_else(|e| {
-                    warn!("ToolExecutor write lock poisoned (register_micro_tool trunc): {}", e);
-                    e.into_inner()
-                });
-                exe.register_micro_tool(&read_tool_name, ctx);
-                // Notify workspace_monitor that the file was read via read_full_result
-                if tool_name == "file_read" {
-                    if let Ok(val) = serde_json::from_str::<Value>(result_str) {
-                        if let Some(path) = val.get("path").and_then(|v| v.as_str()) {
-                            exe.mark_file_external_read(path);
+                {
+                    let mut exe = self.tool_executor.write();
+                    exe.register_micro_tool(&read_tool_name, ctx);
+                    // Notify workspace_monitor that the file was read via read_full_result
+                    if tool_name == "file_read" {
+                        if let Ok(val) = serde_json::from_str::<Value>(result_str) {
+                            if let Some(path) = val.get("path").and_then(|v| v.as_str()) {
+                                exe.mark_file_external_read(path);
+                            }
                         }
                     }
                 }
@@ -1278,11 +1278,7 @@ impl super::AgentRunner {
                                         entity_types: vec![],
                                         preview_size: settings.preview_size,
                                     };
-                                    let mut exe = self.tool_executor.write().unwrap_or_else(|e| {
-                                        warn!("ToolExecutor write lock poisoned (register_micro_tool graphify): {}", e);
-                                        e.into_inner()
-                                    });
-                                    exe.register_micro_tool(&mt.name, ctx);
+                                    self.tool_executor.write().register_micro_tool(&mt.name, ctx);
                                 }
                                 info!(
                                     "[ResultRouter] Graphified: {} entities, {} relations, {} micro-tools, graph={}",
@@ -1319,11 +1315,7 @@ impl super::AgentRunner {
                     entity_types: vec![],
                     preview_size,
                 };
-                let mut exe = self.tool_executor.write().unwrap_or_else(|e| {
-                    warn!("ToolExecutor write lock poisoned (register_micro_tool summarize): {}", e);
-                    e.into_inner()
-                });
-                exe.register_micro_tool(&read_tool_name, ctx);
+                self.tool_executor.write().register_micro_tool(&read_tool_name, ctx);
 
                 let preview = summary::generate_text_summary(result_str, tool_name, preview_size);
                 info!(
@@ -1362,8 +1354,7 @@ impl super::AgentRunner {
             let has_micro_tool = self
                 .tool_executor
                 .read()
-                .ok()
-                .and_then(|exe| exe.try_get_handler(&micro_tool_name))
+                .try_get_handler(&micro_tool_name)
                 .is_some();
             if has_micro_tool {
                 let iri = format!("iri://tool-result/{}", call_id);

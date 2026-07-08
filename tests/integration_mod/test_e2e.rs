@@ -29,6 +29,7 @@ fn build_system(max_iterations: u32) -> (SupervisorAgent, TempDir) {
         default_model: "deepseek-v4-flash".to_string(),
         timeout_seconds: 120,
         max_retries: 2,
+        retry_base_ms: 500,
         model_mapping: Default::default(),
     };
 
@@ -67,6 +68,7 @@ fn build_runner() -> (Arc<AgentRunner>, TempDir) {
         default_model: "deepseek-v4-flash".to_string(),
         timeout_seconds: 120,
         max_retries: 2,
+        retry_base_ms: 500,
         model_mapping: Default::default(),
     };
 

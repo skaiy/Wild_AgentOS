@@ -430,16 +430,6 @@ pub fn success(msg: &str) {
     );
 }
 
-pub fn warn(msg: &str) {
-    let stdout = &mut io::stdout();
-    let _ = execute!(
-        stdout,
-        SetForegroundColor(Color::Yellow),
-        Print(format!("{}\n", msg)),
-        ResetColor
-    );
-}
-
 pub fn error(msg: &str) {
     let stdout = &mut io::stderr();
     let _ = execute!(

@@ -1,6 +1,6 @@
 use crate::config::{McpServerConfig, ScopedMcpServerConfig};
 
-const CLAUDEAI_SERVER_PREFIX: &str = "claude.ai ";
+const COLLAPSE_NAME_PREFIX: &str = "example.com ";
 const CCR_PROXY_PATH_MARKERS: [&str; 2] = ["/v2/session_ingress/shttp/mcp/", "/v2/ccr-sessions/"];
 
 #[must_use]
@@ -13,7 +13,7 @@ pub fn normalize_name_for_mcp(name: &str) -> String {
         })
         .collect::<String>();
 
-    if name.starts_with(CLAUDEAI_SERVER_PREFIX) {
+    if name.starts_with(COLLAPSE_NAME_PREFIX) {
         normalized = collapse_underscores(&normalized)
             .trim_matches('_')
             .to_string();
@@ -182,18 +182,18 @@ mod tests {
         assert_eq!(normalize_name_for_mcp("github.com"), "github_com");
         assert_eq!(normalize_name_for_mcp("tool name!"), "tool_name_");
         assert_eq!(
-            normalize_name_for_mcp("claude.ai Example   Server!!"),
-            "claude_ai_Example_Server"
+            normalize_name_for_mcp("example.com Example   Server!!"),
+            "example_com_Example_Server"
         );
         assert_eq!(
-            mcp_tool_name("claude.ai Example Server", "weather tool"),
-            "mcp__claude_ai_Example_Server__weather_tool"
+            mcp_tool_name("example.com Example Server", "weather tool"),
+            "mcp__example_com_Example_Server__weather_tool"
         );
     }
 
     #[test]
     fn unwraps_ccr_proxy_urls_for_signature_matching() {
-        let wrapped = "https://api.anthropic.com/v2/session_ingress/shttp/mcp/123?mcp_url=https%3A%2F%2Fvendor.example%2Fmcp&other=1";
+        let wrapped = "https://api.example.com/v2/session_ingress/shttp/mcp/123?mcp_url=https%3A%2F%2Fvendor.example%2Fmcp&other=1";
         assert_eq!(unwrap_ccr_proxy_url(wrapped), "https://vendor.example/mcp");
         assert_eq!(
             unwrap_ccr_proxy_url("https://vendor.example/mcp"),
