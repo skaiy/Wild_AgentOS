@@ -22,7 +22,7 @@
 
 ## 🎉 Release History & Changelog
 
-We maintain our independent release timeline of **Wild AgentOS**, fusing our custom mid-platform security/gateway features with the upstream cognitive upgrades (v0.1.3).
+Welcome to the release timeline of **Wild AgentOS**, featuring production-grade security gateway layers, multi-tenant workspace isolation, and an advanced cognitive operating system kernel.
 
 | Version | Release Date | Key Upgrades & Fused Features |
 |---------|--------------|------------------------------|
@@ -31,7 +31,7 @@ We maintain our independent release timeline of **Wild AgentOS**, fusing our cus
 | **v1.3** | **2026-07-06** | **Multi-Modal Vision-Language (VL) Routing & Capability Slots**<br>• **Multi-Modal Gateway**: Automatic payload extraction (`ChatContent` parts) routing image payloads (Base64/URL) to VL models.<br>• **Agent Capability Slots**: Multi-model slot assignments per agent (e.g. Chat Slot → DeepSeek-V4, Vision Slot → Gemini-Pro). |
 | **v1.2** | **2026-07-05** | **Multi-Tenant Knowledge Ingestion & Unified Knowledge Packages**<br>• **Two-Phase Ingestion**: Concurrent multi-file chunking upload to vector databases, and structural CSV/N-Triples graph imports to tenant-isolated named graphs.<br>• **Knowledge Package Mounting**: Decoupled individual graph path binding, unifying knowledge resources into multi-pack `knowledge_pack_ids` for structured routing. |
 | **v1.1** | **2026-07-04** | **API Key Governance Center & One-Click Publishing**<br>• **API Key Governance**: Real-time client credentials management, quota limits enforcement, security audit logs, and access scopes.<br>• **OpenAI-Compatible Gateway**: One-click agent publishing with compatible endpoints (`/v1/chat/completions`) and SSE stream routes. |
-| **v1.0** | **2026-07-01** | **Initial Release — Core OS Engine & Hyperspace Vector Storage (v0.1.2)**<br>• **HyperspaceEngine**: Embedded HNSW vector database with WAL and Poincaré/Lorentz metrics.<br>• **Skill Graph & Blackboard**: 5W2H semantic skill hypergraph, L0-L3 memory cache hierarchy with MESI coherence.<br>• **Workspace Monitor**: Real-time file system triggers and proactive perception engine. |
+| **v1.0** | **2026-07-01** | **Initial Release — Core OS Engine & Hyperspace Vector Storage**<br>• **HyperspaceEngine**: Embedded HNSW vector database with WAL and Poincaré/Lorentz metrics.<br>• **Skill Graph & Blackboard**: 5W2H semantic skill hypergraph, L0-L3 memory cache hierarchy with MESI coherence.<br>• **Workspace Monitor**: Real-time file system triggers and proactive perception engine. |
 
 ---
 
