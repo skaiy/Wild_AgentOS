@@ -20,47 +20,18 @@
 
 ---
 
-## 🎉 v0.1.3 Release
+## 🎉 Release History & Changelog
 
-We are proud to announce the **v0.1.3 release** of Wild AgentOS.
+We maintain our independent release timeline of **Wild AgentOS**, fusing our custom mid-platform security/gateway features with the upstream cognitive upgrades (v0.1.3).
 
-**What's new in v0.1.3:**
-
-| Feature | Category | Description |
-|---------|----------|-------------|
-| **Causal Engine** | Cognitive System | New standalone causal analysis subsystem with `CausalEngine`, `FusionEngine`, `CausalStore`, and typed `CausalFactor`. Enables causal reasoning across agent operations with fused multi-factor analysis — identifies root causes, propagates failure chains, and computes causal graphs for agent decisions. |
-| **API Key Governance Center** | Security & Org | Production-grade API Key governance center providing multi-tenant credentials isolation, secure rotation, token budget enforcement, and dynamic registration of key providers. |
-| **Model Registry Center** | Gateway & Routing | Unified model registry center for hot-swapping LLM models and API provider configurations without restarting the daemon process. Supports custom mappings for model routing. |
-| **WAG Intelligent Gateway & WAF** | Gateway & Routing | Wild AgentOS Gateway (WAG) with built-in Web Application Firewall (WAF), gRPC-HTTP/SSE bridge, payload sanitization, and structured API audit trails. |
-| **Multi-Tenant Vector & Graph Isolation** | Security & Org | Multi-tenant data partition using namespace-scoped named graphs (`tenant:<id>/*`) in Oxigraph RDF and automatic `tenant:<id>` vector tags isolation in HyperspaceStore. Identity lineage is preserved from HTTP headers through task blackboard context. |
-| **Unified Graph Backend** | Cognitive System | Consolidated `GraphBackend` (~1,200 LOC) replacing fragmented graph storage — provides a single, optimized interface for node/edge CRUD with batch operations, subgraph extraction, and path-finding across all knowledge layers. |
-| **Graph Features Computation** | Cognitive System | New `graph_features` module computing structural feature vectors (degree centrality, clustering coefficient, PageRank, betweenness) and graph similarity scoring via feature-distance comparison. Enables quantitative graph analysis and comparison across cognitive snapshots. |
-| **Snapshot Timeline** | Cognitive System | Session state snapshots with timeline-based version management. `SnapshotTimeline` enables temporal queries, point-in-time restoration, and diff-based rollback — crash-proof recovery with full history traversal. |
-| **Self-Awareness (SA) Overhaul** | Core Orchestration | Major rewrite of the self-awareness module (+410 lines) with enhanced monitoring of agent state, environment perception, and adaptive behavior. Integrated with the causal engine for self-diagnosis. |
-| **5W2H Audit Enhancement** | Core Orchestration | Expanded dimension-level audit in `src/core/five_w2h.rs` with deeper causal attribution per dimension. What/Why failures now chain into the causal engine for automated root-cause analysis. |
-| **Advanced Features Design** | Documentation | Comprehensive [`ADVANCED_FEATURES_DESIGN.md`](docs/ADVANCED_FEATURES_DESIGN.md) document covering graph backend architecture, causal reasoning design, timeline-based snapshot semantics, and performance benchmarks. |
-| **Graph Backend Benchmarks** | Testing | New benchmark suite (`benches/bench_graph_backend.rs`) measuring node/edge R/W, subgraph extraction, and path-finding throughput. |
-| **Gliding Code TUI Refinements** | Client TUI | Engine and TUI improvements in the terminal client — better Markdown rendering, enhanced MCP server lifecycle, and internal refactoring for maintainability. |
-| **Bug Fixes** | Stability | Fixed duplicate secondary-index update in L2 `write_node` that caused inconsistent indexing under concurrent writes. |
-
----
-
-## 🎉 v0.1.2 Release
-
-We are proud to announce the **v0.1.2 release** of Wild AgentOS.
-
-**What's new in v0.1.2:**
-
-| Feature | Description |
-|---------|-------------|
-| **HyperspaceEngine** | Production-grade vector embedding engine with HNSW ANN search, Write-Ahead Log (WAL), tangent-space pruning, and runtime-switchable metrics (Poincaré, Cosine, Euclidean, Lorentz). |
-| **Skill Graph Cognitive Network** | Hypergraph composition, Poincaré structural embeddings, PageRank/betweenness/community detection algorithms, causal failure analysis, temporal versioning with rollback, formal invariant verification (6 checks), hybrid text×structural search. |
-| **Semantic Skill Discovery** | Vector-store integration in `SkillDiscoveryEngine` — finds semantically related skills via HyperspaceStore cosine search, replaces Jaccard-only `suggest_links()` |
-| **Oxigraph SPARQL Bridge** | Real-time bidirectional sync between skill graph and Oxigraph RDF store via SPARQL INSERT/DELETE + named graph isolation |
-| **L2 Blackboard Memory** | Typed document store with JSON-LD threading, projections, message packs, and LRU eviction for long-term agent context |
-| **Workspace Monitor** | Real-time file system perception engine with 10 event triggers, anomaly deduplication, and 5W2H constraint checking |
-| **Batch Agent Manager** | Sliding-window-based batch processing with configurable triggers, event bus integration, and business-domain isolation |
-| **Gliding Code TUI** | Interactive terminal UI (ratatui v0.28) with Markdown rendering, MCP server support, checkpoint/resume, and multi-model backends |
+| Version | Release Date | Key Upgrades & Fused Features |
+|---------|--------------|------------------------------|
+| **v1.5** | **2026-07-08** | **Cognitive Causal Engine & Advanced Graph Governance**<br>• **Causal Engine**: Standalone causal reasoning subsystem (`CausalEngine`, `FusionEngine`, `CausalStore`) to trace root causes and compute causal graphs of agent decisions.<br>• **Unified Graph Backend**: Consolidated fragmented graph operations into a single high-performance `GraphBackend`.<br>• **Graph Features**: Structural feature computation (PageRank, PageRank vector, centrality) and similarity scoring between cognitive snapshots.<br>• **Snapshot Timeline**: Temporal snapshot versioning with diff-based rollback and point-in-time state restoration.<br>• **Skill Center CRUD & Guard**: New client-side skill editing/deletion support, detail schema rendering, and strict **403 Forbidden** guards protecting system-level (`iri://`) builtins. |
+| **v1.4** | **2026-07-06** | **Model Registry Center (3-in-1 Consolidation) & Dynamic Ingestion**<br>• **Consolidated Model Registry**: Merged gateway, embedding, and resource mapping settings into a unified "Model Registry Center".<br>• **Auto Model Discovery**: Automatic endpoint model schema discovery (`/v1/models`) and keyword-matching modaly pre-evaluation.<br>• **Vector Service Bridge**: Dynamic hot-swapping embedding models, triggering zero-downtime database rebuilds and background indexing. |
+| **v1.3** | **2026-07-06** | **Multi-Modal Vision-Language (VL) Routing & Capability Slots**<br>• **Multi-Modal Gateway**: Automatic payload extraction (`ChatContent` parts) routing image payloads (Base64/URL) to VL models.<br>• **Agent Capability Slots**: Multi-model slot assignments per agent (e.g. Chat Slot → DeepSeek-V4, Vision Slot → Gemini-Pro). |
+| **v1.2** | **2026-07-05** | **Multi-Tenant Knowledge Ingestion & Unified Knowledge Packages**<br>• **Two-Phase Ingestion**: Concurrent multi-file chunking upload to vector databases, and structural CSV/N-Triples graph imports to tenant-isolated named graphs.<br>• **Knowledge Package Mounting**: Decoupled individual graph path binding, unifying knowledge resources into multi-pack `knowledge_pack_ids` for structured routing. |
+| **v1.1** | **2026-07-04** | **API Key Governance Center & One-Click Publishing**<br>• **API Key Governance**: Real-time client credentials management, quota limits enforcement, security audit logs, and access scopes.<br>• **OpenAI-Compatible Gateway**: One-click agent publishing with compatible endpoints (`/v1/chat/completions`) and SSE stream routes. |
+| **v1.0** | **2026-07-01** | **Initial Release — Core OS Engine & Hyperspace Vector Storage (v0.1.2)**<br>• **HyperspaceEngine**: Embedded HNSW vector database with WAL and Poincaré/Lorentz metrics.<br>• **Skill Graph & Blackboard**: 5W2H semantic skill hypergraph, L0-L3 memory cache hierarchy with MESI coherence.<br>• **Workspace Monitor**: Real-time file system triggers and proactive perception engine. |
 
 ---
 
