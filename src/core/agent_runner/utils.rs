@@ -10,7 +10,7 @@ use crate::jsonld::{generate_iri, validate_jsonld_node, JsonLdContext, JsonLdNod
 use crate::memory::l1_session::L1Session;
 use crate::tools::hooks::{HookContext, HookPoint, HookResult};
 use crate::tools::tool_executor::ToolExecutor;
-use crate::core::system_prompt::{SystemPromptBuilder, SystemPromptRegion, build_constitution_prompt};
+use crate::core::system_prompt::{SystemPromptBuilder, SystemPromptRegion, build_constitution_prompt, build_time_awareness_text};
 use crate::methodology::integration::MethodologyPromptInjector;
 use crate::CoreError;
 
@@ -559,7 +559,14 @@ impl super::AgentRunner {
         let mut prompt_builder = SystemPromptBuilder::new();
         prompt_builder.set_region(SystemPromptRegion::RoleDefinition, agent_md.clone());
 
-        // Region 1.5: Workspace environment info
+        // Region 2: Time awareness — current time and session context
+        {
+            let session_start = session.created_at().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+            let time_text = build_time_awareness_text(Some(&session_start));
+            prompt_builder.set_region(SystemPromptRegion::TimeAwareness, time_text);
+        }
+
+        // Region 3: Workspace environment info
         if let Some(ref ws_root) = self.workspace_root {
             let env_info = format!(
                 "## Workspace\n\n- Workspace path: {}\n\

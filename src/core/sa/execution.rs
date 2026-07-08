@@ -513,7 +513,7 @@ impl SupervisorAgent {
                         if intervention.should_interrupt {
                             // Use timeout to prevent intervention processing from blocking step scheduling
                             let _ = tokio::time::timeout(
-                                std::time::Duration::from_secs(30),
+                                std::time::Duration::from_secs(self.execution_timeout_secs),
                                 self.execute_intervention(intervention, task_iri),
                             ).await;
                         }

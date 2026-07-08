@@ -9,6 +9,7 @@ fn test_gateway_settings() -> GatewaySettings {
         default_model: "deepseek-v4-flash".to_string(),
         timeout_seconds: 30,
         max_retries: 3,
+        retry_base_ms: 500,
         model_mapping: HashMap::from([
             ("planning".to_string(), "deepseek-v4-pro".to_string()),
             ("execution".to_string(), "deepseek-v4-pro".to_string()),

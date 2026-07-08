@@ -6,7 +6,7 @@ use tracing::{debug, info, warn};
 
         use crate::core::agent_instance::{AgentInstance, AgentRole, AgentStatus};
 use crate::core::execution_event::{ExecutionEvent, ExecutionEventKind};
-use crate::core::system_prompt::{SystemPromptBuilder, SystemPromptRegion, build_constitution_prompt};
+use crate::core::system_prompt::{SystemPromptBuilder, SystemPromptRegion, build_constitution_prompt, build_time_awareness_text};
 use crate::gateway::unified_gateway::ChatMessage;
 use crate::jsonld::{JsonLdContext, JsonLdNode};
 use crate::memory::l1_session::L1Session;
@@ -458,7 +458,14 @@ Output the summary report directly, not in JSON format."#,
         // Region 1: Role definition area
         prompt_builder.set_region(SystemPromptRegion::RoleDefinition, agent_md.clone());
 
-        // Region 1.5: Workspace environment info area (let Agent know its workspace boundaries)
+        // Region 2: Time awareness — current time and session context
+        {
+            let session_start = sess.created_at().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+            let time_text = build_time_awareness_text(Some(&session_start));
+            prompt_builder.set_region(SystemPromptRegion::TimeAwareness, time_text);
+        }
+
+        // Region 3: Workspace environment info area (let Agent know its workspace boundaries)
         if let Some(ref ws_root) = self.workspace_root {
             let env_info = format!(
                 "## Workspace\n\n- Workspace path: {}\n\

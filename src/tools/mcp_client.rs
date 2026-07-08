@@ -153,8 +153,12 @@ pub struct McpClient {
 
 impl McpClient {
     pub fn new() -> Self {
+        Self::with_timeout(30)
+    }
+
+    pub fn with_timeout(timeout_secs: u64) -> Self {
         let http_client = Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(timeout_secs))
             .build()
             .unwrap_or_default();
         Self {

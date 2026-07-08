@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use oxigraph::model::{BlankNode, Literal, NamedNode, Quad, Term};
 use oxigraph::sparql::QueryResults;
 use oxigraph::store::Store;
@@ -9,11 +10,18 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
+/// A knowledge graph entity with temporal metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entity {
     pub id: String,
     pub types: Vec<String>,
     pub properties: HashMap<String, PropertyValue>,
+    /// When this entity was created
+    #[serde(default = "Utc::now")]
+    pub created_at: DateTime<Utc>,
+    /// When this entity was last modified
+    #[serde(default = "Utc::now")]
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +39,9 @@ pub struct Relation {
     pub subject: String,
     pub predicate: String,
     pub object: RelationObject,
+    /// When this relation was created
+    #[serde(default = "Utc::now")]
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,7 +300,8 @@ impl UnifiedGraphStore {
         if types.is_empty() && properties.is_empty() {
             None
         } else {
-            Some(Entity { id: id.to_string(), types, properties })
+            let now = Utc::now();
+            Some(Entity { id: id.to_string(), types, properties, created_at: now, updated_at: now })
         }
     }
 

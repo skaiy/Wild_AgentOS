@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
-
+use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SystemPromptRegion {
     RoleDefinition,
+    TimeAwareness,
     EnvironmentInfo,
     BehavioralPolicy,
     FiveW2HConstraints,
@@ -19,20 +20,22 @@ impl SystemPromptRegion {
     pub fn order(&self) -> usize {
         match self {
             Self::RoleDefinition => 1,
-            Self::EnvironmentInfo => 2,
-            Self::BehavioralPolicy => 3,
-            Self::FiveW2HConstraints => 4,
-            Self::EmphasizedConstraints => 5,
-            Self::OutputFormat => 6,
-            Self::OutputManagement => 7,
-            Self::Tools => 8,
-            Self::ExtractionPrompt => 9,
+            Self::TimeAwareness => 2,
+            Self::EnvironmentInfo => 3,
+            Self::BehavioralPolicy => 4,
+            Self::FiveW2HConstraints => 5,
+            Self::EmphasizedConstraints => 6,
+            Self::OutputFormat => 7,
+            Self::OutputManagement => 8,
+            Self::Tools => 9,
+            Self::ExtractionPrompt => 10,
         }
     }
 
     pub fn header(&self) -> &'static str {
         match self {
             Self::RoleDefinition => "# Role",
+            Self::TimeAwareness => "# Time Awareness",
             Self::EnvironmentInfo => "# Workspace Environment",
             Self::BehavioralPolicy => "# Behavioral Policy",
             Self::FiveW2HConstraints => "# Task Constraints",
@@ -43,6 +46,36 @@ impl SystemPromptRegion {
             Self::ExtractionPrompt => "# Emphasized Content",
         }
     }
+}
+
+/// Build the Time Awareness section text showing current time and session context
+pub fn build_time_awareness_text(task_start_time: Option<&str>) -> String {
+    let now = Utc::now();
+    let now_str = now.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let mut parts = vec![
+        format!("- Current time: {}", now_str),
+        "- All timestamps in the system use UTC timezone".to_string(),
+    ];
+    if let Some(start) = task_start_time {
+        parts.push(format!("- Task started at: {}", start));
+        // Calculate elapsed time using DateTime::parse_from_rfc3339, convert to Utc for subtraction
+        if let Ok(start_dt) = DateTime::parse_from_rfc3339(start) {
+            let start_utc = start_dt.with_timezone(&Utc);
+            let elapsed = now - start_utc;
+            let hours = elapsed.num_hours();
+            let mins = elapsed.num_minutes() % 60;
+            let secs = elapsed.num_seconds() % 60;
+            if hours > 0 {
+                parts.push(format!("- Elapsed time: {}h {}m {}s", hours, mins, secs));
+            } else if mins > 0 {
+                parts.push(format!("- Elapsed time: {}m {}s", mins, secs));
+            } else {
+                parts.push(format!("- Elapsed time: {}s", secs));
+            }
+        }
+    }
+    parts.push("- Older information may be less relevant than recent information — prioritize recent context".to_string());
+    parts.join("\n")
 }
 
 pub const OUTPUT_FORMAT_SIMPLE: &str = r#"Return JSON: {"content": "...", "summary": "...", "action": "tool_call|finish"}

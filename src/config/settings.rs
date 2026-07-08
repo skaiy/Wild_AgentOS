@@ -33,7 +33,24 @@ pub struct WorkspaceSettings {
     pub watch_enabled: bool,
     /// Content cache maximum bytes
     pub content_store_max_bytes: usize,
+    /// LRU content cache capacity (number of files).
+    #[serde(default = "default_content_cache_capacity")]
+    pub content_cache_capacity: usize,
+    /// Polling interval in ms (fallback when native watching unavailable).
+    #[serde(default = "default_poll_interval_ms")]
+    pub poll_interval_ms: u64,
+    /// Debounce window in ms for file events.
+    #[serde(default = "default_debounce_ms")]
+    pub debounce_ms: u64,
+    /// Maximum debounce wait in ms.
+    #[serde(default = "default_max_debounce_wait_ms")]
+    pub max_debounce_wait_ms: u64,
 }
+
+fn default_content_cache_capacity() -> usize { 1000 }
+fn default_poll_interval_ms() -> u64 { 5000 }
+fn default_debounce_ms() -> u64 { 500 }
+fn default_max_debounce_wait_ms() -> u64 { 5000 }
 
 impl Default for WorkspaceSettings {
     fn default() -> Self {
@@ -54,6 +71,10 @@ impl Default for WorkspaceSettings {
             ],
             watch_enabled: true,
             content_store_max_bytes: 64 * 1024 * 1024,
+            content_cache_capacity: default_content_cache_capacity(),
+            poll_interval_ms: default_poll_interval_ms(),
+            debounce_ms: default_debounce_ms(),
+            max_debounce_wait_ms: default_max_debounce_wait_ms(),
         }
     }
 }
@@ -94,6 +115,24 @@ pub struct L1Settings {
     pub max_tokens: usize,
     #[serde(default)]
     pub max_memory_mb: u64,
+    /// Override default L1 eviction recency weight (None = role-specific default).
+    #[serde(default)]
+    pub eviction_recency_weight: Option<f64>,
+    /// Override default L1 eviction relevance weight.
+    #[serde(default)]
+    pub eviction_relevance_weight: Option<f64>,
+    /// Override default L1 eviction cost weight.
+    #[serde(default)]
+    pub eviction_cost_weight: Option<f64>,
+    /// Override default L1 eviction relevance threshold.
+    #[serde(default)]
+    pub eviction_relevance_threshold: Option<f64>,
+    /// Override default L1 eviction safe window in seconds.
+    #[serde(default)]
+    pub eviction_safe_window_seconds: Option<i64>,
+    /// Override default L1 eviction beta fusion weight.
+    #[serde(default)]
+    pub eviction_beta: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -160,6 +199,18 @@ pub struct AgentSettings {
     /// L3 ProjectionEngine maximum projection size.
     #[serde(default = "default_max_projection_size")]
     pub max_projection_size: usize,
+    /// SA intervention/LLM execution timeout in seconds (default 30).
+    #[serde(default = "default_sa_execution_timeout_secs")]
+    pub sa_execution_timeout_secs: u64,
+    /// Tool executor HTTP call timeout in seconds (default 60).
+    #[serde(default = "default_tool_timeout_secs")]
+    pub tool_timeout_secs: u64,
+    /// MCP client call timeout in seconds (default 30).
+    #[serde(default = "default_mcp_timeout_secs")]
+    pub mcp_timeout_secs: u64,
+    /// Embedding service call timeout in seconds (default 30).
+    #[serde(default = "default_embedding_timeout_secs")]
+    pub embedding_timeout_secs: u64,
 }
 
 fn default_max_pdca_cycles() -> u32 { 7 }
@@ -167,6 +218,10 @@ fn default_max_active() -> usize { 20 }
 fn default_snapshot_frequency() -> u64 { 1000 }
 fn default_max_full_snapshots() -> usize { 10 }
 fn default_max_projection_size() -> usize { 500 }
+fn default_sa_execution_timeout_secs() -> u64 { 30 }
+fn default_tool_timeout_secs() -> u64 { 60 }
+fn default_mcp_timeout_secs() -> u64 { 30 }
+fn default_embedding_timeout_secs() -> u64 { 30 }
 
 impl Default for AgentSettings {
     fn default() -> Self {
@@ -183,6 +238,10 @@ impl Default for AgentSettings {
             snapshot_frequency: 1000,
             max_full_snapshots: 10,
             max_projection_size: 500,
+            sa_execution_timeout_secs: 30,
+            tool_timeout_secs: 60,
+            mcp_timeout_secs: 30,
+            embedding_timeout_secs: 30,
         }
     }
 }
@@ -764,6 +823,12 @@ impl Default for Settings {
                     compression_threshold: 50,
                     max_tokens: 4096,
                     max_memory_mb: 0,
+                    eviction_recency_weight: None,
+                    eviction_relevance_weight: None,
+                    eviction_cost_weight: None,
+                    eviction_relevance_threshold: None,
+                    eviction_safe_window_seconds: None,
+                    eviction_beta: None,
                 },
                 l2: L2Settings {
                     max_node_size: 5_242_880,

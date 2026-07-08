@@ -36,6 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         default_model: "deepseek-chat".to_string(),
         timeout_seconds: 180,
         max_retries: 3,
+        retry_base_ms: 500,
         model_mapping: Default::default(),
     };
     let gw = Arc::new(UnifiedGateway::new(&gateway_settings)?);

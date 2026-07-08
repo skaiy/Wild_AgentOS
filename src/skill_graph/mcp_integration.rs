@@ -323,6 +323,9 @@ impl MCPIntegration {
             security_info: Some(security_info),
             mcp_server_id: Some(tool.server_id.clone()),
             storage_tier: StorageTier::L2Blackboard,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_used_at: None,
         };
 
         self.graph_store.register_skill(skill)?;

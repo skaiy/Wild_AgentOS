@@ -57,6 +57,7 @@ fn test_gateway_settings() -> GatewaySettings {
         default_model: "deepseek-v4-flash".to_string(),
         timeout_seconds: 30,
         max_retries: 3,
+        retry_base_ms: 500,
         model_mapping: Default::default(),
     }
 }

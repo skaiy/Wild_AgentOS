@@ -45,6 +45,8 @@ pub struct SupervisorAgent {
     pub(super) embedder: Option<Arc<dyn EmbeddingService>>,
     /// Relevance tracker
     pub(super) relevance_tracker: RelevanceTracker,
+    /// Timeout for intervention/LLM execution (seconds)
+    pub(super) execution_timeout_secs: u64,
 }
 
 impl SupervisorAgent {
@@ -98,7 +100,13 @@ impl SupervisorAgent {
             supplement_store,
             embedder: None,
             relevance_tracker: RelevanceTracker::new(0.6),
+            execution_timeout_secs: 30,
         }
+    }
+
+    pub fn with_execution_timeout(mut self, secs: u64) -> Self {
+        self.execution_timeout_secs = secs;
+        self
     }
 
     pub fn with_memory(

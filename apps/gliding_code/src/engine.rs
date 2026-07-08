@@ -4,10 +4,11 @@ use std::sync::Arc;
 use glidinghorse::causal::engine::CausalEngine;
 use glidinghorse::causal::fused::FusedRootCauseEngine;
 use glidinghorse::causal::store::CausalModelStore;
-use glidinghorse::config::{AgentSettings, McpServerConfig, McpStdioServerConfig};
+use glidinghorse::config::{McpServerConfig, McpStdioServerConfig};
 use glidinghorse::core::agent_runner::TaskResult;
 use glidinghorse::core::event_bus::{EventBus, Event};
 use glidinghorse::core::sa::SupervisorAgent;
+use glidinghorse::memory::l1_session::EvictionConfig;
 use glidinghorse::gateway::UnifiedGateway;
 use glidinghorse::graph_features::features::FeatureExtractor;
 use glidinghorse::graph_backend::{GraphBackend, PetgraphBackend, SkillGraphSnapshotBackend};
@@ -110,7 +111,7 @@ impl CodeCliEngine {
         // Initialize HyperspaceEngine-backed vector store for semantic search
         let embed: Arc<dyn glidinghorse::memory::embedding_service::EmbeddingService> =
             match &loaded_settings {
-                Some(s) => create_embedding_service_from_config(&s.embedding),
+                Some(s) => create_embedding_service_from_config(&s.embedding, s.agents.embedding_timeout_secs),
                 None => Arc::new(FallbackEmbeddingService::new()),
             };
         let hyperspace_path = config.data_dir.as_ref()
@@ -132,7 +133,31 @@ impl CodeCliEngine {
             agent_settings.max_projection_size,
             Some(vector_store),
         ));
-        let core_config = CoreConfig::default();
+        let core_config = CoreConfig {
+            max_node_size: settings.memory.l2.max_node_size,
+            max_projection_size: agent_settings.max_projection_size,
+            l0_storage_path: settings.memory.l0.path.clone(),
+            event_buffer_size: settings.agents.event_bus_capacity,
+            enable_metrics: true,
+            eviction_config: {
+                let l1 = &settings.memory.l1;
+                if l1.eviction_recency_weight.is_some()
+                    || l1.eviction_relevance_weight.is_some()
+                    || l1.eviction_cost_weight.is_some()
+                {
+                    Some(EvictionConfig {
+                        recency_weight: l1.eviction_recency_weight.unwrap_or(0.30),
+                        relevance_weight: l1.eviction_relevance_weight.unwrap_or(0.40),
+                        cost_weight: l1.eviction_cost_weight.unwrap_or(0.30),
+                        relevance_threshold: l1.eviction_relevance_threshold.unwrap_or(0.3),
+                        safe_window_seconds: l1.eviction_safe_window_seconds.unwrap_or(300),
+                        beta: l1.eviction_beta.unwrap_or(0.7),
+                    })
+                } else {
+                    None
+                }
+            },
+        };
         let mm = Arc::new(tokio::sync::Mutex::new(MemoryManager::new(
             l0.clone(),
             l2.clone(),
@@ -229,10 +254,17 @@ impl CodeCliEngine {
         // TimelineStore EventBus subscription deferred — requires a Tokio runtime.
         // Subscribe via start_async_components() in process_task().
 
-        // 初始化 WorkspaceMonitor
+        // 初始化 WorkspaceMonitor — 从 settings.workspace 读取配置
         let workspace_monitor: Option<Arc<WorkspaceMonitor>> = {
             let ws_config = WorkspaceMonitorConfig {
                 workspace_root,
+                content_store_max_bytes: settings.workspace.content_store_max_bytes,
+                content_cache_capacity: settings.workspace.content_cache_capacity,
+                watch_enabled: settings.workspace.watch_enabled,
+                poll_interval_ms: settings.workspace.poll_interval_ms,
+                debounce_ms: settings.workspace.debounce_ms,
+                max_debounce_wait_ms: settings.workspace.max_debounce_wait_ms,
+                exclude_patterns: settings.workspace.exclude_patterns.clone(),
                 ..Default::default()
             };
             match WorkspaceMonitor::initialize(ws_config, None, Some(event_bus.clone())) {
@@ -267,14 +299,15 @@ impl CodeCliEngine {
             config.max_iterations,
             config.max_pdca_cycles,
         )
-        .with_memory(Some(l2), None, None);
+        .with_memory(Some(l2), None, None)
+        .with_execution_timeout(agent_settings.sa_execution_timeout_secs);
 
         let (prompt_tokens, completion_tokens, last_prompt_tokens, last_completion_tokens) = sa.token_usage_arcs();
 
         // MCP initialization — register HTTP and stdio servers from config
         let has_mcp = !config.mcp_servers.is_empty() || !config.mcp_stdio_servers.is_empty();
         let mcp_client = if has_mcp {
-            let mut client = McpClient::new();
+            let mut client = McpClient::with_timeout(agent_settings.mcp_timeout_secs);
             for server in &config.mcp_servers {
                 info!(name = %server.name, url = %server.url, "注册 MCP 服务器 (HTTP)");
                 client.register_server(&server.name, &server.url);

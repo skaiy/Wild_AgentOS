@@ -556,6 +556,102 @@ impl SkillGraphStore {
         self.skills.read().len()
     }
 
+    // ── LLRU cold archive ──────────────────────────────────────────────
+
+    /// Archive cold skills (not used since `cutoff`) to L0 storage.
+    ///
+    /// Each archived skill has its `storage_tier` set to `L0Permanent` and
+    /// is persisted synchronously to the L0 store.  Skills remain registered
+    /// in the in-memory graph — only the tier label changes.
+    ///
+    /// Returns the number of skills archived.
+    pub fn archive_cold_skills(&self, cutoff: &chrono::DateTime<chrono::Utc>) -> Result<usize, CoreError> {
+        let cold_iris: Vec<String> = self
+            .list_all_skills()
+            .into_iter()
+            .filter(|s| {
+                s.storage_tier != StorageTier::L0Permanent
+                    && s.last_used_at
+                        .as_ref()
+                        .map(|used| used < cutoff)
+                        .unwrap_or(true)
+            })
+            .map(|s| s.skill_iri.clone())
+            .collect();
+
+        if cold_iris.is_empty() {
+            return Ok(0);
+        }
+
+        let l0 = self.l0_store.as_ref().ok_or_else(|| CoreError::Internal {
+            message: "L0 store not configured — cannot archive".to_string(),
+        })?;
+
+        let mut archived = 0usize;
+        for iri in &cold_iris {
+            // Serialize the skill as JSON-LD for L0 storage
+            let mut skills = self.skills.write();
+            if let Some(skill) = skills.get_mut(iri) {
+                skill.storage_tier = StorageTier::L0Permanent;
+
+                let now = Utc::now();
+                let entry = crate::memory::l0_store::L0Entry {
+                    iri: iri.clone(),
+                    content: serde_json::to_string(&skill.to_json_ld()).unwrap_or_default(),
+                    importance: skill.graph_meta.success_rate as f32,
+                    access_count: 0,
+                    created_at: skill.created_at,
+                    last_accessed: now,
+                    tags: skill.tags.clone(),
+                    metadata: serde_json::Map::new(),
+                    mesi_state: crate::memory::l0_store::MesiState::Exclusive,
+                    content_hash: String::new(),
+                    named_graph: Some(crate::skill_graph::graph_store::SKILL_GRAPH_NAMED_GRAPH.to_string()),
+                    jsonld_context: None,
+                    jsonld_types: vec!["skill:Skill".to_string()],
+                    hyperspace_point_id: None,
+                };
+                let json = serde_json::to_string(&entry).map_err(|e| CoreError::Internal {
+                    message: format!("Serialization error during archive: {e}"),
+                })?;
+                l0.store(iri, &json)?;
+                archived += 1;
+            }
+        }
+
+        info!(count = archived, "LLRU archive: cold skills migrated to L0");
+        Ok(archived)
+    }
+
+    /// Find skills whose `updated_at` is older than `max_age` (i.e. stale).
+    ///
+    /// These skills should be re-indexed to refresh the in-memory index.
+    /// Skills with `storage_tier == L1Session` are excluded (ephemeral).
+    pub fn find_stale_skills(&self, max_age: &chrono::Duration) -> Vec<SkillGraphNode> {
+        let cutoff = Utc::now() - *max_age;
+        self.list_all_skills()
+            .into_iter()
+            .filter(|s| {
+                s.storage_tier != StorageTier::L1Session && s.updated_at < cutoff
+            })
+            .collect()
+    }
+
+    /// Re-index all stale skills whose `updated_at` is older than `max_age`.
+    ///
+    /// Returns the number of skills that were re-indexed.
+    pub fn reindex_stale_skills(&self, max_age: &chrono::Duration) -> usize {
+        let stale = self.find_stale_skills(max_age);
+        let count = stale.len();
+        for skill in &stale {
+            self.index.update_skill(skill);
+        }
+        if count > 0 {
+            info!(count = count, "Re-indexed stale skills");
+        }
+        count
+    }
+
     // ── P1-1: Hyperedge CRUD ───────────────────────────────────────────
 
     pub fn register_hyperedge(&self, hyperedge: Hyperedge) -> Result<(), CoreError> {
@@ -895,6 +991,9 @@ impl SkillGraphStore {
             security_info: None,
             mcp_server_id: None,
             storage_tier: StorageTier::L0Permanent,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_used_at: None,
         };
 
         self.register_skill(composite.clone())?;

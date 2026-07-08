@@ -11,6 +11,20 @@ gateway:
     analysis: "deepseek-v4-flash"
     default: "deepseek-v4-flash"
 
+workspace:
+  root: ""
+  watch_enabled: true
+  content_store_max_bytes: 67108864
+  content_cache_capacity: 1000
+  poll_interval_ms: 5000
+  debounce_ms: 500
+  max_debounce_wait_ms: 5000
+  exclude_patterns:
+    - "node_modules/"
+    - "target/"
+    - ".git/"
+    - "dist/"
+
 memory:
   l0:
     path: "/tmp/agent_os_data/l0"
@@ -22,7 +36,11 @@ memory:
     max_tokens: 4096
   l2:
     max_node_size: 2048
-    max_projection_size: 500
+  max_projection_size: 500
+  sa_execution_timeout_secs: 30
+  tool_timeout_secs: 60
+  mcp_timeout_secs: 30
+  embedding_timeout_secs: 30
   l3:
     default_frame: "summary_only"
     max_size: 500

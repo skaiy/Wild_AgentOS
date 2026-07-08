@@ -143,10 +143,10 @@ struct OllamaEmbedResponse {
 }
 
 impl OllamaEmbeddingService {
-    pub fn new(base_url: &str, model: &str, dimension: usize) -> Self {
+    pub fn new(base_url: &str, model: &str, dimension: usize, timeout_secs: u64) -> Self {
         Self {
             client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(timeout_secs))
                 .build()
                 .unwrap_or_default(),
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -198,6 +198,7 @@ impl EmbeddingService for OllamaEmbeddingService {
 
 pub fn create_embedding_service_from_config(
     config: &crate::config::settings::EmbeddingSettings,
+    timeout_secs: u64,
 ) -> Arc<dyn EmbeddingService> {
     if !config.enabled {
         info!("Embedding disabled, using Fallback service");
@@ -216,6 +217,7 @@ pub fn create_embedding_service_from_config(
                 &config.ollama.base_url,
                 &config.ollama.model,
                 config.ollama.dimension,
+                timeout_secs,
             ))
         }
         "oneapi" => {

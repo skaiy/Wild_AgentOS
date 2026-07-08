@@ -57,6 +57,8 @@ pub struct AgentOSService {
     execution_states: Arc<RwLock<HashMap<String, ExecutionState>>>,
     /// Batch Agent manager, post-new async initialization
     batch_manager: tokio::sync::Mutex<Option<BatchAgentManager>>,
+    /// Skill graph store for background maintenance (archive + re-index)
+    skill_graph: Option<Arc<SkillGraphStore>>,
 }
 
 impl AgentOSService {
@@ -214,15 +216,15 @@ impl AgentOSService {
         );
 
         // ── BatchAgent manager (sync register, async start) ──
+        let skill_graph = Arc::new(
+            SkillGraphStore::new()
+                .with_blackboard(blackboard.clone())
+                .with_l0_store(l0.clone()),
+        );
         let batch_mgr = {
-            let skill_graph = Arc::new(
-                SkillGraphStore::new()
-                    .with_blackboard(blackboard.clone())
-                    .with_l0_store(l0.clone()),
-            );
             let mut mgr = BatchAgentManager::new()
                 .with_event_bus(event_bus.clone())
-                .with_graph_store(skill_graph);
+                .with_graph_store(skill_graph.clone());
 
             let agent_settings = &settings.batch_agents.agents;
             if !agent_settings.is_empty() {
@@ -256,6 +258,7 @@ impl AgentOSService {
             unified_graph,
             execution_states: Arc::new(RwLock::new(HashMap::new())),
             batch_manager: tokio::sync::Mutex::new(Some(batch_mgr)),
+            skill_graph: Some(skill_graph),
         };
 
         Ok(s)
@@ -281,7 +284,7 @@ impl AgentOSService {
         crate::api::http::build_router(core, self.unified_graph.store())
     }
 
-    /// Async start BatchAgent system. Call before gRPC serve.
+    /// Async start BatchAgent system + background maintenance tasks. Call before gRPC serve.
     pub async fn init_batch_system(&self) {
         let mut guard = self.batch_manager.lock().await;
         if let Some(ref mut mgr) = *guard {
@@ -291,6 +294,37 @@ impl AgentOSService {
             }
         } else {
             tracing::info!("BatchAgent initialized or disabled");
+        }
+        drop(guard);
+
+        // ── Background maintenance: archive + re-index every 30 minutes ──
+        if let Some(ref sg) = self.skill_graph {
+            let sg_clone = sg.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(1800));
+                loop {
+                    interval.tick().await;
+
+                    // Archive cold skills (L2→L0, last_used > 48 hours ago)
+                    let cutoff = chrono::Utc::now() - chrono::Duration::hours(48);
+                    match sg_clone.archive_cold_skills(&cutoff) {
+                        Ok(archived) => {
+                            if archived > 0 {
+                                tracing::info!(archived = archived, "Maintenance: archived cold skills");
+                            }
+                        }
+                        Err(e) => tracing::warn!("Maintenance: archive_cold_skills failed: {}", e),
+                    }
+
+                    // Re-index stale skills (updated_at > 4 hours ago)
+                    let stale_age = chrono::Duration::hours(4);
+                    let reindexed = sg_clone.reindex_stale_skills(&stale_age);
+                    if reindexed > 0 {
+                        tracing::info!(reindexed = reindexed, "Maintenance: re-indexed stale skills");
+                    }
+                }
+            });
+            tracing::info!("Background maintenance task spawned (archive=48h, reindex=4h, interval=30min)");
         }
     }
 
@@ -819,6 +853,7 @@ fn convert_event_bus_to_grpc(event: &crate::core::event_bus::Event) -> Option<(c
             status: "running".to_string(),
             turn: 0,
             iteration: 0,
+            timestamp: None,
         }),
         EventType::AgentCompleted => ExecutionEventKind::AgentStatus(crate::core::execution_event::AgentStatus {
             agent_id: event.source_agent_iri.clone(),
@@ -826,6 +861,7 @@ fn convert_event_bus_to_grpc(event: &crate::core::event_bus::Event) -> Option<(c
             status: "completed".to_string(),
             turn: 0,
             iteration: 0,
+            timestamp: None,
         }),
         EventType::AgentError => ExecutionEventKind::Error(crate::core::execution_event::Error {
             error_type: "AgentError".to_string(),

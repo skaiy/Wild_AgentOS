@@ -7,6 +7,7 @@ use hyperspace_engine::hnsw::HnswConfig;
 use hyperspace_engine::hyper_vector::{EmbeddingVector, MetricKind};
 use hyperspace_engine::metric::CosineMetric;
 use hyperspace_engine::wal::WalSyncMode;
+use chrono::Utc;
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
@@ -25,6 +26,10 @@ pub struct HybridSearchFilter {
     pub min_importance: Option<f32>,
     pub jsonld_types: Vec<String>,
     pub named_graph: Option<String>,
+    /// Only return entries stored after this Unix timestamp (seconds)
+    pub created_after: Option<f64>,
+    /// Only return entries stored before this Unix timestamp (seconds)
+    pub created_before: Option<f64>,
 }
 
 impl HybridSearchFilter {
@@ -62,6 +67,18 @@ impl HybridSearchFilter {
         self
     }
 
+    /// Filter to only entries stored after this Unix timestamp (seconds)
+    pub fn with_created_after(mut self, timestamp: f64) -> Self {
+        self.created_after = Some(timestamp);
+        self
+    }
+
+    /// Filter to only entries stored before this Unix timestamp (seconds)
+    pub fn with_created_before(mut self, timestamp: f64) -> Self {
+        self.created_before = Some(timestamp);
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
         self.must_tags.is_empty()
             && self.should_tags.is_empty()
@@ -69,6 +86,8 @@ impl HybridSearchFilter {
             && self.min_importance.is_none()
             && self.jsonld_types.is_empty()
             && self.named_graph.is_none()
+            && self.created_after.is_none()
+            && self.created_before.is_none()
     }
 }
 
@@ -81,6 +100,8 @@ pub struct ScoredEntry {
     pub tags: Vec<String>,
     pub importance: Option<f32>,
     pub jsonld_types: Vec<String>,
+    /// Unix timestamp (seconds) when this entry was stored
+    pub stored_at: Option<f64>,
 }
 
 /// In-memory vector store backed by HyperspaceEngine.
@@ -165,6 +186,20 @@ impl HyperspaceStore {
                 lte: None,
             });
         }
+        if let Some(after) = filter.created_after {
+            must_children.push(JsonLdFilter::Range {
+                key: "stored_at".into(),
+                gte: Some(after),
+                lte: None,
+            });
+        }
+        if let Some(before) = filter.created_before {
+            must_children.push(JsonLdFilter::Range {
+                key: "stored_at".into(),
+                gte: None,
+                lte: Some(before),
+            });
+        }
         if !must_children.is_empty() {
             engine_filters.push(JsonLdFilter::Must(must_children));
         }
@@ -196,7 +231,7 @@ impl HyperspaceStore {
     fn scored_hits_to_entries(hits: Vec<SearchHit>) -> Vec<ScoredEntry> {
         hits.into_iter()
             .map(|hit| {
-                let (text, tags, importance, jsonld_types) = hit
+                let (text, tags, importance, jsonld_types, stored_at) = hit
                     .payload
                     .as_ref()
                     .map(|p| {
@@ -226,7 +261,8 @@ impl HyperspaceStore {
                                     .collect()
                             })
                             .unwrap_or_default();
-                        (text, tags, importance, jsonld_types)
+                        let stored_at = p.get("stored_at").and_then(|v| v.as_f64());
+                        (text, tags, importance, jsonld_types, stored_at)
                     })
                     .unwrap_or_default();
 
@@ -237,6 +273,7 @@ impl HyperspaceStore {
                     tags,
                     importance,
                     jsonld_types,
+                    stored_at,
                 }
             })
             .collect()
@@ -269,6 +306,11 @@ impl HyperspaceStore {
 
         let mut payload = serde_json::Map::new();
         payload.insert("iri".into(), Value::String(iri.into()));
+        // Store current Unix timestamp for time-based filtering
+        let now_ts = Utc::now().timestamp() as f64;
+        payload.insert("stored_at".into(), Value::Number(
+            serde_json::Number::from_f64(now_ts).unwrap_or_else(|| serde_json::Number::from(0))
+        ));
         payload.insert(
             "text".into(),
             Value::String(text.chars().take(500).collect()),
@@ -348,6 +390,35 @@ impl HyperspaceStore {
             })?;
 
         Ok(Self::scored_hits_to_entries(results))
+    }
+
+    /// Search with exponential time-decay applied to scores.
+    ///
+    /// After fetching results, each entry's score is multiplied by
+    /// `exp(-λ * hours_since_stored)` — older entries are penalised.
+    /// The results are then re-sorted by the new score.
+    ///
+    /// `decay_lambda = 0.0` → no decay (identical to `search_with_filter`).
+    pub async fn search_with_time_decay(
+        &self,
+        query: &str,
+        filter: &HybridSearchFilter,
+        decay_lambda: f64,
+        limit: u64,
+    ) -> Result<Vec<ScoredEntry>, CoreError> {
+        let mut results = self.search_with_filter(query, filter, limit).await?;
+        let now = Utc::now();
+        for entry in results.iter_mut() {
+            if let Some(stored_at) = entry.stored_at {
+                let age_secs = now.timestamp() as f64 - stored_at;
+                let age_hours = age_secs / 3600.0;
+                if age_hours > 0.0 {
+                    entry.score *= (-decay_lambda * age_hours).exp() as f32;
+                }
+            }
+        }
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(results)
     }
 
     /// Search by tag match (uses combined tag string as query).

@@ -37,6 +37,8 @@ pub struct WorkerConfig {
     pub approval_config: Option<HumanApprovalConfig>,
     /// Workspace root directory (optional)
     pub workspace_root: Option<String>,
+    /// Event bus capacity
+    pub event_bus_capacity: usize,
 }
 
 impl Default for WorkerConfig {
@@ -48,6 +50,7 @@ impl Default for WorkerConfig {
             gateway: None,
             approval_config: None,
             workspace_root: None,
+            event_bus_capacity: 100,
         }
     }
 }
@@ -104,6 +107,7 @@ impl WorkerConfig {
             workspace_root: std::env::var("AGENT_OS_WORKSPACE_ROOT").ok(),
             gateway,
             approval_config,
+            event_bus_capacity: 100,
         }
     }
 }
@@ -236,7 +240,7 @@ impl AgentOsWorker {
             runner,
             templates_engine,
             skills,
-            Arc::new(EventBus::new(100)),
+            Arc::new(EventBus::new(config.event_bus_capacity)),
             20,
         ).with_memory(Some(blackboard), Some(prefetch), Some(scheduler));
         

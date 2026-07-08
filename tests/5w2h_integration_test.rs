@@ -161,6 +161,7 @@ fn test_task_complexity_via_analyze_task() {
         default_model: "deepseek-v4-flash".to_string(),
         timeout_seconds: 30,
         max_retries: 3,
+        retry_base_ms: 500,
         model_mapping: HashMap::new(),
     };
     let gateway = Arc::new(UnifiedGateway::new(&settings).unwrap());

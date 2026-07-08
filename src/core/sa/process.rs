@@ -160,6 +160,9 @@ impl SupervisorAgent {
             info!(task_iri = %task_iri, ws = %ws_summary, "Verify-first: CA→AA prepended, fallback_steps={}", plan.fallback_steps.len());
         }
 
+        // Adapt relevance tracker decay λ to task complexity
+        self.relevance_tracker.adapt_to_complexity(&plan.task_complexity);
+
         let step_roles: Vec<String> = plan.steps.iter().map(|s| format!("{:?}", s.role)).collect();
         self.emit_sa_thought(task_iri,
             &format!("Task classified. Plan: {} ({} steps: {})",
@@ -224,7 +227,7 @@ impl SupervisorAgent {
         }
         for plan in pending_interventions {
             let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(30),
+                std::time::Duration::from_secs(self.execution_timeout_secs),
                 self.execute_intervention(plan, task_iri),
             ).await;
         }

@@ -5,6 +5,7 @@ use tracing::debug;
 
 use crate::core::agent_instance::AgentRole;
 use crate::memory::consistency_engine::ConsistencyEngine;
+use crate::memory::hyperspace_store::HyperspaceStore;
 use crate::memory::l0_store::L0Store;
 use crate::memory::l1_session::L1Session;
 use crate::memory::l2_blackboard::Blackboard;
@@ -19,6 +20,8 @@ pub struct MemoryScheduler {
     consistency: Arc<ConsistencyEngine>,
     memory_bus: Arc<MemoryBus>,
     sessions: parking_lot::RwLock<HashMap<String, L1Session>>,
+    /// Optional HyperspaceStore for time-decayed vector search
+    hyperspace: Option<Arc<HyperspaceStore>>,
 }
 
 impl MemoryScheduler {
@@ -29,6 +32,17 @@ impl MemoryScheduler {
         consistency: Arc<ConsistencyEngine>,
         memory_bus: Arc<MemoryBus>,
     ) -> Self {
+        Self::with_hyperspace(l0_store, blackboard, projection, consistency, memory_bus, None)
+    }
+
+    pub fn with_hyperspace(
+        l0_store: Arc<L0Store>,
+        blackboard: Arc<Blackboard>,
+        projection: Arc<ProjectionEngine>,
+        consistency: Arc<ConsistencyEngine>,
+        memory_bus: Arc<MemoryBus>,
+        hyperspace: Option<Arc<HyperspaceStore>>,
+    ) -> Self {
         Self {
             l0_store,
             blackboard,
@@ -36,6 +50,7 @@ impl MemoryScheduler {
             consistency,
             memory_bus,
             sessions: parking_lot::RwLock::new(HashMap::new()),
+            hyperspace,
         }
     }
 
@@ -103,6 +118,31 @@ impl MemoryScheduler {
         self.blackboard.release_subtree(task_iri)?;
         self.memory_bus.publish("TASK_COMPLETED", task_iri, "{}").await;
         Ok(())
+    }
+
+    /// Context request with time-decayed search at the vector-store level.
+    ///
+    /// Falls back to `on_context_request` when HyperspaceStore is not available.
+    pub async fn context_request_with_decay(
+        &self,
+        agent_role: AgentRole,
+        task_iri: &str,
+        decay_lambda: f64,
+    ) -> Result<String, CoreError> {
+        if let Some(ref hs) = self.hyperspace {
+            let filter = crate::memory::hyperspace_store::HybridSearchFilter::new();
+            let results = hs.search_with_time_decay(task_iri, &filter, decay_lambda, 10).await?;
+            if !results.is_empty() {
+                let contents: Vec<String> = results.iter().map(|r| r.text.clone()).collect();
+                return Ok(contents.join("\n"));
+            }
+        }
+        self.on_context_request(agent_role, task_iri).await
+    }
+
+    /// Attach a HyperspaceStore at runtime (for delayed injection).
+    pub fn with_hyperspace_store(&mut self, hs: Arc<HyperspaceStore>) {
+        self.hyperspace = Some(hs);
     }
 
     pub fn on_session_close(&self, session_id: &str) -> Result<(), CoreError> {

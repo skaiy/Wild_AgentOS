@@ -1,3 +1,4 @@
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -467,6 +468,7 @@ mod tests {
             entry_points: vec!["iri://skills/jwt".to_string()],
             skill_count: 1,
             sub_categories: vec![],
+            created_at: Utc::now(),
         }).unwrap();
 
         let result = engine.execute(

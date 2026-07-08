@@ -151,7 +151,7 @@ Notes:
             reasoning_content: None,
         }];
         let response = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
+            std::time::Duration::from_secs(self.execution_timeout_secs),
             self.runner.gateway.chat_with_params(
                 &model, messages, Some(0.1), Some(1000), None, None,
             ),
