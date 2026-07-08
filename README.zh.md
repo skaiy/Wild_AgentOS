@@ -1,7 +1,7 @@
 # 如野智能体操作系统 Wild AgentOS
 <div align="center">
 
-![Wild AgentOS Logo](assets/logo.jpg)
+![Wild AgentOS Logo](assets/logo_transparent.png)
 
 **工业级 AI 智能体操作系统 · Rust 构建**  [![Star on GitHub](https://img.shields.io/github/stars/skaiy/Wild_AgentOS?style=flat)](https://github.com/skaiy/Wild_AgentOS)
 
