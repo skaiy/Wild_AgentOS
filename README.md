@@ -1,7 +1,7 @@
 # Wild AgentOS 
 <div align="center">
 
-![Wild AgentOS Logo](assets/logo_transparent.png)
+<img src="assets/logo_transparent.png" width="120" alt="Wild AgentOS Logo" />
 
 **An Industrial-Grade AI Agent Operating System Built in Rust**  [![Star on GitHub](https://img.shields.io/github/stars/skaiy/Wild_AgentOS?style=flat)](https://github.com/skaiy/Wild_AgentOS)
 
