@@ -10,13 +10,38 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![gRPC](https://img.shields.io/badge/gRPC-Protocol-green.svg)](https://grpc.io/)
 [![Knowledge Graph](https://img.shields.io/badge/Knowledge%20Graph-Oxigraph-purple.svg)](https://oxigraph.org/)
-[![Release](https://img.shields.io/badge/release-v0.1.2-blue)](https://github.com/skaiy/Wild_AgentOS/releases)
+[![Release](https://img.shields.io/badge/release-v0.1.3-blue)](https://github.com/skaiy/Wild_AgentOS/releases)
 
 ---
 
 [**中文**] · [**English**](README.md) · [**设计细节 →**](docs/DESIGN_DETAIL.zh.md)
 
 </div>
+
+---
+
+## 🎉 v0.1.3 正式发布
+
+我们自豪地宣布 **Wild AgentOS v0.1.3 正式版** 发布。
+
+**v0.1.3 新增与融合特性：**
+
+| 特性 | 类别 | 说明 |
+|------|------|------|
+| **Causal Engine 因果引擎** | 认知系统 | 新的独立因果分析子系统，包含 `CausalEngine`、`FusionEngine`、`CausalStore` 和类型化的 `CausalFactor`。支持智能体运行的因果推理与多因素融合分析，用于根因识别、故障链传播以及决策因果图谱构建。 |
+| **API Key 密钥治理中心** | 安全与组织 | 生产级 API Key 治理中心，支持多租户凭证隔离、安全轮转、Token 额度控制，以及密钥服务商动态注册。 |
+| **模型注册中心** | 网关与路由 | 统一的模型注册与管理中心，支持在不重启守护进程的情况下热插拔切换 LLM 模型和 API 接口服务商配置。 |
+| **WAG 智能网关与 WAF** | 网关与路由 | Wild AgentOS 智能网关（WAG），具有内置 Web 应用防火墙（WAF）、gRPC-HTTP/SSE 桥接、载荷净化和结构化 API 审计日志追踪。 |
+| **多租户向量与图谱隔离** | 安全与组织 | 采用命名图谱命名空间（`tenant:<id>/*`）在 Oxigraph RDF 中实现多租户数据物理隔离；并在 HyperspaceStore 中通过 `tenant:<id>` 向量标签自动限制检索边界。身份血缘通过 HTTP 头部贯穿至任务黑板上下文。 |
+| **统一图存储后端 (Unified Graph)** | 认知系统 | 统一重构的 `GraphBackend`（约 1,200 行代码），取代之前零散的图接口。为节点/边 CRUD 提供单一优化的批处理接口、子图提取以及跨所有知识层的路径搜索。 |
+| **图特征计算 (Graph Features)** | 认知系统 | 新增 `graph_features` module，支持计算图结构特征向量（度中心性、聚类系数、PageRank、介数中心性），并能通过特征距离比对计算图相似度，提供认知快照定量分析。 |
+| **快照时间线 (Snapshot Timeline)** | 认知系统 | 基于时间线版本管理的会话状态快照。`SnapshotTimeline` 支持时序查询、历史定点恢复及基于 diff 的差异回滚，确保任务运行异常的崩溃安全与历史遍历。 |
+| **自我意识 (SA) 重构** | 核心编排 | 对自我意识（SA）模块进行了重大重构（新增 410 行代码），提升智能体运行状态、环境感知与自适应编排的行为监控，并与因果引擎联动进行自诊断。 |
+| **5W2H 维度级因果审计增强** | 核心编排 | 在 `src/core/five_w2h.rs` 中扩展了维度级审计与深层因果归因。What/Why 失败能够自动链入因果引擎完成自动化根因分析。 |
+| **高级特性设计文档** | 文档 | 新增 [`ADVANCED_FEATURES_DESIGN.md`](docs/ADVANCED_FEATURES_DESIGN.md) 高级特性设计文档，详尽阐述了图后端架构、因果推理设计、基于时间线的快照语义以及性能基准测试。 |
+| **图后端性能基准测试 (Benches)** | 测试 | 新增图后端性能测试套件（`benches/bench_graph_backend.rs`），精确评测节点/边的读写、子图提取和路径寻找的吞吐性能。 |
+| **Gliding Code TUI 终端助手重构** | 客户端 TUI | 对终端 TUI 进行引擎升级与微调——提供更佳的 Markdown 渲染排版、加强 MCP 服务端生命周期管理并重构部分底层逻辑。 |
+| **Concurrent 写冲突修复** | 稳定性 | 修复了 L2 Blackboard `write_node` 在并发写入时导致的二级索引重复更新及索引不一致问题。 |
 
 ---
 

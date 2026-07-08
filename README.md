@@ -10,13 +10,38 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![gRPC](https://img.shields.io/badge/gRPC-Protocol-green.svg)](https://grpc.io/)
 [![Knowledge Graph](https://img.shields.io/badge/Knowledge%20Graph-Oxigraph-purple.svg)](https://oxigraph.org/)
-[![Release](https://img.shields.io/badge/release-v0.1.2-blue)](https://github.com/skaiy/Wild_AgentOS/releases)
+[![Release](https://img.shields.io/badge/release-v0.1.3-blue)](https://github.com/skaiy/Wild_AgentOS/releases)
 
 ---
 
 [**English**](README.md) · [**中文**](README.zh.md) · [**Design Detail →**](docs/DESIGN_DETAIL.md)
 
 </div>
+
+---
+
+## 🎉 v0.1.3 Release
+
+We are proud to announce the **v0.1.3 release** of Wild AgentOS.
+
+**What's new in v0.1.3:**
+
+| Feature | Category | Description |
+|---------|----------|-------------|
+| **Causal Engine** | Cognitive System | New standalone causal analysis subsystem with `CausalEngine`, `FusionEngine`, `CausalStore`, and typed `CausalFactor`. Enables causal reasoning across agent operations with fused multi-factor analysis — identifies root causes, propagates failure chains, and computes causal graphs for agent decisions. |
+| **API Key Governance Center** | Security & Org | Production-grade API Key governance center providing multi-tenant credentials isolation, secure rotation, token budget enforcement, and dynamic registration of key providers. |
+| **Model Registry Center** | Gateway & Routing | Unified model registry center for hot-swapping LLM models and API provider configurations without restarting the daemon process. Supports custom mappings for model routing. |
+| **WAG Intelligent Gateway & WAF** | Gateway & Routing | Wild AgentOS Gateway (WAG) with built-in Web Application Firewall (WAF), gRPC-HTTP/SSE bridge, payload sanitization, and structured API audit trails. |
+| **Multi-Tenant Vector & Graph Isolation** | Security & Org | Multi-tenant data partition using namespace-scoped named graphs (`tenant:<id>/*`) in Oxigraph RDF and automatic `tenant:<id>` vector tags isolation in HyperspaceStore. Identity lineage is preserved from HTTP headers through task blackboard context. |
+| **Unified Graph Backend** | Cognitive System | Consolidated `GraphBackend` (~1,200 LOC) replacing fragmented graph storage — provides a single, optimized interface for node/edge CRUD with batch operations, subgraph extraction, and path-finding across all knowledge layers. |
+| **Graph Features Computation** | Cognitive System | New `graph_features` module computing structural feature vectors (degree centrality, clustering coefficient, PageRank, betweenness) and graph similarity scoring via feature-distance comparison. Enables quantitative graph analysis and comparison across cognitive snapshots. |
+| **Snapshot Timeline** | Cognitive System | Session state snapshots with timeline-based version management. `SnapshotTimeline` enables temporal queries, point-in-time restoration, and diff-based rollback — crash-proof recovery with full history traversal. |
+| **Self-Awareness (SA) Overhaul** | Core Orchestration | Major rewrite of the self-awareness module (+410 lines) with enhanced monitoring of agent state, environment perception, and adaptive behavior. Integrated with the causal engine for self-diagnosis. |
+| **5W2H Audit Enhancement** | Core Orchestration | Expanded dimension-level audit in `src/core/five_w2h.rs` with deeper causal attribution per dimension. What/Why failures now chain into the causal engine for automated root-cause analysis. |
+| **Advanced Features Design** | Documentation | Comprehensive [`ADVANCED_FEATURES_DESIGN.md`](docs/ADVANCED_FEATURES_DESIGN.md) document covering graph backend architecture, causal reasoning design, timeline-based snapshot semantics, and performance benchmarks. |
+| **Graph Backend Benchmarks** | Testing | New benchmark suite (`benches/bench_graph_backend.rs`) measuring node/edge R/W, subgraph extraction, and path-finding throughput. |
+| **Gliding Code TUI Refinements** | Client TUI | Engine and TUI improvements in the terminal client — better Markdown rendering, enhanced MCP server lifecycle, and internal refactoring for maintainability. |
+| **Bug Fixes** | Stability | Fixed duplicate secondary-index update in L2 `write_node` that caused inconsistent indexing under concurrent writes. |
 
 ---
 
