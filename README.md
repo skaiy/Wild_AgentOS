@@ -1,17 +1,17 @@
-# Gliding Horse Agent OS 
+# Wild AgentOS 
 <div align="center">
 
-![Gliding Horse Logo](assets/logo.jpg)
+![Wild AgentOS Logo](assets/logo.jpg)
 
-**An Industrial-Grade AI Agent Operating System Built in Rust**  [![Star on GitHub](https://img.shields.io/github/stars/doiito/gliding_horse?style=flat)](https://github.com/doiito/gliding_horse)
+**An Industrial-Grade AI Agent Operating System Built in Rust**  [![Star on GitHub](https://img.shields.io/github/stars/skaiy/Wild_AgentOS?style=flat)](https://github.com/skaiy/Wild_AgentOS)
 
-*Inspired by Zhuge Liang's Wooden Ox and Gliding Horse — Ancient Ingenuity Meets Modern AI*
+*Inspired by Zhuge Liang's Wooden Ox and Wild AgentOS — Ancient Ingenuity Meets Modern AI*
 
 [![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![gRPC](https://img.shields.io/badge/gRPC-Protocol-green.svg)](https://grpc.io/)
 [![Knowledge Graph](https://img.shields.io/badge/Knowledge%20Graph-Oxigraph-purple.svg)](https://oxigraph.org/)
-[![Release](https://img.shields.io/badge/release-v0.1.2-blue)](https://github.com/doiito/gliding_horse/releases)
+[![Release](https://img.shields.io/badge/release-v0.1.2-blue)](https://github.com/skaiy/Wild_AgentOS/releases)
 
 ---
 
@@ -28,7 +28,7 @@
 
 ## 🎉 v0.1.2 Release
 
-We are proud to announce the **v0.1.2 release** of Gliding Horse Agent OS.
+We are proud to announce the **v0.1.2 release** of Wild AgentOS.
 
 **What's new in v0.1.2:**
 
@@ -45,9 +45,9 @@ We are proud to announce the **v0.1.2 release** of Gliding Horse Agent OS.
 
 ---
 
-## What Is Gliding Horse?
+## What Is Wild AgentOS?
 
-An **AI agent operating system** built in Rust that orchestrates multiple agents via the PDCA cycle, enabling coordinated, auditable, and self-improving systems. — much like how Zhuge Liang's **Wooden Ox and Gliding Horse** revolutionized logistics by harnessing mechanical power across treacherous terrain.
+An **AI agent operating system** built in Rust that orchestrates multiple agents via the PDCA cycle, enabling coordinated, auditable, and self-improving systems. — much like how Zhuge Liang's **Wooden Ox and Wild AgentOS** revolutionized logistics by harnessing mechanical power across treacherous terrain.
 
 > "We don't just build agents; we build the **infrastructure that harnesses their collective intelligence**."
 
@@ -72,11 +72,11 @@ An **AI agent operating system** built in Rust that orchestrates multiple agents
 
 In the turbulent era of the Three Kingdoms (220–280 AD), the legendary strategist **Zhuge Liang** (诸葛亮), chancellor of the Shu Han state, faced a critical challenge: how to transport supplies efficiently through the treacherous mountain paths of Sichuan during his Northern Expeditions. Traditional wheeled carts struggled on narrow trails; human porters exhausted quickly.
 
-His solution — the **Wooden Ox (木牛)** and **Gliding Horse (流马)** — were autonomous transport devices that could navigate difficult terrain with minimal human guidance. These mechanical wonders were not merely tools; they represented a paradigm shift — **autonomous systems that extended human capability**.
+His solution — the **Wooden Ox (木牛)** and **Wild AgentOS (流马)** — were autonomous transport devices that could navigate difficult terrain with minimal human guidance. These mechanical wonders were not merely tools; they represented a paradigm shift — **autonomous systems that extended human capability**.
 
 ### Bridging Past and Present
 
-Just as the Gliding Horse served as an **intelligent harness** for transporting supplies across impossible terrain, **Gliding Horse Agent OS** serves as an **intelligent harness for AI agents**:
+Just as the Wild AgentOS served as an **intelligent harness** for transporting supplies across impossible terrain, **Wild AgentOS** serves as an **intelligent harness for AI agents**:
 
 | Ancient Innovation | Modern Implementation |
 |-------------------|----------------------|
@@ -141,7 +141,7 @@ Go Center handles workflow orchestration (Temporal), project management, agent r
 
 ## 🖥️ Gliding Code — The Terminal AI Assistant
 
-**Gliding Code** is a terminal-based AI coding assistant (`ratatui` TUI) that brings the power of Gliding Horse's knowledge graph and agent orchestration directly into your command line — no IDE required.
+**Gliding Code** is a terminal-based AI coding assistant (`ratatui` TUI) that brings the power of Wild AgentOS's knowledge graph and agent orchestration directly into your command line — no IDE required.
 
 **Features:**
 - Interactive TUI with **Markdown rendering** (`tui-markdown`) and **mermaid diagram** support
@@ -169,10 +169,10 @@ No dependencies required. Just download, extract, and run:
 
 | Platform | Download |
 |----------|----------|
-| Linux (x86_64, musl) | [`glidingcode-x86_64-unknown-linux-musl.tar.gz`](https://github.com/doiito/gliding_horse/releases) (~15 MB) |
-| Linux (aarch64, musl) | [`glidingcode-aarch64-unknown-linux-musl.tar.gz`](https://github.com/doiito/gliding_horse/releases) (~14 MB) |
-| macOS (Apple Silicon) | [`glidingcode-aarch64-apple-darwin.tar.gz`](https://github.com/doiito/gliding_horse/releases) (~13 MB) |
-| Windows (x86_64) | [`glidingcode-x86_64-pc-windows-msvc.zip`](https://github.com/doiito/gliding_horse/releases) (~12 MB) |
+| Linux (x86_64, musl) | [`glidingcode-x86_64-unknown-linux-musl.tar.gz`](https://github.com/skaiy/Wild_AgentOS/releases) (~15 MB) |
+| Linux (aarch64, musl) | [`glidingcode-aarch64-unknown-linux-musl.tar.gz`](https://github.com/skaiy/Wild_AgentOS/releases) (~14 MB) |
+| macOS (Apple Silicon) | [`glidingcode-aarch64-apple-darwin.tar.gz`](https://github.com/skaiy/Wild_AgentOS/releases) (~13 MB) |
+| Windows (x86_64) | [`glidingcode-x86_64-pc-windows-msvc.zip`](https://github.com/skaiy/Wild_AgentOS/releases) (~12 MB) |
 
 ```bash
 # Linux / macOS
@@ -220,7 +220,7 @@ export EXA_API_KEY="your-exa-api-key"
 ### Build from Source
 
 ```bash
-git clone https://github.com/doiito/gliding_horse.git
+git clone https://github.com/doiito/Wild_AgentOS.git
 cd gliding_horse
 
 # Build the glidingcode binary (release, ~51 MB)
@@ -278,8 +278,8 @@ cargo build -p code_cli --release
 
 We welcome contributions from the community!
 
-- **🐛 Report bugs**: [GitHub Issues](https://github.com/doiito/gliding_horse/issues)
-- **💡 Propose ideas**: [GitHub Discussions](https://github.com/doiito/gliding_horse/discussions)
+- **🐛 Report bugs**: [GitHub Issues](https://github.com/skaiy/Wild_AgentOS/issues)
+- **💡 Propose ideas**: [GitHub Discussions](https://github.com/skaiy/Wild_AgentOS/discussions)
 - **🔀 Submit PRs**: Fork → feature branch → PR against `main`
 
 ```bash
@@ -305,17 +305,17 @@ MIT License — see [LICENSE](LICENSE).
 
 Star ⭐ if you find this useful — join us in building the infrastructure for tomorrow's AI.
 
-[![GitHub stars](https://img.shields.io/github/stars/doiito/gliding_horse.svg?style=social&label=Star)](https://github.com/doiito/gliding_horse)
+[![GitHub stars](https://img.shields.io/github/stars/skaiy/Wild_AgentOS.svg?style=social&label=Star)](https://github.com/skaiy/Wild_AgentOS)
 
 *"Wisdom is not inherited; it is built upon the shoulders of those who came before."*
 
 </div>
 
 
-<a href="https://www.star-history.com/?repos=doiito%2Fgliding_horse&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=skaiy%2FWild_AgentOS&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=doiito/gliding_horse&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=doiito/gliding_horse&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=doiito/gliding_horse&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=skaiy/Wild_AgentOS&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=skaiy/Wild_AgentOS&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=skaiy/Wild_AgentOS&type=date&legend=top-left" />
  </picture>
 </a>
