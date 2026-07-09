@@ -3315,16 +3315,20 @@ struct BatchControlRequest {
 /// POST /api/v1/batch/agents/:name/control — 启停指定批处理 Agent（action: start|stop）。
 async fn control_batch_agent_handler(
     State(state): State<Arc<AppState>>,
+    identity: UserIdentity,
     axum::extract::Path(name): axum::extract::Path<String>,
     Json(req): Json<BatchControlRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = identity.require_role("DA") {
+        return e.into_response();
+    }
     let mgr_arc = match &state.batch_manager {
         Some(m) => m.clone(),
         None => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(json!({ "error": "批处理系统未启用" })),
-            )
+            ).into_response()
         }
     };
     let mut guard = mgr_arc.lock().await;
@@ -3334,7 +3338,7 @@ async fn control_batch_agent_handler(
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(json!({ "error": "批处理系统未初始化" })),
-            )
+            ).into_response()
         }
     };
     let result = match req.action.as_str() {
@@ -3344,18 +3348,18 @@ async fn control_batch_agent_handler(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": format!("不支持的操作: {other}（仅支持 start|stop）") })),
-            )
+            ).into_response()
         }
     };
     match result {
         Ok(()) => (
             StatusCode::OK,
             Json(json!({ "name": name, "action": req.action, "status": mgr.get_status(&name) })),
-        ),
+        ).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("{:?}", e) })),
-        ),
+        ).into_response(),
     }
 }
 
@@ -5274,9 +5278,12 @@ async fn activate_embedding_handler(
 /// 从 documents 台账拉原文 → 删旧 chunk → 重新分块 embedding 写新 → 更新台账与状态。
 async fn reindex_knowledge_base_handler(
     State(state): State<Arc<AppState>>,
-    _identity: UserIdentity,
+    identity: UserIdentity,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
+    if let Err(e) = identity.require_role("DA") {
+        return e.into_response();
+    }
     let kb = {
         let guard = state.knowledge_bases.read().await;
         guard
@@ -5290,11 +5297,11 @@ async fn reindex_knowledge_base_handler(
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "knowledge base not found", "id": id })),
-            )
+            ).into_response()
         }
     };
     if kb.get("kb_type").and_then(|v| v.as_str()) != Some("vector") {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "仅向量知识库支持重建索引" })));
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "仅向量知识库支持重建索引" }))).into_response();
     }
     let namespace = kb
         .get("vector_namespace")
@@ -5302,19 +5309,19 @@ async fn reindex_knowledge_base_handler(
         .unwrap_or_default()
         .to_string();
     if namespace.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "该向量库缺少 vector_namespace" })));
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "该向量库缺少 vector_namespace" }))).into_response();
     }
     if state.vector_store.load().is_none() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": "向量库未启用（embedding 初始化失败）" })),
-        );
+        ).into_response();
     }
     if state.blob_store.is_none() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": "BlobStore 未启用，无原文可重建" })),
-        );
+        ).into_response();
     }
     let docs: Vec<Value> = kb
         .get("documents")
@@ -5325,7 +5332,7 @@ async fn reindex_knowledge_base_handler(
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "无原文档台账，无法重建（请重新上传后再试）" })),
-        );
+        ).into_response();
     }
     let tenant = kb
         .get("tenant_id")
@@ -5354,7 +5361,7 @@ async fn reindex_knowledge_base_handler(
     (
         StatusCode::ACCEPTED,
         Json(json!({ "status": "reindexing", "id": id, "documents": doc_count })),
-    )
+    ).into_response()
 }
 
 /// 后台重建任务：逐文档从 BlobStore 拉原文，删旧 chunk 后按当前 embedding 重新入库，回写台账。
