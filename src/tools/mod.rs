@@ -1,4 +1,5 @@
 pub mod skill_registry;
+pub mod skill_pipeline;
 pub mod prompt_registry;
 pub mod mcp_client;
 pub mod mcp;

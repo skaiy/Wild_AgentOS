@@ -108,6 +108,11 @@ pub(crate) fn data_dir() -> std::path::PathBuf {
         .unwrap_or_else(|_| std::path::PathBuf::from("data"))
 }
 
+/// 序列化所有依赖进程级环境变量（AGENTOS_DATA_DIR / AGENTOS_AUTH_STRICT）的测试——
+/// 避免并行执行时 env 被相互覆盖导致落盘/读取或鉴权模式错乱。各测试在函数入口取锁并持有到结束。
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// 用户态 Agent 的持久化文件路径。
 fn agents_store_path() -> std::path::PathBuf {
     data_dir().join("agents.json")
@@ -301,6 +306,37 @@ fn delete_user_skill(skill_iri: &str) -> std::io::Result<bool> {
 /// 判定是否为系统级内置技能（`iri://` 命名空间，由内核启动播种，只读）。
 fn is_system_skill_iri(iri: &str) -> bool {
     iri.starts_with("iri://")
+}
+
+/// 技能准入流水线运行记录的持久化文件路径。
+fn pipeline_runs_path() -> std::path::PathBuf {
+    data_dir().join("pipeline_runs.json")
+}
+
+/// 保留的最近流水线运行记录条数上限（超出则裁剪最早记录）。
+const PIPELINE_RUNS_CAP: usize = 200;
+
+/// 从磁盘加载流水线运行记录（最新在前）；文件不存在或解析失败时返回空列表。
+fn load_pipeline_runs() -> Vec<crate::tools::skill_pipeline::PipelineRun> {
+    match std::fs::read_to_string(pipeline_runs_path()) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// 追加一条运行记录并持久化（最新在前，超上限裁剪最早）。best-effort。
+fn append_pipeline_run(run: &crate::tools::skill_pipeline::PipelineRun) -> std::io::Result<()> {
+    let mut runs = load_pipeline_runs();
+    runs.insert(0, run.clone());
+    if runs.len() > PIPELINE_RUNS_CAP {
+        runs.truncate(PIPELINE_RUNS_CAP);
+    }
+    let path = pipeline_runs_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content = serde_json::to_string_pretty(&runs).unwrap_or_else(|_| "[]".to_string());
+    std::fs::write(&path, content)
 }
 
 /// Prompt 版本注册表的持久化文件路径。
@@ -654,6 +690,8 @@ pub fn build_router(
         .route("/api/v1/skills", get(list_skills_handler).post(register_skill_handler).delete(delete_skill_handler))
         .route("/api/v1/skills/manifest", get(skill_manifest_handler))
         .route("/api/v1/skills/import-git", post(import_git_skill_handler))
+        .route("/api/v1/skills/pipeline-runs", get(list_pipeline_runs_handler))
+        .route("/api/v1/skills/pipeline-rerun", post(pipeline_rerun_handler))
         .route("/api/v1/guard/audit", get(guard_audit_handler))
         .route("/api/v1/guard/stats", get(guard_stats_handler))
         .route("/api/v1/kg/import", post(kg_import_handler))
@@ -2831,23 +2869,31 @@ async fn register_skill_handler(
             "error": "系统级内置技能（iri://）为只读，不可注册或修改；请使用 skill:// 命名空间",
         }))).into_response();
     }
-    let sig_status = state.core.skills.verify_skill_signature(&skill);
-    use crate::tools::skill_registry::SignatureStatus;
-    if sig_status == SignatureStatus::Invalid {
-        return (StatusCode::BAD_REQUEST, Json(json!({
-            "status": "error", "error": "签名校验失败，技能被拒绝注册",
-            "signature_status": "invalid",
-        }))).into_response();
-    }
+    // 走技能准入流水线（Lint→Security→Test→Publish）：签名/Schema 等门禁在流水线内统一裁决，
+    // 仅当门禁放行时 publish 回调才会真正持久化并注册技能。
+    use crate::tools::skill_pipeline::{run_pipeline, PipelineContext, PipelineSource};
     let iri = skill.skill_iri.clone();
-    let _ = save_user_skill(&skill);
-    state.core.skills.register_skill(skill);
-    (StatusCode::CREATED, Json(json!({
-        "status": "ok",
+    let ctx = PipelineContext::local(PipelineSource::Manual, identity.user_id.clone());
+    let registry = state.core.skills.clone();
+    let run = run_pipeline(&state.core.skills, &skill, &ctx, Box::new(move |s| {
+        save_user_skill(s).map_err(|e| e.to_string())?;
+        registry.register_skill(s.clone());
+        Ok(format!("已注册并持久化技能 {}", s.skill_iri))
+    }));
+    let _ = append_pipeline_run(&run);
+
+    let sig_status = state.core.skills.verify_skill_signature(&skill);
+    let code = if run.published { StatusCode::CREATED } else { StatusCode::UNPROCESSABLE_ENTITY };
+    (code, Json(json!({
+        "status": if run.published { "ok" } else { "error" },
+        "error": if run.published { Value::Null } else { json!(run.summary) },
         "skill_iri": iri,
         "signature_status": sig_status.as_str(),
+        "gate_passed": run.gate_passed,
+        "published": run.published,
         "registered_by": identity.user_id,
         "tenant_id": identity.tenant_id,
+        "pipeline_run": run,
     }))).into_response()
 }
 
@@ -3091,28 +3137,127 @@ async fn import_git_skill_handler(
         skill_types,
     };
 
-    let sig_status = state.core.skills.verify_skill_signature(&skill);
-    use crate::tools::skill_registry::SignatureStatus;
-    if sig_status == SignatureStatus::Invalid {
-        cleanup(&clone_dir);
-        return (StatusCode::BAD_REQUEST, Json(json!({
-            "status": "error", "error": "签名校验失败，技能被拒绝注册",
-        }))).into_response();
-    }
+    // 走技能准入流水线（Git 来源）：Security/Test 阶段会对克隆目录做敏感扫描与示例夹具校验，
+    // 因此流水线必须在 cleanup 清理克隆目录之前执行。
+    use crate::tools::skill_pipeline::{run_pipeline, PipelineContext, PipelineSource};
+    let ctx = PipelineContext {
+        source: PipelineSource::Git,
+        triggered_by: identity.user_id.clone(),
+        repo_url: Some(req.repo_url.trim().to_string()),
+        clone_dir: if git_ok { Some(clone_dir.clone()) } else { None },
+        sub_path: req.path.clone(),
+    };
+    let registry = state.core.skills.clone();
+    let run = run_pipeline(&state.core.skills, &skill, &ctx, Box::new(move |s| {
+        save_user_skill(s).map_err(|e| e.to_string())?;
+        registry.register_skill(s.clone());
+        Ok(format!("已注册并持久化技能 {}", s.skill_iri))
+    }));
+    let _ = append_pipeline_run(&run);
 
-    let _ = save_user_skill(&skill);
-    state.core.skills.register_skill(skill);
+    let sig_status = state.core.skills.verify_skill_signature(&skill);
     cleanup(&clone_dir);
 
-    (StatusCode::CREATED, Json(json!({
-        "status": "ok",
+    let code = if run.published { StatusCode::CREATED } else { StatusCode::UNPROCESSABLE_ENTITY };
+    (code, Json(json!({
+        "status": if run.published { "ok" } else { "error" },
+        "error": if run.published { Value::Null } else { json!(run.summary) },
         "skill_iri": skill_iri,
         "name": name,
         "git_cloned": git_ok,
         "git_stderr": if git_ok { "" } else { git_stderr.trim() },
         "yaml_fields_found": yaml_fields.len(),
         "signature_status": sig_status.as_str(),
+        "gate_passed": run.gate_passed,
+        "published": run.published,
         "registered_by": identity.user_id,
+        "pipeline_run": run,
+    }))).into_response()
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 技能准入流水线：运行记录查询 + 重跑
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// GET /api/v1/skills/pipeline-runs 的查询参数。
+#[derive(Debug, Deserialize)]
+struct PipelineRunsQuery {
+    /// 可选：按 skill_iri 过滤（详情弹窗按单个技能拉取其历史）。
+    iri: Option<String>,
+    /// 可选：仅返回最近 N 条（默认全部，受服务端上限约束）。
+    limit: Option<usize>,
+}
+
+/// GET /api/v1/skills/pipeline-runs — 查询技能准入流水线运行记录（只读，无需鉴权）。
+/// 记录仅含文件名/命中计数等非敏感信息，可安全对管理台展示。
+async fn list_pipeline_runs_handler(
+    Query(q): Query<PipelineRunsQuery>,
+) -> impl IntoResponse {
+    let mut runs = load_pipeline_runs();
+    if let Some(iri) = q.iri.filter(|s| !s.is_empty()) {
+        runs.retain(|r| r.skill_iri == iri);
+    }
+    if let Some(limit) = q.limit {
+        runs.truncate(limit);
+    }
+    Json(json!({
+        "count": runs.len(),
+        "runs": runs,
+    }))
+}
+
+/// POST /api/v1/skills/pipeline-rerun 的请求体。
+#[derive(Debug, Deserialize)]
+struct PipelineRerunRequest {
+    skill_iri: String,
+}
+
+/// POST /api/v1/skills/pipeline-rerun — 对已注册的应用级技能重跑准入流水线（G7：仅 DA 角色）。
+async fn pipeline_rerun_handler(
+    State(state): State<Arc<AppState>>,
+    identity: UserIdentity,
+    Json(req): Json<PipelineRerunRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = identity.require_role("DA") {
+        return e.into_response();
+    }
+    if req.skill_iri.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "status": "error", "error": "skill_iri 不能为空"
+        }))).into_response();
+    }
+    if is_system_skill_iri(&req.skill_iri) {
+        return (StatusCode::FORBIDDEN, Json(json!({
+            "status": "error", "error": "系统级内置技能（iri://）为只读，不支持重跑流水线",
+        }))).into_response();
+    }
+    // 以持久化的用户态技能为准（含完整 schema/template/签名）。
+    let skill = match load_user_skills().into_iter().find(|s| s.skill_iri == req.skill_iri) {
+        Some(s) => s,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(json!({
+                "status": "error", "error": "技能未找到（检查 skill_iri）"
+            }))).into_response();
+        }
+    };
+
+    use crate::tools::skill_pipeline::{run_pipeline, PipelineContext, PipelineSource};
+    let ctx = PipelineContext::local(PipelineSource::Rerun, identity.user_id.clone());
+    let registry = state.core.skills.clone();
+    let run = run_pipeline(&state.core.skills, &skill, &ctx, Box::new(move |s| {
+        save_user_skill(s).map_err(|e| e.to_string())?;
+        registry.register_skill(s.clone());
+        Ok(format!("已重新注册技能 {}", s.skill_iri))
+    }));
+    let _ = append_pipeline_run(&run);
+
+    (StatusCode::OK, Json(json!({
+        "status": if run.published { "ok" } else { "error" },
+        "error": if run.published { Value::Null } else { json!(run.summary) },
+        "skill_iri": req.skill_iri,
+        "gate_passed": run.gate_passed,
+        "published": run.published,
+        "pipeline_run": run,
     }))).into_response()
 }
 
@@ -6226,6 +6371,7 @@ mod tests {
         use crate::core::core_types::{CoreConfig, SemanticCore};
         use base64::{engine::general_purpose::STANDARD, Engine};
 
+        let _guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // 隔离持久化目录 + 启用严格鉴权（验证匿名 403）
         let tmp = std::env::temp_dir().join(format!("agentos_e2e_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
@@ -6595,6 +6741,7 @@ version: \"2.0.0\"\n\
     /// GET /api/v1/skills/manifest?iri=skill://test/hello → 200 + application/x-yaml
     #[tokio::test]
     async fn test_manifest_200_known_skill() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join(format!("manifest_200_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
         std::env::set_var("AGENTOS_DATA_DIR", &tmp);
@@ -6625,6 +6772,7 @@ version: \"2.0.0\"\n\
     /// GET /api/v1/skills/manifest?iri=skill://notfound/x → 404
     #[tokio::test]
     async fn test_manifest_404_unknown_skill() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join(format!("manifest_404_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
         std::env::set_var("AGENTOS_DATA_DIR", &tmp);
@@ -6650,6 +6798,7 @@ version: \"2.0.0\"\n\
     /// POST /api/v1/skills/import-git 无 X-Identity 头 → 403（严格模式）
     #[tokio::test]
     async fn test_import_git_403_no_role() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join(format!("importgit_403_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
         std::env::set_var("AGENTOS_DATA_DIR", &tmp);
@@ -6683,6 +6832,7 @@ version: \"2.0.0\"\n\
     async fn test_import_git_400_empty_url() {
         use base64::{engine::general_purpose::STANDARD, Engine};
 
+        let _guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join(format!("importgit_400_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
         std::env::set_var("AGENTOS_DATA_DIR", &tmp);
@@ -6708,6 +6858,204 @@ version: \"2.0.0\"\n\
 
         let resp = router.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        std::env::remove_var("AGENTOS_DATA_DIR");
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    // ── 技能准入流水线集成测试 ─────────────────────────────────────────────────
+
+    use base64::engine::general_purpose::STANDARD as B64;
+
+    /// 构造带 DA 角色的 X-Identity 头值。
+    fn da_identity(user: &str) -> String {
+        B64.encode(
+            serde_json::json!({"user_id": user, "tenant_id": "t-test", "roles": ["DA"]}).to_string(),
+        )
+    }
+
+    /// POST 一个 JSON body 到 router，返回 (状态码, 解析后的 body)。
+    async fn post_json(router: &Router, uri: &str, body: Value, ident: Option<&str>) -> (StatusCode, Value) {
+        let mut b = axum::http::Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("content-type", "application/json");
+        if let Some(id) = ident {
+            b = b.header("x-identity", id);
+        }
+        let req = b.body(axum::body::Body::from(body.to_string())).unwrap();
+        let resp = router.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 4 * 1024 * 1024).await.unwrap();
+        let v: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        (status, v)
+    }
+
+    /// GET 一个 URI，返回 (状态码, 解析后的 body)。
+    async fn get_json(router: &Router, uri: &str) -> (StatusCode, Value) {
+        let req = axum::http::Request::builder()
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = router.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 4 * 1024 * 1024).await.unwrap();
+        let v: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        (status, v)
+    }
+
+    /// 合法技能注册 → 201 CREATED，门禁放行且已发布，运行记录持久化并可经查询接口检索。
+    #[tokio::test]
+    async fn test_pipeline_manual_register_ok_persists_run() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("pipeline_ok_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("AGENTOS_DATA_DIR", &tmp);
+
+        let state = make_state(&tmp);
+        let router = Router::new()
+            .route("/api/v1/skills", post(register_skill_handler))
+            .route("/api/v1/skills/pipeline-runs", get(list_pipeline_runs_handler))
+            .with_state(state);
+
+        let ident = da_identity("admin");
+        let skill = serde_json::json!({
+            "skill_iri": "skill://test/ok", "name": "合法技能", "description": "有效",
+            "version": "1.0.0", "category": "test", "security_level": "standard",
+            "allowed_roles": ["DA"], "input_schema": {"type": "object"},
+            "output_schema": {"type": "object"}, "compiled_template": "{{x}}"
+        });
+        let (st, body) = post_json(&router, "/api/v1/skills", skill, Some(&ident)).await;
+        assert_eq!(st, StatusCode::CREATED, "合法技能应 201，body={body}");
+        assert_eq!(body["gate_passed"], true);
+        assert_eq!(body["published"], true);
+        assert_eq!(body["pipeline_run"]["source"], "manual");
+        assert_eq!(body["pipeline_run"]["skill_iri"], "skill://test/ok");
+
+        // 运行记录已持久化落盘。
+        let disk = std::fs::read_to_string(pipeline_runs_path()).unwrap();
+        assert!(disk.contains("skill://test/ok"), "运行记录应落盘");
+
+        // 查询接口（按 iri 过滤）应可检索到该运行。
+        let (st, listed) = get_json(&router, "/api/v1/skills/pipeline-runs?iri=skill://test/ok").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(listed["count"], 1);
+        assert_eq!(listed["runs"][0]["published"], true);
+
+        std::env::remove_var("AGENTOS_DATA_DIR");
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    /// 非法 input_schema（无法编译为 JSON Schema）→ 422，门禁拦截、未发布，
+    /// 但失败运行记录仍持久化且可查询。
+    #[tokio::test]
+    async fn test_pipeline_manual_register_invalid_schema_422() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("pipeline_422_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("AGENTOS_DATA_DIR", &tmp);
+
+        let state = make_state(&tmp);
+        let router = Router::new()
+            .route("/api/v1/skills", post(register_skill_handler))
+            .route("/api/v1/skills/pipeline-runs", get(list_pipeline_runs_handler))
+            .with_state(state.clone());
+
+        let ident = da_identity("admin");
+        // type 必须是字符串/数组；此处为数字 → JSON Schema 编译失败 → Lint 阶段 Failed。
+        let skill = serde_json::json!({
+            "skill_iri": "skill://test/bad", "name": "非法技能", "description": "无效",
+            "version": "1.0.0", "category": "test", "security_level": "standard",
+            "allowed_roles": ["DA"], "input_schema": {"type": 123},
+            "output_schema": {"type": "object"}, "compiled_template": "{{x}}"
+        });
+        let (st, body) = post_json(&router, "/api/v1/skills", skill, Some(&ident)).await;
+        assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY, "非法 schema 应 422，body={body}");
+        assert_eq!(body["gate_passed"], false);
+        assert_eq!(body["published"], false);
+
+        // 技能不得被真正注册。
+        assert!(state.core.skills.get_skill("skill://test/bad").is_none(), "门禁拦截后不应注册");
+
+        // 失败运行记录仍持久化，且门禁字段为 false。
+        let (st, listed) = get_json(&router, "/api/v1/skills/pipeline-runs?iri=skill://test/bad").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(listed["count"], 1);
+        assert_eq!(listed["runs"][0]["gate_passed"], false);
+        assert_eq!(listed["runs"][0]["published"], false);
+
+        std::env::remove_var("AGENTOS_DATA_DIR");
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    /// 对已注册技能重跑流水线 → 200，来源为 rerun，且新增一条运行记录。
+    #[tokio::test]
+    async fn test_pipeline_rerun_ok() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("pipeline_rerun_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("AGENTOS_DATA_DIR", &tmp);
+
+        let state = make_state(&tmp);
+        let router = Router::new()
+            .route("/api/v1/skills", post(register_skill_handler))
+            .route("/api/v1/skills/pipeline-rerun", post(pipeline_rerun_handler))
+            .route("/api/v1/skills/pipeline-runs", get(list_pipeline_runs_handler))
+            .with_state(state);
+
+        let ident = da_identity("admin");
+        let skill = serde_json::json!({
+            "skill_iri": "skill://test/rerun", "name": "可重跑技能", "description": "有效",
+            "version": "1.0.0", "category": "test", "security_level": "standard",
+            "allowed_roles": ["DA"], "input_schema": {"type": "object"},
+            "output_schema": {"type": "object"}, "compiled_template": "{{x}}"
+        });
+        let (st, _) = post_json(&router, "/api/v1/skills", skill, Some(&ident)).await;
+        assert_eq!(st, StatusCode::CREATED);
+
+        // 重跑。
+        let (st, body) = post_json(
+            &router,
+            "/api/v1/skills/pipeline-rerun",
+            serde_json::json!({"skill_iri": "skill://test/rerun"}),
+            Some(&ident),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "重跑应 200，body={body}");
+        assert_eq!(body["published"], true);
+        assert_eq!(body["pipeline_run"]["source"], "rerun");
+
+        // 两条运行记录（注册 + 重跑）。
+        let (st, listed) = get_json(&router, "/api/v1/skills/pipeline-runs?iri=skill://test/rerun").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(listed["count"], 2);
+
+        std::env::remove_var("AGENTOS_DATA_DIR");
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    /// 重跑不存在的技能 → 404。
+    #[tokio::test]
+    async fn test_pipeline_rerun_not_found_404() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("pipeline_rerun404_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("AGENTOS_DATA_DIR", &tmp);
+
+        let state = make_state(&tmp);
+        let router = Router::new()
+            .route("/api/v1/skills/pipeline-rerun", post(pipeline_rerun_handler))
+            .with_state(state);
+
+        let ident = da_identity("admin");
+        let (st, _) = post_json(
+            &router,
+            "/api/v1/skills/pipeline-rerun",
+            serde_json::json!({"skill_iri": "skill://test/nope"}),
+            Some(&ident),
+        )
+        .await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
 
         std::env::remove_var("AGENTOS_DATA_DIR");
         let _ = std::fs::remove_dir_all(tmp);
