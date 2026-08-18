@@ -1,7 +1,11 @@
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "wildcode", about = "Wild Code - AI Coding Assistant")]
+#[command(
+    name = "wildcode",
+    about = "Wild Code - AI Coding Assistant",
+    version
+)]
 struct Cli {
     #[arg(help = "Single prompt (omit for interactive mode)")]
     prompt: Option<String>,

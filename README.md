@@ -162,7 +162,7 @@ $env:DEEPSEEK_API_KEY="sk-..."           # Windows (PowerShell)
 
 # Alternatively, use any OpenAI-compatible provider:
 export AGENT_OS_GATEWAY_API_KEY="sk-..."
-export AGENT_OS_GATEWAY_API_URL="https://your-endpoint/v1"
+export AGENT_OS_GATEWAY_BASE_URL="https://your-endpoint/v1"
 
 # Web search tool (powered by Exa):
 # Get your free API key at https://exa.ai/docs/reference/team-management/get-api-key
