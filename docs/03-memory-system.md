@@ -333,11 +333,11 @@ pub fn get_shared_state(&self, task_iri: &str) -> Result<Option<Value>, CoreErro
 -- 查询所有 Working 的 DA
 SELECT ?agent ?task ?operation WHERE {
   GRAPH <blackboard:shared> {
-    ?agent a <http://agent-os.org/type/AgentSnapshot> ;
-           <http://agent-os.org/prop/agent_role> "Do" ;
-           <http://agent-os.org/prop/status> "Working" ;
-           <http://agent-os.org/prop/current_operation> ?operation ;
-           <http://agent-os.org/prop/task_iri> ?task .
+    ?agent a <https://wildagentos.org/type/AgentSnapshot> ;
+           <https://wildagentos.org/prop/agent_role> "Do" ;
+           <https://wildagentos.org/prop/status> "Working" ;
+           <https://wildagentos.org/prop/current_operation> ?operation ;
+           <https://wildagentos.org/prop/task_iri> ?task .
   }
 }
 ```

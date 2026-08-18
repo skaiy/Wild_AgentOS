@@ -1030,9 +1030,9 @@ impl MethodologyDefinition {
         let mut node = serde_json::json!({
             "@context": {
                 "schema": "https://schema.org/",
-                "methodology": "https://wild-agent-os.org/ontology/methodology#"
+                "methodology": "https://wildagentos.org/ontology/methodology#"
             },
-            "@id": format!("https://wild-agent-os.org/methodology/{}", self.id.replace(':', "/")),
+            "@id": format!("https://wildagentos.org/methodology/{}", self.id.replace(':', "/")),
             "@type": "methodology:Methodology",
             "methodology:id": self.id,
             "methodology:name": self.name,
@@ -1094,7 +1094,7 @@ impl MethodologyDefinition {
                 .iter()
                 .map(|r| {
                     serde_json::json!({
-                        "@id": format!("https://wild-agent-os.org/methodology/{}", r.replace(':', "/")),
+                        "@id": format!("https://wildagentos.org/methodology/{}", r.replace(':', "/")),
                         "methodology:id": r,
                     })
                 })
@@ -1108,7 +1108,7 @@ impl MethodologyDefinition {
     pub fn to_kg_quads(&self) -> Vec<crate::knowledge_graph::types::RdfQuad> {
         use crate::knowledge_graph::types::{RdfQuad, RdfValue};
         let id_iri = format!(
-            "https://wild-agent-os.org/methodology/{}",
+            "https://wildagentos.org/methodology/{}",
             self.id.replace(':', "/")
         );
 

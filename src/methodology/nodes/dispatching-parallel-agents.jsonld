@@ -1,9 +1,9 @@
 {
   "@context": {
     "schema": "https://schema.org/",
-    "methodology": "https://wild-agent-os.org/ontology/methodology#"
+    "methodology": "https://wildagentos.org/ontology/methodology#"
   },
-  "@id": "https://wild-agent-os.org/methodology/methodology/dispatching-parallel-agents",
+  "@id": "https://wildagentos.org/methodology/methodology/dispatching-parallel-agents",
   "@type": "methodology:Methodology",
   "methodology:id": "methodology:dispatching-parallel-agents",
   "methodology:name": "Dispatching Parallel Agents",
@@ -34,11 +34,11 @@
   },
   "methodology:related": [
     {
-      "@id": "https://wild-agent-os.org/methodology/methodology/subagent-driven-development",
+      "@id": "https://wildagentos.org/methodology/methodology/subagent-driven-development",
       "methodology:id": "methodology:subagent-driven-development"
     },
     {
-      "@id": "https://wild-agent-os.org/methodology/methodology/executing-plans",
+      "@id": "https://wildagentos.org/methodology/methodology/executing-plans",
       "methodology:id": "methodology:executing-plans"
     }
   ]

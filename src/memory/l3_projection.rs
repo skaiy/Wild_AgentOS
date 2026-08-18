@@ -134,7 +134,7 @@ impl ProjectionEngine {
                 max_nodes: 20,
                 sparql_template: Some(
                     r#"
-                PREFIX ex: <http://agent-os.org/ontology/>
+                PREFIX ex: <https://wildagentos.org/ontology/>
                 CONSTRUCT {
                     ?node ex:summary ?summary .
                     ?node ex:status ?status .
@@ -187,7 +187,7 @@ impl ProjectionEngine {
                 max_nodes: 10,
                 sparql_template: Some(
                     r#"
-                PREFIX ex: <http://agent-os.org/ontology/>
+                PREFIX ex: <https://wildagentos.org/ontology/>
                 CONSTRUCT {
                     ?task ex:goal ?goal .
                     ?task ex:constraints ?constraints .
@@ -235,7 +235,7 @@ impl ProjectionEngine {
                 max_nodes: 10,
                 sparql_template: Some(
                     r#"
-                PREFIX ex: <http://agent-os.org/ontology/>
+                PREFIX ex: <https://wildagentos.org/ontology/>
                 CONSTRUCT {
                     ?node ex:instructions ?instructions .
                     ?node ex:dependencies ?deps .
@@ -431,7 +431,7 @@ impl ProjectionEngine {
                 max_nodes: 20,
                 sparql_template: Some(
                     r#"
-        PREFIX task: <https://pdca-agent.org/ontology/task#>
+        PREFIX task: <https://wildagentos.org/ontology/task#>
         CONSTRUCT {
             ?node task:what ?what .
             ?node task:why ?why .
@@ -451,7 +451,7 @@ impl ProjectionEngine {
                 params: vec![],
                 jsonld_frame: Some(
                     FrameTemplate::new(serde_json::json!({
-                        "task": "https://pdca-agent.org/ontology/task#"
+                        "task": "https://wildagentos.org/ontology/task#"
                     }))
                     .with_include_properties(vec![
                         "task:what".to_string(),
@@ -825,11 +825,11 @@ impl ProjectionEngine {
             return "@type".to_string();
         }
 
-        if let Some(prop) = predicate.strip_prefix("http://agent-os.org/prop/") {
+        if let Some(prop) = predicate.strip_prefix("https://wildagentos.org/prop/") {
             return prop.replace('_', " ");
         }
 
-        if let Some(prop) = predicate.strip_prefix("http://agent-os.org/ontology/") {
+        if let Some(prop) = predicate.strip_prefix("https://wildagentos.org/ontology/") {
             return prop.to_string();
         }
 
@@ -949,7 +949,7 @@ impl ProjectionEngine {
             if let Some(obj) = value.as_object_mut() {
                 obj.insert(
                     "@context".to_string(),
-                    Value::String("https://agent-os.org/context".to_string()),
+                    Value::String("https://wildagentos.org/context".to_string()),
                 );
             }
         }

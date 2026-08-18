@@ -1,9 +1,9 @@
 {
   "@context": {
     "schema": "https://schema.org/",
-    "methodology": "https://wild-agent-os.org/ontology/methodology#"
+    "methodology": "https://wildagentos.org/ontology/methodology#"
   },
-  "@id": "https://wild-agent-os.org/methodology/methodology/requesting-code-review",
+  "@id": "https://wildagentos.org/methodology/methodology/requesting-code-review",
   "@type": "methodology:Methodology",
   "methodology:id": "methodology:requesting-code-review",
   "methodology:name": "Requesting Code Review",
@@ -34,11 +34,11 @@
   },
   "methodology:related": [
     {
-      "@id": "https://wild-agent-os.org/methodology/methodology/verification-before-completion",
+      "@id": "https://wildagentos.org/methodology/methodology/verification-before-completion",
       "methodology:id": "methodology:verification-before-completion"
     },
     {
-      "@id": "https://wild-agent-os.org/methodology/methodology/receiving-code-review",
+      "@id": "https://wildagentos.org/methodology/methodology/receiving-code-review",
       "methodology:id": "methodology:receiving-code-review"
     }
   ]

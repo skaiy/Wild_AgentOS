@@ -471,7 +471,7 @@ impl Task5W2H {
 
         let mut result = json!({
             "@context": {
-                "task": "https://pdca-agent.org/ontology/task#"
+                "task": "https://wildagentos.org/ontology/task#"
             },
             "@id": id,
             "@type": "task:5W2H",

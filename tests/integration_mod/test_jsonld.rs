@@ -17,7 +17,7 @@ fn create_test_node(
     let mut node = json!({
         "@id": iri,
         "@type": node_type,
-        "@context": "https://agent-os.org/context/test"
+        "@context": "https://wildagentos.org/context/test"
     });
 
     if let Some(obj) = node.as_object_mut() {
@@ -59,7 +59,7 @@ fn test_jsonld_multi_type_node() {
     let multi_type_node = json!({
         "@id": "iri://task/test/multi",
         "@type": ["PlanNode", "Urgent", "Priority"],
-        "@context": "https://agent-os.org/context/test",
+        "@context": "https://wildagentos.org/context/test",
         "summary": "多类型节点"
     })
     .to_string();
@@ -382,7 +382,7 @@ fn test_validation_engine_integration() {
     let valid_jsonld = json!({
         "@id": "iri://test/valid",
         "@type": "TestNode",
-        "@context": "https://agent-os.org/context/test"
+        "@context": "https://wildagentos.org/context/test"
     })
     .to_string();
 
@@ -440,8 +440,8 @@ fn test_sparql_query_on_jsonld_nodes() {
 
     let sparql = r#"
         SELECT ?s ?status WHERE {
-            ?s a <http://agent-os.org/type/Task> .
-            ?s <http://agent-os.org/prop/status> ?status .
+            ?s a <https://wildagentos.org/type/Task> .
+            ?s <https://wildagentos.org/prop/status> ?status .
         }
     "#;
 
@@ -577,7 +577,7 @@ fn test_performance_jsonld_serialization() {
         let node = json!({
             "@id": format!("iri://test/{}", i),
             "@type": "PerformanceTest",
-            "@context": "https://agent-os.org/context/test",
+            "@context": "https://wildagentos.org/context/test",
             "summary": "性能测试节点",
             "data": {
                 "field1": "value1",
@@ -615,7 +615,7 @@ fn test_performance_sparql_query() {
     }
 
     let start = Instant::now();
-    let sparql = "SELECT ?s WHERE { ?s a <http://agent-os.org/type/TypeA> }";
+    let sparql = "SELECT ?s WHERE { ?s a <https://wildagentos.org/type/TypeA> }";
     let results = blackboard.query(sparql).unwrap();
     let query_time = start.elapsed().as_millis();
 

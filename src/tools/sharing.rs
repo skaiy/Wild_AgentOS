@@ -114,7 +114,7 @@ impl SharedReference {
 
     pub fn to_json_ld(&self) -> Value {
         let mut doc = serde_json::json!({
-            "@context": "https://pdca-agent.org/share",
+            "@context": "https://wildagentos.org/share",
             "@id": self.share_id,
             "@type": "SharedReference",
             "source_agent": self.source_agent_iri,
@@ -177,7 +177,7 @@ impl ShareRequest {
 
     pub fn to_json_ld(&self) -> Value {
         let mut doc = serde_json::json!({
-            "@context": "https://pdca-agent.org/share",
+            "@context": "https://wildagentos.org/share",
             "@id": format!("iri://share/request/{}", self.request_id),
             "@type": "ShareRequest",
             "request_id": self.request_id,
@@ -241,7 +241,7 @@ impl ShareResponse {
 
     pub fn to_json_ld(&self) -> Value {
         serde_json::json!({
-            "@context": "https://pdca-agent.org/share",
+            "@context": "https://wildagentos.org/share",
             "@id": format!("iri://share/response/{}", self.request_id),
             "@type": "ShareResponse",
             "request_id": self.request_id,
@@ -481,7 +481,7 @@ impl ContextInjector {
         }
 
         serde_json::json!({
-            "@context": "https://pdca-agent.org/context/injection",
+            "@context": "https://wildagentos.org/context/injection",
             "@type": "ContextInjection",
             "target_agent": target_agent_iri,
             "task_iri": task_iri,
@@ -509,7 +509,7 @@ impl ContextInjector {
         );
 
         serde_json::json!({
-            "@context": "https://pdca-agent.org/context/handoff",
+            "@context": "https://wildagentos.org/context/handoff",
             "@type": "AgentHandoff",
             "from_agent": from_agent_iri,
             "to_agent": to_agent_iri,

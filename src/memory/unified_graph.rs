@@ -158,7 +158,7 @@ impl UnifiedGraphStore {
         info!("Initializing Unified Oxigraph Store (memory)");
         Ok(Self {
             store: Arc::new(Store::new()?),
-            default_graph: "http://agent-os.org/graph/default".to_string(),
+            default_graph: "https://wildagentos.org/graph/default".to_string(),
             transaction_log: RwLock::new(TransactionLog::new()),
             in_transaction: RwLock::new(false),
         })
@@ -172,7 +172,7 @@ impl UnifiedGraphStore {
         info!(path = %path.display(), "Initializing Unified Oxigraph Store (persistent, RocksDB)");
         Ok(Self {
             store: Arc::new(Store::open(path)?),
-            default_graph: "http://agent-os.org/graph/default".to_string(),
+            default_graph: "https://wildagentos.org/graph/default".to_string(),
             transaction_log: RwLock::new(TransactionLog::new()),
             in_transaction: RwLock::new(false),
         })
@@ -190,7 +190,7 @@ impl UnifiedGraphStore {
     pub fn with_shared_store(store: Arc<Store>) -> Self {
         Self {
             store,
-            default_graph: "http://agent-os.org/graph/default".to_string(),
+            default_graph: "https://wildagentos.org/graph/default".to_string(),
             transaction_log: RwLock::new(TransactionLog::new()),
             in_transaction: RwLock::new(false),
         }

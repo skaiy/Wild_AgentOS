@@ -35,16 +35,16 @@ pub const NS_EXP: &str = "exp";
 pub const NS_ADV: &str = "adv";
 pub const NS_NODE: &str = "node";
 
-pub const URI_AGENT: &str = "https://pdca-agent.org/ontology/agent#";
-pub const URI_TASK: &str = "https://pdca-agent.org/ontology/task#";
-pub const URI_SKILL: &str = "https://pdca-agent.org/ontology/skill#";
-pub const URI_MEM: &str = "https://pdca-agent.org/ontology/memory#";
-pub const URI_SEC: &str = "https://pdca-agent.org/ontology/security#";
-pub const URI_MON: &str = "https://pdca-agent.org/ontology/monitoring#";
-pub const URI_TMPL: &str = "https://pdca-agent.org/ontology/template#";
-pub const URI_EXP: &str = "https://pdca-agent.org/ontology/experience#";
-pub const URI_ADV: &str = "https://pdca-agent.org/ontology/advisory#";
-pub const URI_NODE: &str = "https://pdca-agent.org/ontology/node#";
+pub const URI_AGENT: &str = "https://wildagentos.org/ontology/agent#";
+pub const URI_TASK: &str = "https://wildagentos.org/ontology/task#";
+pub const URI_SKILL: &str = "https://wildagentos.org/ontology/skill#";
+pub const URI_MEM: &str = "https://wildagentos.org/ontology/memory#";
+pub const URI_SEC: &str = "https://wildagentos.org/ontology/security#";
+pub const URI_MON: &str = "https://wildagentos.org/ontology/monitoring#";
+pub const URI_TMPL: &str = "https://wildagentos.org/ontology/template#";
+pub const URI_EXP: &str = "https://wildagentos.org/ontology/experience#";
+pub const URI_ADV: &str = "https://wildagentos.org/ontology/advisory#";
+pub const URI_NODE: &str = "https://wildagentos.org/ontology/node#";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonLdContext {

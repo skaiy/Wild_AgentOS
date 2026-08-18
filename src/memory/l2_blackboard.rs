@@ -302,7 +302,7 @@ impl Blackboard {
                             let type_uri = if t.contains("://") {
                                 format!("<{}>", t)
                             } else {
-                                format!("<http://agent-os.org/type/{}>", t)
+                                format!("<https://wildagentos.org/type/{}>", t)
                             };
                             triples.push(format!("{} a {} .", subject, type_uri));
                         } else if let Some(arr) = value.as_array() {
@@ -310,7 +310,7 @@ impl Blackboard {
                                 let type_uri = if t.contains("://") {
                                     format!("<{}>", t)
                                 } else {
-                                    format!("<http://agent-os.org/type/{}>", t)
+                                    format!("<https://wildagentos.org/type/{}>", t)
                                 };
                                 triples.push(format!("{} a {} .", subject, type_uri));
                             }
@@ -320,7 +320,7 @@ impl Blackboard {
                 }
 
                 let escaped_key = key.replace(' ', "_");
-                let predicate = format!("<http://agent-os.org/prop/{}>", escaped_key);
+                let predicate = format!("<https://wildagentos.org/prop/{}>", escaped_key);
 
                 match value {
                     serde_json::Value::String(s) => {
@@ -1303,7 +1303,7 @@ impl Blackboard {
                 if t.contains("://") {
                     format!("<{}>", t)
                 } else {
-                    format!("<http://agent-os.org/type/{}>", t)
+                    format!("<https://wildagentos.org/type/{}>", t)
                 }
             })
             .collect();

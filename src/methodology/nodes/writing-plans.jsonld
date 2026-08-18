@@ -1,9 +1,9 @@
 {
   "@context": {
     "schema": "https://schema.org/",
-    "methodology": "https://wild-agent-os.org/ontology/methodology#"
+    "methodology": "https://wildagentos.org/ontology/methodology#"
   },
-  "@id": "https://wild-agent-os.org/methodology/methodology/writing-plans",
+  "@id": "https://wildagentos.org/methodology/methodology/writing-plans",
   "@type": "methodology:Methodology",
   "methodology:id": "methodology:writing-plans",
   "methodology:name": "Writing Plans",
@@ -34,11 +34,11 @@
   },
   "methodology:related": [
     {
-      "@id": "https://wild-agent-os.org/methodology/methodology/brainstorming",
+      "@id": "https://wildagentos.org/methodology/methodology/brainstorming",
       "methodology:id": "methodology:brainstorming"
     },
     {
-      "@id": "https://wild-agent-os.org/methodology/methodology/executing-plans",
+      "@id": "https://wildagentos.org/methodology/methodology/executing-plans",
       "methodology:id": "methodology:executing-plans"
     }
   ]
