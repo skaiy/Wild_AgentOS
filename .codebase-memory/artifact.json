@@ -1,0 +1,11 @@
+{
+    "schema_version": 2,
+    "commit": "f6feefbfc0137859709e7ae1a7f77299027a1882",
+    "indexed_at": "2026-08-18T15:21:01Z",
+    "project": "Wild_AgentOS",
+    "nodes": 22490,
+    "edges": 111220,
+    "original_size": 50790400,
+    "compressed_size": 11119737,
+    "compression_level": 9
+}
