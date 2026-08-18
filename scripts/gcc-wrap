@@ -1,0 +1,8 @@
+#!/bin/bash
+# Auto-detect GCC: prefer GCC 14.2.0 if available, fallback to system default.
+# This allows .cargo/config.toml to reference this wrapper safely on both
+# local dev machines and CI runners.
+if [ -x /usr/local/gcc-14.2.0/bin/gcc ]; then
+  exec /usr/local/gcc-14.2.0/bin/gcc "$@"
+fi
+exec gcc "$@"

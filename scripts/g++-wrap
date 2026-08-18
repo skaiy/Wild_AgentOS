@@ -1,0 +1,8 @@
+#!/bin/bash
+# Auto-detect G++: prefer GCC 14.2.0 if available, fallback to system default.
+# This allows .cargo/config.toml to reference this wrapper safely on both
+# local dev machines and CI runners.
+if [ -x /usr/local/gcc-14.2.0/bin/g++ ]; then
+  exec /usr/local/gcc-14.2.0/bin/g++ "$@"
+fi
+exec g++ "$@"

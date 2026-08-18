@@ -1,0 +1,9 @@
+.container {
+  padding: 0;
+}
+
+.statusGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}

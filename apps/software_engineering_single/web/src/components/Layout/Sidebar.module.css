@@ -1,0 +1,22 @@
+.sider {
+  background: #fff !important;
+  border-right: 1px solid #f0f0f0;
+}
+
+.logo {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.logoText {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1890ff;
+}
+
+.menu {
+  border-right: none !important;
+}

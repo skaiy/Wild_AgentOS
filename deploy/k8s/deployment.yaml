@@ -1,0 +1,69 @@
+# Wild AgentOS Core — Kubernetes Deployment
+# 依赖: configmap.yaml(config.yaml) / secret.yaml(网关密钥) / pvc.yaml(数据卷)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wild-agentos-core
+  namespace: wild-agentos
+  labels:
+    app: wild-agentos-core
+spec:
+  replicas: 1                      # 嵌入式存储(redb/oxigraph)有状态,单副本;扩容需先外置存储
+  strategy:
+    type: Recreate                 # 单 PVC RWO,避免两个 Pod 争抢数据目录
+  selector:
+    matchLabels:
+      app: wild-agentos-core
+  template:
+    metadata:
+      labels:
+        app: wild-agentos-core
+    spec:
+      containers:
+        - name: core
+          image: 10.0.0.33/wild-agentos/core:latest   # 33 Harbor
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: grpc, containerPort: 50051 }
+            - { name: metrics, containerPort: 9090 }
+          envFrom:
+            - configMapRef: { name: wild-agentos-core-env }
+            - secretRef: { name: wild-agentos-core-secret }
+          env:
+            - { name: AGENTOS_DATA_DIR, value: /app/data }
+          volumeMounts:
+            - { name: data, mountPath: /app/data }
+            - { name: config, mountPath: /app/config.yaml, subPath: config.yaml }
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits:   { cpu: "2",    memory: "4Gi" }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: wild-agentos-core-data }
+        - name: config
+          configMap: { name: wild-agentos-core-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wild-agentos-core
+  namespace: wild-agentos
+  labels:
+    app: wild-agentos-core
+spec:
+  type: ClusterIP
+  selector:
+    app: wild-agentos-core
+  ports:
+    - { name: http, port: 8080, targetPort: 8080 }
+    - { name: grpc, port: 50051, targetPort: 50051 }
+    - { name: metrics, port: 9090, targetPort: 9090 }

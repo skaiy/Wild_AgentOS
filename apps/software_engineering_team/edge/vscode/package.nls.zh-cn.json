@@ -1,0 +1,19 @@
+{
+  "ext.description": "Agent OS 边缘守护进程 VS Code 集成插件",
+  "cmd.connect": "AgentOS: 连接到守护进程",
+  "cmd.disconnect": "AgentOS: 断开连接",
+  "cmd.refreshTasks": "AgentOS: 刷新可用任务",
+  "cmd.openChat": "AgentOS: 打开聊天面板",
+  "cmd.openGraph": "AgentOS: 打开图谱视图",
+  "viewsContainer.title": "AgentOS",
+  "view.tasks": "可用任务",
+  "view.status": "守护进程状态",
+  "config.title": "AgentOS",
+  "config.daemonUrl": "边缘守护进程 URL",
+  "config.autoConnect": "启动时自动连接",
+  "config.heartbeatInterval": "心跳间隔（秒）",
+  "config.llm.apiKey": "LLM API 密钥（密码输入框）",
+  "config.llm.baseUrl": "LLM API 地址（如 https://api.openai.com/v1）",
+  "config.llm.baseUrl.patternError": "必须是有效的 HTTP 或 HTTPS 地址",
+  "config.llm.model": "LLM 模型名称（如 gpt-4o、deepseek-chat）"
+}

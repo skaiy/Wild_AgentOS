@@ -1,0 +1,173 @@
+name: Release Wild Code
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  BINARY_NAME: wildcode
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            use_zigbuild: true
+            openssl_target: linux-x86_64
+            openssl_cc: zig cc -target x86_64-linux-musl
+
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            use_zigbuild: true
+            openssl_target: linux-aarch64
+            openssl_cc: zig cc -target aarch64-linux-musl
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}-v2
+          cache-directories: |
+            apps/wild_code/target
+            target
+
+      # ----- Zig & Protoc Setup -----
+      - name: Setup Zig
+        if: matrix.use_zigbuild
+        uses: goto-bus-stop/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        if: matrix.use_zigbuild
+        run: pip install cargo-zigbuild
+
+      - name: Install protoc (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          echo "PROTOC=$(which protoc)" >> $GITHUB_ENV
+
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install protobuf
+          echo "PROTOC=$(which protoc)" >> $GITHUB_ENV
+
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/protocolbuffers/protobuf/releases/download/v28.2/protoc-28.2-win64.zip"
+          $zip = "${env:TEMP}\protoc.zip"
+          $dest = "${env:TEMP}\protoc"
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          echo "$dest\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "PROTOC=$dest\bin\protoc.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & "$dest\bin\protoc.exe" --version
+
+      # ----- OpenSSL Build (Linux musl) -----
+      - name: Build OpenSSL static libs for musl
+        if: contains(matrix.target, 'musl')
+        run: |
+          set -ex
+          curl -sL https://github.com/openssl/openssl/releases/download/openssl-3.0.15/openssl-3.0.15.tar.gz | tar xz
+          cd openssl-3.0.15
+          CC="${{ matrix.openssl_cc }}" ./Configure ${{ matrix.openssl_target }} \
+            no-shared no-tests no-dso no-engine no-ui-console \
+            --prefix=${{ runner.temp }}/openssl-musl --openssldir=${{ runner.temp }}/openssl-musl
+          make -j$(nproc)
+          make install_sw
+
+      - name: Export OpenSSL env (musl)
+        if: contains(matrix.target, 'musl')
+        run: |
+          echo "OPENSSL_DIR=${{ runner.temp }}/openssl-musl" >> $GITHUB_ENV
+          echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+
+      # ----- Build -----
+      - name: Build with zigbuild (musl targets)
+        if: matrix.use_zigbuild
+        run: cargo zigbuild --release --target ${{ matrix.target }} --manifest-path apps/wild_code/Cargo.toml
+
+      - name: Build directly (other targets)
+        if: ${{ !matrix.use_zigbuild }}
+        run: cargo build --release --target ${{ matrix.target }} --manifest-path apps/wild_code/Cargo.toml
+
+      # ----- Verification -----
+      - name: Verify static linking (Linux musl)
+        if: contains(matrix.target, 'musl')
+        run: |
+          BIN="target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}"
+          file "$BIN"
+          if ldd "$BIN" 2>&1 | grep -q "not a dynamic"; then
+            echo "Static linking confirmed."
+          elif ldd "$BIN" >/dev/null 2>&1; then
+            echo "WARNING: Dynamic dependencies detected."
+            ldd "$BIN"
+          else
+            echo "Static linking confirmed."
+          fi
+
+      # ----- Packaging -----
+      - name: Package tar.gz (Linux/macOS)
+        if: runner.os != 'Windows'
+        working-directory: target/${{ matrix.target }}/release
+        run: tar czvf ${{ github.workspace }}/wildcode-${{ matrix.target }}.tar.gz ${{ env.BINARY_NAME }}
+
+      - name: Package zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: target/${{ matrix.target }}/release
+        run: Compress-Archive -Path ${{ env.BINARY_NAME }}.exe -DestinationPath ${{ github.workspace }}/wildcode-${{ matrix.target }}.zip
+
+      # ----- 新增：手动触发时上传构建产物 (用于测试下载) -----
+      - name: Upload Artifacts (for manual run testing)
+        # 只有在不是 tag 触发时（即手动运行时）才运行
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wildcode-${{ matrix.target }}
+          path: |
+            wildcode-${{ matrix.target }}.tar.gz
+            wildcode-${{ matrix.target }}.zip
+
+      # ----- 修复：只有 Tag 触发时才发布 Release -----
+      - name: Upload to Release
+        # 只有当 ref 以 refs/tags/ 开头时才运行
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            wildcode-${{ matrix.target }}.tar.gz
+            wildcode-${{ matrix.target }}.zip
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

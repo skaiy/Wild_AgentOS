@@ -1,0 +1,19 @@
+{
+  "ext.description": "Agent OS Edge Daemon integration for VS Code",
+  "cmd.connect": "AgentOS: Connect to Daemon",
+  "cmd.disconnect": "AgentOS: Disconnect",
+  "cmd.refreshTasks": "AgentOS: Refresh Available Tasks",
+  "cmd.openChat": "AgentOS: Open Chat Panel",
+  "cmd.openGraph": "AgentOS: Open Graph View",
+  "viewsContainer.title": "AgentOS",
+  "view.tasks": "Available Tasks",
+  "view.status": "Daemon Status",
+  "config.title": "AgentOS",
+  "config.daemonUrl": "Edge Daemon URL",
+  "config.autoConnect": "Auto-connect on startup",
+  "config.heartbeatInterval": "Heartbeat interval (seconds)",
+  "config.llm.apiKey": "LLM API Key (password field)",
+  "config.llm.baseUrl": "LLM API Base URL (e.g. https://api.openai.com/v1)",
+  "config.llm.baseUrl.patternError": "Must be a valid HTTP or HTTPS URL",
+  "config.llm.model": "LLM Model Name (e.g. gpt-4o, deepseek-chat)"
+}

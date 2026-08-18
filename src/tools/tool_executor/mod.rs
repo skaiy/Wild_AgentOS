@@ -1,0 +1,1357 @@
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
+use serde::Deserialize;
+use serde_json::{json, Value};
+use tracing::debug;
+
+use crate::knowledge_graph::store::KnowledgeGraphStore;
+use crate::tools::builtin::hooks::HookRunner;
+use crate::tools::builtin::knowledge;
+#[cfg(feature = "ontology")]
+use crate::tools::builtin::ontology_tools;
+use crate::tools::builtin::permissions::{PermissionMode, PermissionOutcome, PermissionPolicy};
+use crate::tools::builtin::rag;
+use crate::tools::tool_groups::ToolGroupManager;
+use crate::tools::workspace_monitor::{FileState, WorkspaceMonitor};
+
+mod builtins;
+
+#[cfg(test)]
+mod tests;
+
+/// Tool input structs
+#[derive(Debug, Deserialize)]
+pub struct GlobSearchInput {
+    pub pattern: String,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GrepSearchInput {
+    pub pattern: String,
+    pub path: Option<String>,
+    pub glob: Option<String>,
+    pub output_mode: Option<String>,
+    pub before: Option<usize>,
+    pub after: Option<usize>,
+    pub context: Option<usize>,
+    pub line_numbers: Option<bool>,
+    pub head_limit: Option<usize>,
+    pub offset: Option<usize>,
+    #[serde(rename = "-i")]
+    pub case_insensitive: Option<bool>,
+    pub multiline: Option<bool>,
+    pub file_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WebFetchInput {
+    pub url: String,
+    pub prompt: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WebSearchInput {
+    pub query: String,
+    pub allowed_domains: Option<Vec<String>>,
+    pub blocked_domains: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ToolSearchInput {
+    pub query: String,
+    pub max_results: Option<usize>,
+}
+type ToolFn =
+    Arc<dyn Fn(Value) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>> + Send + Sync>;
+
+/// Wrap a synchronous tool function (takes &Value) as an async ToolFn
+fn sync_tool_ref<F>(f: F) -> ToolFn
+where
+    F: Fn(&Value) -> Result<Value, String> + Send + Sync + 'static,
+{
+    let f = Arc::new(f);
+    Arc::new(move |input| {
+        let f = Arc::clone(&f);
+
+        Box::pin(async move { f(&input) })
+    })
+}
+
+/// Micro-tool context
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct MicroToolContext {
+    pub call_id: String,
+    pub storage_key: String,
+    pub tool_name: String,
+    pub entity_types: Vec<String>,
+    pub preview_size: usize,
+}
+
+/// Unified tool executor with built-in tools
+#[derive(Clone)]
+pub struct ToolExecutor {
+    tools: HashMap<String, ToolFn>,
+    tool_descriptions: Vec<ToolDescription>,
+    kg_store: Arc<std::sync::RwLock<KnowledgeGraphStore>>,
+    projection_engine:
+        Arc<parking_lot::RwLock<Option<Arc<crate::memory::l3_projection::ProjectionEngine>>>>,
+    micro_tool_contexts: Arc<parking_lot::RwLock<HashMap<String, MicroToolContext>>>,
+    micro_tool_data: Arc<parking_lot::RwLock<HashMap<String, serde_json::Value>>>,
+    syscall_gate: Option<crate::core::syscall_gate::SyscallGate>,
+    permission_policy: Option<PermissionPolicy>,
+    hook_runner: Option<HookRunner>,
+    tool_group_manager: Option<ToolGroupManager>,
+    workspace_monitor: Arc<parking_lot::RwLock<Option<Arc<WorkspaceMonitor>>>>,
+    /// 向量知识库（HyperspaceStore）：注入后 `kb_vector_search` 工具可做语义召回；None 时该工具返回空。
+    vector_store: Arc<parking_lot::RwLock<Option<Arc<crate::memory::HyperspaceStore>>>>,
+}
+
+// Max micro-tool descriptions cap — removes oldest entries when exceeded.
+// Prevents tool_descriptions from inflating indefinitely, avoiding thousands of token overhead per LLM request.
+const MAX_MICRO_TOOL_DESCRIPTIONS: usize = 5;
+const MICRO_TOOL_PREFIXES: &[&str] = &[
+    "read_full_result_",
+    "query_",
+    "get_entity_details",
+    "expand_relation",
+];
+
+/// Tool role filter: empty = all roles, "PA"/"DA"/"CA"/"AA" = role-specific only
+#[derive(Clone)]
+pub struct ToolDescription {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+    pub allowed_roles: Vec<String>, // empty = all roles allowed
+}
+
+impl Default for ToolExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ToolExecutor {
+    pub fn new() -> Self {
+        let kg_store = Arc::new(std::sync::RwLock::new(
+            KnowledgeGraphStore::new().expect("Failed to create knowledge graph store"),
+        ));
+        let mut exe = Self {
+            tools: HashMap::new(),
+            tool_descriptions: Vec::new(),
+            kg_store,
+            projection_engine: Arc::new(parking_lot::RwLock::new(None)),
+            micro_tool_contexts: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            micro_tool_data: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            syscall_gate: None,
+            permission_policy: None,
+            hook_runner: None,
+            tool_group_manager: None,
+            workspace_monitor: Arc::new(parking_lot::RwLock::new(None)),
+            vector_store: Arc::new(parking_lot::RwLock::new(None)),
+        };
+        exe.register_builtins();
+        exe
+    }
+
+    pub fn set_projection_engine(
+        &mut self,
+        engine: Arc<crate::memory::l3_projection::ProjectionEngine>,
+    ) {
+        *self.projection_engine.write() = Some(engine);
+    }
+
+    pub fn set_tool_group_manager(&mut self, manager: ToolGroupManager) {
+        self.tool_group_manager = Some(manager);
+    }
+
+    /// Replace internal KnowledgeGraphStore with a unified Oxigraph Store
+    pub fn set_unified_kg_store(&mut self, store: Arc<oxigraph::store::Store>) {
+        self.kg_store = Arc::new(std::sync::RwLock::new(
+            KnowledgeGraphStore::with_shared_store(store)
+                .expect("Failed to create shared KG Store"),
+        ));
+    }
+
+    pub fn set_syscall_gate(&mut self, gate: crate::core::syscall_gate::SyscallGate) {
+        self.syscall_gate = Some(gate);
+    }
+
+    pub fn set_permission_policy(&mut self, policy: PermissionPolicy) {
+        self.permission_policy = Some(policy);
+    }
+
+    pub fn set_hook_runner(&mut self, runner: HookRunner) {
+        self.hook_runner = Some(runner);
+    }
+
+    pub fn set_workspace_monitor(&mut self, monitor: Arc<WorkspaceMonitor>) {
+        *self.workspace_monitor.write() = Some(monitor);
+    }
+
+    pub fn get_workspace_monitor(&self) -> Option<Arc<WorkspaceMonitor>> {
+        self.workspace_monitor.read().clone()
+    }
+
+    /// Get a reference to the internal KnowledgeGraphStore for shared use
+    /// (e.g. by FusedRootCauseEngine for SPARQL semantic neighbor traversal).
+    pub fn knowledge_graph_store(&self) -> Arc<std::sync::RwLock<KnowledgeGraphStore>> {
+        self.kg_store.clone()
+    }
+
+    /// 注入向量知识库，使 `kb_vector_search` 工具可对向量库做语义检索。
+    pub fn set_vector_store(&mut self, store: Arc<crate::memory::HyperspaceStore>) {
+        *self.vector_store.write() = Some(store);
+    }
+
+    /// Notify workspace_monitor that a file was read externally (e.g., via read_full_result).
+    /// This helps the cache/diff system recognize the file as already-read on subsequent file_read.
+    pub fn mark_file_external_read(&self, path: &str) {
+        let guard = self.workspace_monitor.read();
+        if let Some(ref wm) = *guard {
+            wm.mark_file_read_external(path);
+        }
+    }
+
+    /// Default tool requirements: bash/pwsh/code_exec→DangerFullAccess, file_write/edit→WorkspaceWrite, reads→ReadOnly
+    pub fn set_default_permission_policy(&mut self) {
+        let policy = PermissionPolicy::new(PermissionMode::Allow)
+            .with_tool_requirement("bash", PermissionMode::DangerFullAccess)
+            .with_tool_requirement("powershell", PermissionMode::DangerFullAccess)
+            .with_tool_requirement("code_execute", PermissionMode::DangerFullAccess)
+            .with_tool_requirement("file_write", PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("file_edit", PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("file_read", PermissionMode::ReadOnly)
+            .with_tool_requirement("grep_search", PermissionMode::ReadOnly)
+            .with_tool_requirement("glob_search", PermissionMode::ReadOnly)
+            .with_tool_requirement("web_search", PermissionMode::ReadOnly)
+            .with_tool_requirement("web_fetch", PermissionMode::ReadOnly);
+        self.permission_policy = Some(policy);
+    }
+
+    fn register_builtins(&mut self) {
+        // All tools open to all roles; LLM selects based on role description in agent.md
+        let all: &[&str] = &[];
+        self.register(
+            "glob_search",
+            "Find files by glob pattern.",
+            json!({
+                "properties": {"pattern": {"type":"string"},"path": {"type":"string"}},
+                "required": ["pattern"]
+            }),
+            Arc::new(|input: Value| {
+                Box::pin(async move { builtins::execute_glob_search(input).await })
+            }),
+            all,
+        );
+        self.register("grep_search", "Search file contents with regex.", json!({
+            "properties": {
+                "pattern": {"type":"string","description":"Regex pattern to search for"},
+                "path": {"type":"string","description":"Directory to search in"},
+                "glob": {"type":"string","description":"File glob pattern (e.g. *.rs)"},
+                "output_mode": {"type":"string","description":"Output mode: files_with_matches | content | count"},
+                "before": {"type":"integer","description":"Lines before match (-B)"},
+                "after": {"type":"integer","description":"Lines after match (-A)"},
+                "context": {"type":"integer","description":"Context lines around match (-C)"},
+                "line_numbers": {"type":"boolean","description":"Show line numbers (default true)"},
+                "head_limit": {"type":"integer","description":"Limit number of results (default 250)"},
+                "offset": {"type":"integer","description":"Skip first N results"},
+                "-i": {"type":"boolean","description":"Case insensitive search"},
+                "multiline": {"type":"boolean","description":"Enable multiline mode"},
+                "file_type": {"type":"string","description":"File type filter (rust, python, etc.)"}
+            },
+            "required": ["pattern"]
+        }), Arc::new(|input: Value| Box::pin(async move { builtins::execute_grep_search(input).await })), all);
+        self.register(
+            "web_fetch",
+            "Fetch a URL into readable text.",
+            json!({
+                "properties": {"url": {"type":"string"},"prompt": {"type":"string"}},
+                "required": ["url"]
+            }),
+            Arc::new(|input: Value| {
+                Box::pin(async move { builtins::execute_web_fetch(input).await })
+            }),
+            all,
+        );
+        self.register(
+            "web_search",
+            "Search the web for information.",
+            json!({
+                "properties": {"query": {"type":"string","minLength":2}},
+                "required": ["query"]
+            }),
+            Arc::new(|input: Value| {
+                Box::pin(async move { builtins::execute_web_search(input).await })
+            }),
+            all,
+        );
+        self.register(
+            "tool_search",
+            "Search available tools by name.",
+            json!({
+                "properties": {"query": {"type":"string"},"max_results": {"type":"integer"}},
+                "required": ["query"]
+            }),
+            Arc::new(|input: Value| {
+                Box::pin(async move { builtins::execute_tool_search(input).await })
+            }),
+            all,
+        );
+        let ws_read = self.workspace_monitor.clone();
+        self.register("file_read", "Read a text file. Reads the entire file by default. On re-read of a changed file, returns a unified diff showing what changed. On re-read of an unchanged file, returns from_cache=true — content already in your context, skip re-reading. Use mode:full to force full content, mode:changed_only to get only the new/changed lines.", json!({
+            "properties": {
+                "path": {"type":"string", "description": "File path to read"},
+                "offset": {"type":"integer", "description": "Line offset to start from (0-indexed). Omit to read from beginning."},
+                "limit": {"type":"integer", "description": "Number of lines to return. Omit to read all remaining lines from offset."},
+                "mode": {"type":"string", "description": "Read mode: auto (default=use diff if previously read) | full | force_refresh | diff | changed_only"}
+            },
+            "required": ["path"]
+        }), Arc::new(move |input: Value| {
+            let ws = ws_read.clone();
+            Box::pin(async move {
+                let mode = input.get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("auto")
+                    .to_string();
+                // Extract offset/limit before input is moved into execute_file_read
+                let has_offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) > 0;
+                let has_limit = input.get("limit").is_some();
+                let result = builtins::execute_file_read(input).await?;
+                let guard = ws.read();
+                if let Some(ref wm) = *guard {
+                    if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
+                        let read_mode = match mode.as_str() {
+                            "force_refresh" => crate::tools::workspace_monitor::ReadMode::ForceRefresh,
+                            "diff" => crate::tools::workspace_monitor::ReadMode::Diff,
+                            "changed_only" => crate::tools::workspace_monitor::ReadMode::ChangedOnly,
+                            _ => {
+                                // auto: use diff if file is already cached, else full
+                                let inv = wm.inventory.read();
+                                let entry = inv.get_entry(path);
+                                match entry {
+                                    Some(e) if e.read_count > 0 => crate::tools::workspace_monitor::ReadMode::Diff,
+                                    _ => crate::tools::workspace_monitor::ReadMode::Full,
+                                }
+                            }
+                        };
+                        if let Ok(read_result) = wm.read_file(path, read_mode) {
+                                let mut result = result;
+                                if let Some(diff) = &read_result.unified_diff {
+                                    if let Some(obj) = result.as_object_mut() { obj.insert("unified_diff".to_string(), Value::String(diff.clone())); }
+                                }
+                                if let Some(changed) = &read_result.changed_lines {
+                                    if let Some(obj) = result.as_object_mut() { obj.insert("changed_lines".to_string(), Value::Array(
+                                            changed.iter().map(|l| Value::String(l.clone())).collect()
+                                        )); }
+                                }
+                                if !read_result.changed && read_result.from_cache {
+                                    // Cache hit: file unchanged since last read.
+                                    // Strip full content to avoid token waste on re-read.
+                                    if !has_offset && !has_limit {
+                                        if let Some(obj) = result.as_object_mut() {
+                                            obj.remove("lines");
+                                            obj.remove("returned");
+                                            obj.insert("from_cache".to_string(), Value::Bool(true));
+                                            obj.insert("message".to_string(), Value::String(
+                                                "Cache hit: file unchanged since last read. Content already in your context from a previous read — skip re-reading and proceed with what you have.".to_string()
+                                            ));
+                                        }
+                                    } else {
+                                        if let Some(obj) = result.as_object_mut() {
+                                            obj.insert("from_cache".to_string(), Value::Bool(true));
+                                            obj.insert("message".to_string(), Value::String(
+                                                "Cache hit: file unchanged since last read. Content already in your context — skip re-reading.".to_string()
+                                            ));
+                                        }
+                                    }
+                                }
+                                return Ok(result);
+                            }
+                        }
+                    }
+                Ok(result)
+            })
+        }), all);
+        let ws_write = self.workspace_monitor.clone();
+        self.register(
+            "file_write",
+            "Write content to a file.",
+            json!({
+                "properties": {"path": {"type":"string"},"content": {"type":"string"}},
+                "required": ["path","content"]
+            }),
+            Arc::new(move |input: Value| {
+                let ws = ws_write.clone();
+                Box::pin(async move {
+                    let result = builtins::execute_file_write(input).await?;
+                    if result.get("success") == Some(&Value::Bool(true)) {
+                        let guard = ws.read();
+                        if let Some(ref wm) = *guard {
+                            if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
+                                wm.mark_file_written(path);
+                            }
+                        }
+                    }
+                    Ok(result)
+                })
+            }),
+            all,
+        );
+        let ws_status = self.workspace_monitor.clone();
+        self.register("workspace_status", "View workspace file status summary: stale files, written-unread files, counts by state and language.", json!({
+            "properties": {},
+            "required": []
+        }), Arc::new(move |_: Value| {
+            let ws = ws_status.clone();
+            Box::pin(async move {
+                let guard = ws.read();
+                if let Some(ref wm) = *guard {
+                    let inv = wm.inventory.read();
+                        let all = inv.list_all();
+                        let total = all.len();
+
+                        let stale = inv.list_by_state(FileState::ReadStale);
+                        let written_unread = inv.list_by_state(FileState::WrittenUnread);
+                        let discovered = inv.list_by_state(FileState::Discovered);
+                        let fresh = inv.list_by_state(FileState::ReadFresh);
+
+                        // Group by language
+                        let mut lang_map: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                        for entry in &all {
+                            *lang_map.entry(entry.language.clone()).or_insert(0) += 1;
+                        }
+                        let mut by_language: Vec<serde_json::Value> = lang_map.into_iter()
+                            .map(|(lang, count)| json!({"language": lang, "count": count}))
+                            .collect();
+                        by_language.sort_by(|a, b| {
+                            b["count"].as_u64().unwrap_or(0).cmp(&a["count"].as_u64().unwrap_or(0))
+                        });
+
+                        return Ok(json!({
+                            "total_files": total,
+                            "stale_count": stale.len(),
+                            "stale_files": stale.iter().take(20).map(|e| json!(e.path)).collect::<Vec<_>>(),
+                            "written_unread_count": written_unread.len(),
+                            "written_unread_files": written_unread.iter().take(20).map(|e| json!(e.path)).collect::<Vec<_>>(),
+                            "discovered_count": discovered.len(),
+                            "fresh_count": fresh.len(),
+                            "by_language": by_language,
+                        }));
+                    }
+                // Fallback if no workspace_monitor available
+                Ok(json!({"total_files": 0, "stale_count": 0, "written_unread_count": 0, "message": "Workspace monitor not available"}))
+            })
+        }), all);
+        let ws_list = self.workspace_monitor.clone();
+        self.register(
+            "file_list",
+            "List files in a directory.",
+            json!({
+                "properties": {"path": {"type":"string"}},
+                "required": []
+            }),
+            Arc::new(move |input: Value| {
+                let ws = ws_list.clone();
+                Box::pin(async move {
+                    let mut result = builtins::execute_file_list(input).await?;
+                    let guard = ws.read();
+                    if let Some(ref wm) = *guard {
+                        if let Some(entries) =
+                            result.get_mut("entries").and_then(|e| e.as_array_mut())
+                        {
+                            for entry in entries.iter_mut() {
+                                let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                                let inv = wm.inventory.read();
+                                if let Some(file_entry) = inv.get_entry(name) {
+                                    if let Some(obj) = entry.as_object_mut() {
+                                        obj.insert(
+                                            "state".to_string(),
+                                            Value::String(file_entry.state.as_str().to_string()),
+                                        );
+                                        obj.insert(
+                                            "language".to_string(),
+                                            Value::String(file_entry.language.clone()),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(result)
+                })
+            }),
+            all,
+        );
+        let bash_desc = if cfg!(target_os = "windows") {
+            "Execute a shell command via PowerShell. Use for running python, pytest, etc. Supports most common shell commands.\n\nOUTPUT MANAGEMENT (mandatory):\n- If the command may produce >100 lines of output, pipe through | head -N or | grep <keyword> to limit results\n- Use | tail -N for recent entries, | wc -l to count first, | grep -c to match-count\n- For file searches, constrain the path (e.g. grep ... path/) instead of searching the entire workspace\n- The output will be truncated at 16KB if too large; always filter proactively to avoid losing data"
+        } else {
+            "Execute a shell command. Use for running python, pytest, etc.\n\nOUTPUT MANAGEMENT (mandatory):\n- If the command may produce >100 lines of output, pipe through | head -N or | grep <keyword> to limit results\n- Use | tail -N for recent entries, | wc -l to count first, | grep -c to match-count\n- For file searches, constrain the path (e.g. grep ... path/) instead of searching the entire workspace\n- The output will be truncated at 16KB if too large; always filter proactively to avoid losing data"
+        };
+        self.register("bash", bash_desc, json!({
+            "properties": {"command": {"type":"string","description":"Shell command to run"},"description": {"type":"string","description":"What this command does"},"timeout": {"type":"integer","description":"Timeout in milliseconds"}},
+            "required": ["command"]
+        }), Arc::new(|input: Value| Box::pin(async move { builtins::execute_bash(input).await })), all);
+        let ws_edit = self.workspace_monitor.clone();
+        self.register("file_edit", "Edit a file by replacing old_string with new_string.", json!({
+            "properties": {
+                "path": {"type":"string","description":"File path to edit"},
+                "old_string": {"type":"string","description":"Text to find and replace"},
+                "new_string": {"type":"string","description":"Replacement text"},
+                "replace_all": {"type":"boolean","description":"Replace all occurrences (default: false)"}
+            },
+            "required": ["path","old_string","new_string"]
+        }), Arc::new(move |input: Value| {
+            let ws = ws_edit.clone();
+            Box::pin(async move {
+                let result = builtins::execute_file_edit(input).await?;
+                if result.get("success") == Some(&Value::Bool(true)) {
+                    let guard = ws.read();
+                    if let Some(ref wm) = *guard {
+                        if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
+                            wm.mark_file_written(path);
+                        }
+                    }
+                }
+                Ok(result)
+            })
+        }), all);
+        self.register(
+            "powershell",
+            "Execute a PowerShell command.",
+            json!({
+                "properties": {
+                    "command": {"type":"string","description":"PowerShell command to run"},
+                    "description": {"type":"string","description":"What this command does"},
+                    "timeout": {"type":"integer","description":"Timeout in milliseconds"}
+                },
+                "required": ["command"]
+            }),
+            Arc::new(|input: Value| {
+                Box::pin(async move { builtins::execute_powershell(input).await })
+            }),
+            all,
+        );
+        self.register("rag_search", "Semantic search for relevant documents using RAG (Retrieval-Augmented Generation).", json!({
+            "properties": {"query": {"type":"string","description":"Search query"},"limit": {"type":"integer","description":"Max results"}},
+            "required": ["query"]
+        }), sync_tool_ref(rag::execute_rag_search), all);
+        self.register("rag_index", "Index a document for RAG retrieval.", json!({
+            "properties": {"content": {"type":"string","description":"Document content to index"},"iri": {"type":"string","description":"Optional IRI identifier"},"tags": {"type":"array","items":{"type":"string"},"description":"Optional tags"}},
+            "required": ["content"]
+        }), sync_tool_ref(rag::execute_rag_index), all);
+        self.register("rag_chunk", "Split a document into chunks for indexing.", json!({
+            "properties": {"content": {"type":"string","description":"Document content to chunk"},"chunk_size": {"type":"integer","description":"Chunk size in characters (default 500)"},"overlap": {"type":"integer","description":"Overlap between chunks (default 50)"}},
+            "required": ["content"]
+        }), sync_tool_ref(rag::execute_rag_chunk), all);
+
+        // ========== Knowledge Import Tools ==========
+        self.register("knowledge_import_file", "Import knowledge from a file (Markdown, TXT, HTML, JSON, etc.). Auto-chunks and indexes the content.", json!({
+            "properties": {
+                "path": {"type":"string","description":"File path to import"},
+                "tags": {"type":"array","items":{"type":"string"},"description":"Tags for categorization"},
+                "chunk_size": {"type":"integer","description":"Chunk size in characters (default 1000)"},
+                "overlap": {"type":"integer","description":"Overlap between chunks (default 100)"},
+                "auto_detect_title": {"type":"boolean","description":"Auto-detect title from content (default true)"}
+            },
+            "required": ["path"]
+        }), Arc::new(|input: Value| Box::pin(async move { knowledge::execute_knowledge_import_file(input).await })), all);
+
+        self.register("knowledge_import_url", "Import knowledge from a URL. Fetches and extracts text content from web pages.", json!({
+            "properties": {
+                "url": {"type":"string","description":"URL to fetch and import"},
+                "tags": {"type":"array","items":{"type":"string"},"description":"Tags for categorization"},
+                "chunk_size": {"type":"integer","description":"Chunk size in characters (default 1000)"},
+                "overlap": {"type":"integer","description":"Overlap between chunks (default 100)"},
+                "selector": {"type":"string","description":"CSS selector or regex to extract specific content"}
+            },
+            "required": ["url"]
+        }), Arc::new(|input: Value| Box::pin(async move { knowledge::execute_knowledge_import_url(input).await })), all);
+
+        self.register("knowledge_import_directory", "Batch import knowledge from a directory. Recursively processes matching files.", json!({
+            "properties": {
+                "path": {"type":"string","description":"Directory path to import"},
+                "pattern": {"type":"string","description":"File pattern (default: *.md,*.txt,*.html,*.json)"},
+                "tags": {"type":"array","items":{"type":"string"},"description":"Tags for categorization"},
+                "recursive": {"type":"boolean","description":"Recursively process subdirectories (default true)"},
+                "chunk_size": {"type":"integer","description":"Chunk size in characters (default 1000)"},
+                "overlap": {"type":"integer","description":"Overlap between chunks (default 100)"}
+            },
+            "required": ["path"]
+        }), Arc::new(|input: Value| Box::pin(async move { knowledge::execute_knowledge_import_directory(input).await })), all);
+
+        self.register("knowledge_list", "List imported knowledge entries with optional filtering.", json!({
+            "properties": {
+                "tags": {"type":"array","items":{"type":"string"},"description":"Filter by tags"},
+                "source_type": {"type":"string","description":"Filter by source type (file, url)"},
+                "limit": {"type":"integer","description":"Max results (default 100)"},
+                "offset": {"type":"integer","description":"Pagination offset"}
+            }
+        }), Arc::new(|input: Value| Box::pin(async move { knowledge::execute_knowledge_list(input).await })), all);
+
+        self.register("knowledge_delete", "Delete imported knowledge entries by IRI or tags.", json!({
+            "properties": {
+                "iri": {"type":"string","description":"IRI of knowledge entry to delete"},
+                "tags": {"type":"array","items":{"type":"string"},"description":"Delete all entries with these tags"},
+                "all": {"type":"boolean","description":"Delete all knowledge entries"}
+            }
+        }), Arc::new(|input: Value| Box::pin(async move { knowledge::execute_knowledge_delete(input).await })), all);
+
+        self.register("knowledge_search", "Search imported knowledge with keyword matching and optional tag filtering.", json!({
+            "properties": {
+                "query": {"type":"string","description":"Search query"},
+                "tags": {"type":"array","items":{"type":"string"},"description":"Filter by tags"},
+                "limit": {"type":"integer","description":"Max results (default 10)"},
+                "min_score": {"type":"number","description":"Minimum relevance score (default 0.1)"}
+            },
+            "required": ["query"]
+        }), Arc::new(|input: Value| Box::pin(async move { knowledge::execute_knowledge_search(input).await })), all);
+
+        self.register("knowledge_update", "Update content or tags of an imported knowledge entry.", json!({
+            "properties": {
+                "iri": {"type":"string","description":"IRI of knowledge entry to update"},
+                "content": {"type":"string","description":"New content"},
+                "tags": {"type":"array","items":{"type":"string"},"description":"New or additional tags"},
+                "append_tags": {"type":"boolean","description":"Append tags instead of replacing (default false)"}
+            },
+            "required": ["iri"]
+        }), Arc::new(|input: Value| Box::pin(async move { knowledge::execute_knowledge_update(input).await })), all);
+
+        // ========== Skill Creation Tools ==========
+        self.register("create_skill", "Create a new Skill definition from natural language description using LLM. The skill will be auto-registered and available for use.", json!({
+            "properties": {
+                "description": {"type":"string","description":"Natural language description of the skill to create"},
+                "skill_name_hint": {"type":"string","description":"Suggested skill name (optional, lowercase with underscores)"},
+                "category_hint": {"type":"string","description":"Suggested category (optional): file|network|ai|execution|validation|data|meta|system"},
+                "security_level_override": {"type":"string","description":"Security level override (optional): low|normal|high|critical"}
+            },
+            "required": ["description"]
+        }), Arc::new(|input: Value| Box::pin(async move { builtins::execute_create_skill(input).await })), &["DA"]);
+
+        self.register("convert_skill", "Convert a Markdown-formatted skill description into a JSON-LD Skill definition. Parses the markdown structure and generates proper skill schema.", json!({
+            "properties": {
+                "markdown_content": {"type":"string","description":"Markdown content describing the skill"},
+                "source_path": {"type":"string","description":"Source file path (optional)"}
+            },
+            "required": ["markdown_content"]
+        }), Arc::new(|input: Value| Box::pin(async move { builtins::execute_convert_skill(input).await })), &["DA","CA"]);
+
+        // ========== Knowledge Graph Tools ==========
+        let kg_store_for_extract = self.kg_store.clone();
+        self.register("knowledge_extract", "Extract entities and relations from unstructured text into the knowledge graph. Uses LLM for intelligent extraction.", json!({
+            "properties": {
+                "text": {"type":"string","description":"Text content to extract from."},
+                "domain": {"type":"string","description":"Domain filter (optional, e.g. business/core)."}
+            },
+            "required": ["text"]
+        }), Arc::new(move |input: Value| {
+            let kg_store = kg_store_for_extract.clone();
+            Box::pin(async move { builtins::execute_knowledge_extract(input, kg_store).await })
+        }), all);
+
+        let kg_store_for_query = self.kg_store.clone();
+        self.register(
+            "knowledge_query",
+            "Execute a SPARQL SELECT query against the knowledge graph.",
+            json!({
+                "properties": {
+                    "sparql": {"type":"string","description":"SPARQL SELECT query statement."},
+                    "named_graph": {"type":"string","description":"Named graph IRI (optional)."}
+                },
+                "required": ["sparql"]
+            }),
+            Arc::new(move |input: Value| {
+                let kg_store = kg_store_for_query.clone();
+                Box::pin(async move { builtins::execute_knowledge_query(input, kg_store).await })
+            }),
+            all,
+        );
+
+        let kg_store_for_search = self.kg_store.clone();
+        self.register("kg_search", "Fuzzy search entities in the knowledge graph.", json!({
+            "properties": {
+                "keyword": {"type":"string","description":"Search keyword."},
+                "entity_type": {"type":"string","description":"Entity type IRI filter (optional)."}
+            },
+            "required": ["keyword"]
+        }), Arc::new(move |input: Value| {
+            let kg_store = kg_store_for_search.clone();
+            Box::pin(async move { builtins::execute_knowledge_search(input, kg_store).await })
+        }), all);
+
+        let vector_store_for_search = self.vector_store.clone();
+        self.register("kb_vector_search", "Semantic (vector) retrieval over ingested knowledge bases. Use for natural-language questions where keyword matching fails (e.g. maintenance manuals, domain documents). Returns text chunks ranked by semantic similarity.", json!({
+            "properties": {
+                "query": {"type":"string","description":"Natural-language query for semantic retrieval."},
+                "namespace": {"type":"string","description":"Vector namespace to restrict search to a specific knowledge base (optional)."},
+                "limit": {"type":"integer","description":"Max number of results (1-20, default 5)."}
+            },
+            "required": ["query"]
+        }), Arc::new(move |input: Value| {
+            let vstore = vector_store_for_search.read().clone();
+            Box::pin(async move { builtins::execute_kb_vector_search(input, vstore).await })
+        }), all);
+
+        let kg_store_for_neighbors = self.kg_store.clone();
+        self.register(
+            "knowledge_neighbors",
+            "Get neighbor nodes and relations of a specified entity in the knowledge graph.",
+            json!({
+                "properties": {
+                    "entity_id": {"type":"string","description":"Entity ID or IRI."},
+                    "depth": {"type":"integer","description":"Traversal depth (1-3, default 1)."}
+                },
+                "required": ["entity_id"]
+            }),
+            Arc::new(move |input: Value| {
+                let kg_store = kg_store_for_neighbors.clone();
+                Box::pin(
+                    async move { builtins::execute_knowledge_neighbors(input, kg_store).await },
+                )
+            }),
+            all,
+        );
+
+        let kg_store_for_import = self.kg_store.clone();
+        self.register("knowledge_import_json", "Map structured JSON data into knowledge graph nodes.", json!({
+            "properties": {
+                "json_data": {"type":"string","description":"JSON data (object or array)."},
+                "mapping_config": {"type":"string","description":"Mapping config JSON: {id_field, type_field, label_field, relations:[{field, relation, target_prefix}]}."}
+            },
+            "required": ["json_data","mapping_config"]
+        }), Arc::new(move |input: Value| {
+            let kg_store = kg_store_for_import.clone();
+            Box::pin(async move { builtins::execute_knowledge_import_json(input, kg_store).await })
+        }), all);
+
+        let kg_store_for_ontology = self.kg_store.clone();
+        self.register("ontology_register", "Register custom ontology classes or properties to the knowledge graph.", json!({
+            "properties": {
+                "terms": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "iri": {"type":"string","description":"Ontology term IRI."},
+                            "label": {"type":"string","description":"Term label."},
+                            "description": {"type":"string","description":"Term description."},
+                            "term_type": {"type":"string","description":"Type: Class | Property | Relation."}
+                        },
+                        "required": ["iri","label","description","term_type"]
+                    },
+                    "description": "Ontology term list."
+                }
+            },
+            "required": ["terms"]
+        }), Arc::new(move |input: Value| {
+            let kg_store = kg_store_for_ontology.clone();
+            Box::pin(async move { builtins::execute_ontology_register(input, kg_store).await })
+        }), all);
+
+        let kg_store_for_bridge = self.kg_store.clone();
+        self.register("knowledge_bridge", "Create bridge relations between knowledge graph entities and skills.", json!({
+            "properties": {
+                "entity_id": {"type":"string","description":"Entity ID."},
+                "skill_iri": {"type":"string","description":"Skill IRI."},
+                "relation_type": {"type":"string","description":"Relation type: HasSkill | ApplicableIn | RelatedTo (default HasSkill)."}
+            },
+            "required": ["entity_id","skill_iri"]
+        }), Arc::new(move |input: Value| {
+            let kg_store = kg_store_for_bridge.clone();
+            Box::pin(async move { builtins::execute_knowledge_bridge_with_store(input, kg_store).await })
+        }), all);
+
+        let kg_store_for_code = self.kg_store.clone();
+        self.register("knowledge_extract_code", "Extract AST structure (functions, classes, imports, call relations etc.) from code files using tree-sitter and write to knowledge graph. Supports incremental updates: skips unchanged files automatically. Supports Rust/Python/JS/TS/Go/Java/C/C++.", json!({
+            "properties": {
+                "file_path": {"type":"string","description":"Code file path."},
+                "named_graph": {"type":"string","description":"Named graph IRI (optional, default graph:code)."},
+                "force": {"type":"boolean","description":"Force full extraction, ignore cache (optional, default false)."}
+            },
+            "required": ["file_path"]
+        }), Arc::new(move |input: Value| {
+            let kg_store = kg_store_for_code.clone();
+            Box::pin(async move { builtins::execute_knowledge_extract_code(input, kg_store).await })
+        }), all);
+
+        // ========== L3 Projection Query Tool ==========
+        let proj_for_tool = self.projection_engine.clone();
+        self.register("read_agent_output", "Read the complete output of a specified agent via L3 projection. Use to view detailed reports from previous agents (PA/DA/CA/AA). node_iri is obtained from task context (format: iri://task/xxx/turn_3).", json!({
+            "properties": {
+                "node_iri": {"type":"string","description":"L2 node IRI to read (e.g. iri://task/xxx/turn_3)."}
+            },
+            "required": ["node_iri"]
+        }), Arc::new(move |input: Value| {
+            let proj = proj_for_tool.clone();
+            Box::pin(async move {
+                let node_iri = input
+                    .get("node_iri")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "Missing node_iri parameter".to_string())?;
+                let guard = proj.read();
+                let engine = guard.as_ref()
+                    .ok_or_else(|| "Projection engine not initialized".to_string())?;
+                let result = engine.read_node(node_iri)
+                    .map_err(|e| format!("Failed to read L2 node: {}", e))?;
+                match result {
+                    Some(node) => Ok(node),
+                    None => Err(format!("Node not found: {}", node_iri)),
+                }
+            })
+        }), all);
+
+        // ========== Ontology Tools ==========
+        #[cfg(feature = "ontology")]
+        {
+            self.register(
+                "ontology_validate_turtle",
+                "Validate Turtle RDF syntax. Returns number of valid triples.",
+                json!({
+                    "properties": {
+                        "ttl": {"type":"string","description":"Turtle content to validate"}
+                    },
+                    "required": ["ttl"]
+                }),
+                Arc::new(|input: Value| {
+                    Box::pin(async move {
+                        ontology_tools::execute_ontology_validate_turtle(input).await
+                    })
+                }),
+                all,
+            );
+
+            self.register(
+                "ontology_lint_turtle",
+                "Lint Turtle content for best practices (labels, comments, domain/range).",
+                json!({
+                    "properties": {
+                        "ttl": {"type":"string","description":"Turtle content to lint"}
+                    },
+                    "required": ["ttl"]
+                }),
+                Arc::new(|input: Value| {
+                    Box::pin(
+                        async move { ontology_tools::execute_ontology_lint_turtle(input).await },
+                    )
+                }),
+                all,
+            );
+
+            self.register(
+                "ontology_diff_turtle",
+                "Diff two Turtle documents and report added/removed triples.",
+                json!({
+                    "properties": {
+                        "old_ttl": {"type":"string","description":"Original Turtle content"},
+                        "new_ttl": {"type":"string","description":"New Turtle content"}
+                    },
+                    "required": ["old_ttl","new_ttl"]
+                }),
+                Arc::new(|input: Value| {
+                    Box::pin(
+                        async move { ontology_tools::execute_ontology_diff_turtle(input).await },
+                    )
+                }),
+                all,
+            );
+
+            self.register("ontology_validate_shacl", "Validate RDF data against SHACL shapes.", json!({
+                "properties": {
+                    "shapes_ttl": {"type":"string","description":"SHACL shapes in Turtle format"},
+                    "data_ttl": {"type":"string","description":"Optional data Turtle to validate. If omitted, validates loaded store."}
+                },
+                "required": ["shapes_ttl"]
+            }), Arc::new(|input: Value| Box::pin(async move { ontology_tools::execute_ontology_validate_shacl(input).await })), all);
+
+            self.register("ontology_reason", "Run RDFS/OWL-RL reasoning on Turtle data. Returns inferred triples.", json!({
+                "properties": {
+                    "ttl": {"type":"string","description":"Turtle data to reason over"},
+                    "profile": {"type":"string","description":"Reasoning profile: rdfs, owl-rl (default), owl-rl-ext, owl-dl"},
+                    "materialize": {"type":"boolean","description":"Whether to materialize inferred triples (default: true)"}
+                },
+                "required": ["ttl"]
+            }), Arc::new(|input: Value| Box::pin(async move { ontology_tools::execute_ontology_reason(input).await })), all);
+        }
+    }
+
+    /// Register a tool with role whitelist. Empty = all roles allowed.
+    pub fn register(
+        &mut self,
+        name: &str,
+        description: &str,
+        parameters: Value,
+        handler: ToolFn,
+        allowed_roles: &[&str],
+    ) {
+        let roles: Vec<String> = allowed_roles.iter().map(|s| s.to_string()).collect();
+        self.tools.insert(name.to_string(), handler);
+
+        if let Some(existing) = self.tool_descriptions.iter_mut().find(|td| td.name == name) {
+            existing.description = description.to_string();
+            existing.parameters = parameters.clone();
+            existing.allowed_roles = roles;
+        } else {
+            self.tool_descriptions.push(ToolDescription {
+                name: name.to_string(),
+                description: description.to_string(),
+                parameters,
+                allowed_roles: roles,
+            });
+            // Micro-tool description cap: removes oldest when exceeded
+            if Self::is_micro_tool_name(name) {
+                while self
+                    .tool_descriptions
+                    .iter()
+                    .filter(|td| Self::is_micro_tool_name(&td.name))
+                    .count()
+                    > MAX_MICRO_TOOL_DESCRIPTIONS
+                {
+                    // position() returns the first match (oldest registered)
+                    if let Some(pos) = self
+                        .tool_descriptions
+                        .iter()
+                        .position(|td| Self::is_micro_tool_name(&td.name))
+                    {
+                        self.tool_descriptions.remove(pos);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    fn is_micro_tool_name(name: &str) -> bool {
+        MICRO_TOOL_PREFIXES.iter().any(|p| name.starts_with(p))
+    }
+
+    /// Register micro-tool (dynamically generated tool for querying large tool results)
+    pub fn register_micro_tool(&mut self, tool_name: &str, context: MicroToolContext) {
+        let contexts = Arc::clone(&self.micro_tool_contexts);
+        let data = Arc::clone(&self.micro_tool_data);
+        let tool_name_owned = tool_name.to_string();
+
+        contexts
+            .write()
+            .insert(tool_name.to_string(), context.clone());
+
+        let description = if tool_name.starts_with("read_full_result_") {
+            format!("Read full tool result. call_id: {}", context.call_id)
+        } else if tool_name.starts_with("query_") {
+            format!(
+                "Query entity types: {:?}. call_id: {}",
+                context.entity_types, context.call_id
+            )
+        } else if tool_name.starts_with("get_entity_details_") {
+            format!("Get entity details. call_id: {}", context.call_id)
+        } else {
+            format!("Micro-tool: {}", tool_name)
+        };
+
+        let params = json!({
+            "type": "object",
+            "properties": {
+                "offset": {"type": "integer", "description": "Starting offset"},
+                "limit": {"type": "integer", "description": "Max results to return"}
+            }
+        });
+
+        self.register(
+            tool_name,
+            &description,
+            params,
+            Arc::new(move |input: Value| {
+                let contexts = contexts.clone();
+                let tool_name_owned = tool_name_owned.clone();
+                let data = data.clone();
+                Box::pin(async move {
+                    let offset = input["offset"].as_u64().unwrap_or(0) as usize;
+                    let limit = input["limit"].as_u64().unwrap_or(100) as usize;
+
+                    let ctx_guard = contexts.read();
+                    let ctx = ctx_guard.get(&tool_name_owned).ok_or_else(|| {
+                        format!("Micro-tool context not found: {}", tool_name_owned)
+                    })?;
+
+                    let data_guard = data.read();
+                    let stored_data = data_guard
+                        .get(&ctx.storage_key)
+                        .ok_or_else(|| format!("Micro-tool data not found: {}", ctx.storage_key))?;
+
+                    if tool_name_owned.starts_with("read_full_result_") {
+                        if let Some(content) = stored_data.get("content").and_then(|v| v.as_str()) {
+                            let lines: Vec<&str> = content.lines().collect();
+                            let selected: Vec<String> = lines
+                                .iter()
+                                .skip(offset)
+                                .take(limit)
+                                .map(|l| l.to_string())
+                                .collect();
+                            return Ok(json!({
+                                "content": selected.join("\n"),
+                                "total_lines": lines.len(),
+                                "offset": offset,
+                                "returned": selected.len(),
+                                "call_id": ctx.call_id,
+                            }));
+                        }
+                    } else if tool_name_owned.starts_with("query_") {
+                        if let Some(content) = stored_data.get("content").and_then(|v| v.as_str()) {
+                            let query_type = input["entity_type"].as_str().unwrap_or("");
+                            let keyword = input["keyword"].as_str().unwrap_or("");
+
+                            let mut results = Vec::new();
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
+                                if let Some(arr) = parsed.as_array() {
+                                    for item in arr.iter().skip(offset).take(limit) {
+                                        let type_match = query_type.is_empty()
+                                            || item
+                                                .get("type")
+                                                .and_then(|v| v.as_str())
+                                                .map(|t| t.contains(query_type))
+                                                .unwrap_or(false);
+                                        let keyword_match = keyword.is_empty()
+                                            || item
+                                                .to_string()
+                                                .to_lowercase()
+                                                .contains(&keyword.to_lowercase());
+                                        if type_match && keyword_match {
+                                            results.push(item.clone());
+                                        }
+                                    }
+                                }
+                            }
+                            return Ok(json!({
+                                "results": results,
+                                "count": results.len(),
+                                "call_id": ctx.call_id,
+                            }));
+                        }
+                    } else if tool_name_owned.starts_with("get_entity_details_") {
+                        let entity_id = input["entity_id"].as_str().unwrap_or("");
+                        if let Some(content) = stored_data.get("content").and_then(|v| v.as_str()) {
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
+                                if let Some(arr) = parsed.as_array() {
+                                    for item in arr {
+                                        if item.get("id").and_then(|v| v.as_str())
+                                            == Some(entity_id)
+                                        {
+                                            return Ok(json!({
+                                                "entity": item,
+                                                "call_id": ctx.call_id,
+                                            }));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return Ok(json!({
+                            "error": "Entity not found",
+                            "entity_id": entity_id,
+                            "call_id": ctx.call_id,
+                        }));
+                    }
+
+                    Ok(json!({
+                        "data": stored_data,
+                        "call_id": ctx.call_id,
+                    }))
+                })
+            }),
+            &[],
+        );
+    }
+
+    /// Store micro-tool data
+    pub fn store_micro_tool_data(&self, storage_key: &str, data: serde_json::Value) {
+        self.micro_tool_data
+            .write()
+            .insert(storage_key.to_string(), data);
+    }
+
+    /// Get list of registered micro-tools
+    pub fn get_micro_tool_names(&self) -> Vec<String> {
+        self.micro_tool_contexts.read().keys().cloned().collect()
+    }
+
+    pub async fn execute(&self, name: &str, input: Value) -> Result<Value, String> {
+        let input_str = input.to_string();
+
+        if let Some(ref policy) = self.permission_policy {
+            match policy.authorize(name, &input_str, None) {
+                PermissionOutcome::Deny { reason } => {
+                    return Ok(json!({"error": format!("Permission denied: {}", reason)}));
+                }
+                PermissionOutcome::Allow => {}
+            }
+        }
+
+        if let Some(ref runner) = self.hook_runner {
+            let hook_result = runner.run_pre_tool_use(name, &input_str);
+            if hook_result.is_denied() {
+                return Ok(
+                    json!({"error": format!("Pre-tool hook denied: {}", hook_result.messages().join("; "))}),
+                );
+            }
+            if hook_result.is_failed() {
+                return Ok(
+                    json!({"error": format!("Pre-tool hook failed: {}", hook_result.messages().join("; "))}),
+                );
+            }
+            if hook_result.is_cancelled() {
+                return Ok(json!({"error": "Pre-tool hook was cancelled"}));
+            }
+        }
+
+        if let Some(ref gate) = self.syscall_gate {
+            if let Err(e) = gate.validate_tool_with_5w2h(name, "unknown", None) {
+                return Ok(json!({"error": format!("SyscallGate rejected: {}", e)}));
+            }
+        }
+
+        let handler = match self.tools.get(name) {
+            Some(h) => h.clone(),
+            None => return Err(format!("Tool not found: {}", name)),
+        };
+        debug!(tool = %name, "Executing tool");
+
+        // Execute and capture result for post-hooks
+        let result = handler(input).await;
+
+        // Post-tool-use hook
+        if let Some(ref runner) = self.hook_runner {
+            match &result {
+                Ok(output) => {
+                    let output_str = output.to_string();
+                    let post_result =
+                        runner.run_post_tool_use(name, &input_str, &output_str, false);
+                    if post_result.is_denied() {
+                        return Ok(
+                            json!({"error": format!("Post-tool hook denied: {}", post_result.messages().join("; ")), "original_output": output}),
+                        );
+                    }
+                }
+                Err(e) => {
+                    let _ = runner.run_post_tool_use_failure(name, &input_str, e);
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Get tool handler (avoid holding lock across await)
+    pub fn get_handler(&self, name: &str) -> Option<ToolFn> {
+        self.tools.get(name).cloned()
+    }
+
+    /// Get tool handler with micro-tool fallback.
+    /// When normal lookup fails, dynamically build a handler from micro-tool data storage,
+    /// preventing LLM from exhausting turns due to registry/handler inconsistency.
+    pub fn try_get_handler(&self, name: &str) -> Option<ToolFn> {
+        // 1. Try registered handler first
+        if let Some(handler) = self.tools.get(name) {
+            return Some(handler.clone());
+        }
+        // 2. Fallback: build dynamic handler from stored data for read_full_result_* micro-tools
+        if name.starts_with("read_full_result_") {
+            return self.make_micro_tool_fallback_handler(name);
+        }
+        None
+    }
+
+    /// Build a dynamic fallback handler for micro-tools (reads from micro_tool_data / micro_tool_contexts)
+    fn make_micro_tool_fallback_handler(&self, name: &str) -> Option<ToolFn> {
+        let ctx_guard = self.micro_tool_contexts.read();
+        let ctx = ctx_guard.get(name)?.clone();
+        let storage_key = ctx.storage_key.clone();
+        let call_id = ctx.call_id.clone();
+        drop(ctx_guard);
+
+        let data_guard = self.micro_tool_data.read();
+        let stored_data = data_guard.get(&storage_key)?.clone();
+        drop(data_guard);
+
+        Some(Arc::new(move |input: Value| {
+            let _storage_key = storage_key.clone();
+            let call_id = call_id.clone();
+            let stored_data = stored_data.clone();
+
+            Box::pin(async move {
+                let offset = input["offset"].as_u64().unwrap_or(0) as usize;
+                let limit = input["limit"].as_u64().unwrap_or(100) as usize;
+
+                if let Some(content) = stored_data.get("content").and_then(|v| v.as_str()) {
+                    let lines: Vec<&str> = content.lines().collect();
+                    let selected: Vec<String> = lines
+                        .iter()
+                        .skip(offset)
+                        .take(limit)
+                        .map(|l| l.to_string())
+                        .collect();
+                    return Ok(serde_json::json!({
+                        "content": selected.join("
+                    "),
+                        "total_lines": lines.len(),
+                        "offset": offset,
+                        "returned": selected.len(),
+                        "call_id": call_id,
+                    }));
+                }
+
+                Ok(serde_json::json!({
+                    "data": stored_data,
+                    "call_id": call_id,
+                }))
+            })
+        }))
+    }
+
+    /// List all tools
+    pub fn list_tools(&self, _role: &str) -> Vec<String> {
+        self.tools.keys().cloned().collect()
+    }
+
+    /// Return all tool definitions (LLM autonomously selects based on role description in agent.md)
+    pub fn tool_definitions_for_role(&self, role: &str) -> Vec<Value> {
+        let role_name = match role {
+            "PA" | "Plan" => "Plan",
+            "DA" | "Do" => "Do",
+            "CA" | "Check" => "Check",
+            "AA" | "Act" => "Act",
+            _ => role,
+        };
+
+        let (default_tools, on_demand_tools) = if let Some(ref manager) = self.tool_group_manager {
+            manager.get_tool_names_for_role(role_name)
+        } else {
+            let is_pa = role == "Plan" || role == "PA";
+            let is_aa = role == "Act" || role == "AA";
+            if is_pa {
+                let default: HashSet<String> = Self::pa_readonly_tools()
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect();
+                (default.clone(), default)
+            } else if is_aa {
+                // Design: AA = Core(file_read,file_list) + System(tool_search) by default, Search+Knowledge on demand
+                let aa_tools: HashSet<String> = [
+                    "file_read",
+                    "file_list",
+                    "tool_search",
+                    "grep_search",
+                    "glob_search",
+                    "rag_search",
+                    "kg_search",
+                    "codebase_search",
+                    "knowledge_list",
+                    "knowledge_search",
+                    "knowledge_extract_code",
+                ]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+                let all = aa_tools.clone();
+                (all, aa_tools)
+            } else {
+                let all: HashSet<String> = self
+                    .tool_descriptions
+                    .iter()
+                    .map(|td| td.name.clone())
+                    .collect();
+                (all.clone(), all)
+            }
+        };
+
+        let result: Vec<Value> = self
+            .tool_descriptions
+            .iter()
+            .filter(|td| {
+                if !td.allowed_roles.is_empty() {
+                    return td.allowed_roles.iter().any(|r| r == role);
+                }
+                default_tools.contains(&td.name) || on_demand_tools.contains(&td.name)
+            })
+            .map(|td| {
+                let mut params = td.parameters.clone();
+                if params.get("type").is_none() {
+                    params["type"] = json!("object");
+                }
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": td.name,
+                        "description": td.description,
+                        "parameters": params,
+                    }
+                })
+            })
+            .collect();
+
+        let tool_names: Vec<&str> = result
+            .iter()
+            .filter_map(|v| v["function"]["name"].as_str())
+            .collect();
+        tracing::debug!(
+            "[tool_definitions_for_role] role={}, filtered={}/{}, tools={:?}",
+            role,
+            result.len(),
+            self.tool_descriptions.len(),
+            tool_names
+        );
+
+        result
+    }
+
+    pub fn pa_readonly_tools() -> &'static [&'static str] {
+        &[
+            "file_read",
+            "file_list",
+            "glob_search",
+            "grep_search",
+            "web_search",
+            "web_fetch",
+            "tool_search",
+            "rag_search",
+            "knowledge_list",
+            "knowledge_search",
+            "kg_search",
+            "knowledge_extract_code",
+            "bash",
+        ]
+    }
+
+    pub fn is_pa_readonly_tool(name: &str) -> bool {
+        Self::pa_readonly_tools().contains(&name)
+    }
+
+    /// ToolSearch needs access to the tool list
+    pub fn search_tools(&self, query: &str, max_results: Option<usize>) -> Value {
+        let query_lower = query.to_lowercase();
+        let max = max_results.unwrap_or(10);
+        let matches: Vec<Value> = self
+            .tool_descriptions
+            .iter()
+            .filter(|t| {
+                t.name.to_lowercase().contains(&query_lower)
+                    || t.description.to_lowercase().contains(&query_lower)
+            })
+            .take(max)
+            .map(|t| {
+                json!({
+                    "name": t.name,
+                    "description": t.description,
+                })
+            })
+            .collect();
+        json!({
+            "matches": matches,
+            "count": matches.len(),
+            "query": query,
+        })
+    }
+}

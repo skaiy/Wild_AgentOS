@@ -1,0 +1,632 @@
+import sys
+import json
+import time
+import requests
+
+BASE_URL = "http://localhost:8083"
+WS_BASE_URL = "ws://localhost:8083"
+
+passed = 0
+failed = 0
+errors = []
+
+
+def test(name, condition, detail=""):
+    global passed, failed
+    if condition:
+        passed += 1
+        print(f"  PASS: {name}")
+    else:
+        failed += 1
+        msg = f"  FAIL: {name}"
+        if detail:
+            msg += f" - {detail}"
+        print(msg)
+        errors.append(msg)
+
+
+def request(method, path, **kwargs):
+    url = f"{BASE_URL}{path}"
+    try:
+        resp = requests.request(method, url, timeout=10, **kwargs)
+        return resp
+    except requests.exceptions.ConnectionError as e:
+        return None
+    except Exception as e:
+        return None
+
+
+def main():
+    print("=" * 60)
+    print("Center API End-to-End Tests")
+    print("=" * 60)
+
+    # 1. Health check
+    print("\n[1] Health Check")
+    resp = request("GET", "/health")
+    test("GET /health returns 200", resp is not None and resp.status_code == 200)
+    if resp is not None:
+        test("GET /health status is ok", resp.json().get("status") == "ok",
+             f"got: {resp.json()}")
+
+    if resp is None or resp.status_code != 200:
+        print("\nServer not reachable. Skipping remaining tests.")
+        print_summary()
+        sys.exit(1)
+
+    # 2. Project CRUD
+    print("\n[2] Project CRUD")
+    project_name = f"e2e-test-project-{int(time.time())}"
+    create_resp = request("POST", "/api/v1/projects",
+                          json={"project_name": project_name, "description": "E2E test project"})
+    test("POST /api/v1/projects creates project", create_resp is not None and create_resp.status_code == 200)
+    if create_resp is not None and create_resp.status_code == 200:
+        project_id = create_resp.json().get("project_id", "")
+        test("Project has project_id", bool(project_id), f"got: {create_resp.json()}")
+        test("Project name matches", create_resp.json().get("project_name") == project_name,
+             f"got: {create_resp.json().get('project_name')}")
+        test("Project status is initialized", create_resp.json().get("status") == "initialized",
+             f"got: {create_resp.json().get('status')}")
+
+        list_resp = request("GET", "/api/v1/projects")
+        test("GET /api/v1/projects lists projects", list_resp is not None and list_resp.status_code == 200)
+        if list_resp is not None:
+            projects = list_resp.json().get("projects", [])
+            test("Created project appears in list",
+                 any(p.get("project_id") == project_id for p in projects),
+                 f"project_id={project_id} not found in {len(projects)} projects")
+
+        get_resp = request("GET", f"/api/v1/projects/{project_id}")
+        test("GET /api/v1/projects/:id returns project",
+             get_resp is not None and get_resp.status_code == 200)
+        if get_resp is not None:
+            test("GET project returns correct id",
+                 get_resp.json().get("project_id") == project_id)
+
+        # 3. Task creation
+        print("\n[3] Task Creation")
+        task_resp = request("POST", f"/api/v1/projects/{project_id}/tasks",
+                            json={"pipeline_name": "e2e-test-pipeline"})
+        test("POST /api/v1/projects/:id/tasks creates task",
+             task_resp is not None and task_resp.status_code == 200)
+        task_id = None
+        if task_resp is not None and task_resp.status_code == 200:
+            task_id = task_resp.json().get("task_id", "")
+            test("Task has task_id", bool(task_id))
+            test("Task status is pending",
+                 task_resp.json().get("status") == "pending",
+                 f"got: {task_resp.json().get('status')}")
+            test("Task has pipeline_name",
+                 task_resp.json().get("pipeline_name") == "e2e-test-pipeline")
+
+            list_tasks_resp = request("GET", f"/api/v1/projects/{project_id}/tasks")
+            test("GET /api/v1/projects/:id/tasks lists tasks",
+                 list_tasks_resp is not None and list_tasks_resp.status_code == 200)
+            if list_tasks_resp is not None:
+                tasks = list_tasks_resp.json().get("tasks", [])
+                test("Created task appears in list",
+                     any(t.get("task_id") == task_id for t in tasks))
+
+            get_task_resp = request("GET", f"/api/v1/tasks/{task_id}")
+            test("GET /api/v1/tasks/:id returns task",
+                 get_task_resp is not None and get_task_resp.status_code == 200)
+            if get_task_resp is not None:
+                test("GET task returns correct id",
+                     get_task_resp.json().get("task_id") == task_id)
+
+        # 4. Stage query
+        print("\n[4] Stage Query")
+        if task_id:
+            stages_resp = request("GET", f"/api/v1/tasks/{task_id}/stages")
+            test("GET /api/v1/tasks/:id/stages returns 200",
+                 stages_resp is not None and stages_resp.status_code == 200)
+            if stages_resp is not None:
+                stages = stages_resp.json().get("stages", [])
+                test("Stages is a list", isinstance(stages, list))
+
+        # 5. LLM Config
+        print("\n[5] LLM Config")
+        config_resp = request("GET", "/api/v1/config/llm")
+        test("GET /api/v1/config/llm returns 200",
+             config_resp is not None and config_resp.status_code == 200)
+        original_provider = None
+        if config_resp is not None:
+            config_data = config_resp.json()
+            original_provider = config_data.get("provider", "")
+            test("Config has provider field", "provider" in config_data)
+            test("Config has model field", "model" in config_data)
+            test("Config has base_url field", "base_url" in config_data)
+
+        update_config_resp = request("PUT", "/api/v1/config/llm",
+                                     json={"provider": "test-provider", "model": "test-model"})
+        test("PUT /api/v1/config/llm updates config",
+             update_config_resp is not None and update_config_resp.status_code == 200)
+        if update_config_resp is not None:
+            test("Updated provider is persisted",
+                 update_config_resp.json().get("provider") == "test-provider")
+            test("Updated model is persisted",
+                 update_config_resp.json().get("model") == "test-model")
+
+        # Restore original config if possible
+        if original_provider:
+            request("PUT", "/api/v1/config/llm",
+                    json={"provider": original_provider})
+
+        # 6. Dashboard
+        print("\n[6] Dashboard")
+        stats_resp = request("GET", "/api/v1/stats")
+        test("GET /api/v1/stats returns 200",
+             stats_resp is not None and stats_resp.status_code == 200)
+        if stats_resp is not None:
+            stats = stats_resp.json()
+            test("Stats has project_count", "project_count" in stats)
+            test("Stats has task_count", "task_count" in stats)
+
+        activity_resp = request("GET", "/api/v1/activity")
+        test("GET /api/v1/activity returns 200",
+             activity_resp is not None and activity_resp.status_code == 200)
+        if activity_resp is not None:
+            activities = activity_resp.json().get("activities", [])
+            test("Activity is a list", isinstance(activities, list))
+
+        # 7. Agent registration
+        print("\n[7] Agent Registration")
+        agent_id = f"e2e-agent-{int(time.time())}"
+        register_resp = request("POST", "/api/v1/agents/register",
+                                json={
+                                    "agent_id": agent_id,
+                                    "user_id": "e2e-user",
+                                    "capabilities": ["coding", "testing"],
+                                    "version": "1.0.0"
+                                })
+        test("POST /api/v1/agents/register registers agent",
+             register_resp is not None and register_resp.status_code == 200)
+        if register_resp is not None and register_resp.status_code == 200:
+            test("Registered agent_id matches",
+                 register_resp.json().get("agent_id") == agent_id)
+            test("Registered agent status is online",
+                 register_resp.json().get("status") == "online")
+
+        # 8. Agent heartbeat
+        print("\n[8] Agent Heartbeat")
+        heartbeat_resp = request("POST", "/api/v1/agents/heartbeat",
+                                 json={"agent_id": agent_id})
+        test("POST /api/v1/agents/heartbeat returns 200",
+             heartbeat_resp is not None and heartbeat_resp.status_code == 200)
+        if heartbeat_resp is not None and heartbeat_resp.status_code == 200:
+            test("Heartbeat returns agent_id",
+                 heartbeat_resp.json().get("agent_id") == agent_id)
+            test("Heartbeat status is ok",
+                 heartbeat_resp.json().get("status") == "ok")
+
+        # 9. Available tasks
+        print("\n[9] Available Tasks")
+        avail_resp = request("GET", "/api/v1/tasks/available")
+        test("GET /api/v1/tasks/available returns 200",
+             avail_resp is not None and avail_resp.status_code == 200)
+        if avail_resp is not None:
+            avail_tasks = avail_resp.json().get("tasks", [])
+            test("Available tasks is a list", isinstance(avail_tasks, list))
+
+        # 10. Claim task (requires Temporal, so expect 503)
+        print("\n[10] Claim Task")
+        if task_id:
+            claim_resp = request("POST", f"/api/v1/tasks/{task_id}/claim",
+                                 json={"agent_id": agent_id})
+            if claim_resp is not None:
+                test("POST /api/v1/tasks/:id/claim returns expected status",
+                     claim_resp.status_code in (200, 503),
+                     f"got status {claim_resp.status_code}")
+
+        # 11. Callback (expects 503 without Temporal)
+        print("\n[11] Task Callback")
+        if task_id:
+            callback_resp = request("POST", f"/api/v1/tasks/{task_id}/callback",
+                                    json={
+                                        "agent_id": agent_id,
+                                        "stage_id": "stage-1",
+                                        "status": "completed",
+                                        "summary": "Task completed successfully"
+                                    })
+            if callback_resp is not None:
+                test("POST /api/v1/tasks/:id/callback returns expected status",
+                     callback_resp.status_code in (200, 503),
+                     f"got status {callback_resp.status_code}")
+
+        # 12. Online agents
+        print("\n[12] Online Agents")
+        agents_resp = request("GET", "/api/v1/agents")
+        if agents_resp is None:
+            agents_resp = request("GET", "/api/v1/agents/")
+        test("GET /api/v1/agents returns 200",
+             agents_resp is not None and agents_resp.status_code == 200)
+
+        # 13. Graph sync
+        print("\n[13] Graph Sync")
+        sync_resp = request("POST", "/api/v1/graph/sync",
+                            json={
+                                "agent_id": agent_id,
+                                "task_id": task_id or "",
+                                "deltas": [
+                                    {
+                                        "action": "create",
+                                        "iri": "iri://e2e/test",
+                                        "jsonld": json.dumps({
+                                            "@id": "iri://e2e/test",
+                                            "@type": "TestCase",
+                                            "name": "E2E Test"
+                                        }).encode(),
+                                        "version": 1
+                                    }
+                                ]
+                            })
+        test("POST /api/v1/graph/sync returns expected status",
+             sync_resp is not None and sync_resp.status_code in (200, 503),
+             f"got status {sync_resp.status_code if sync_resp else None}")
+        if sync_resp is not None:
+            test("Graph sync response has status field",
+                 sync_resp.json().get("status") == "synced")
+        else:
+            print("  SKIP: graph sync connection not available (GraphManager not initialized)")
+
+        # 14. Graph context
+        print("\n[14] Graph Context")
+        ctx_resp = request("GET", "/api/v1/graph/context")
+        test("GET /api/v1/graph/context returns 200",
+             ctx_resp is not None and ctx_resp.status_code == 200)
+        if ctx_resp is not None:
+            test("Graph context has status field",
+                 ctx_resp.json().get("status") == "ok")
+
+        # 15. WebSocket (quick connect/disconnect test using requests)
+        print("\n[15] WebSocket")
+        try:
+            import websocket
+            ws = websocket.create_connection(
+                f"{WS_BASE_URL}/ws?project_id={project_id}",
+                timeout=5
+            )
+            ws.settimeout(3)
+            ws.close()
+            test("WebSocket connection established", True)
+        except ImportError:
+            print("  SKIP: websocket-client not available")
+        except Exception as e:
+            test("WebSocket connection attempt", False, str(e))
+
+        # 16. Pipeline (expects 503 without Temporal)
+        print("\n[16] Pipeline")
+        pipeline_resp = request("POST", "/api/v1/pipelines",
+                                json={
+                                    "project_name": "e2e-pipeline",
+                                    "project_dir": "/tmp/e2e",
+                                    "user_requirement": "E2E test requirement"
+                                })
+        if pipeline_resp is not None:
+            test("POST /api/v1/pipelines returns expected status",
+                 pipeline_resp.status_code in (200, 503),
+                 f"got status {pipeline_resp.status_code}")
+
+        # 17. Reviews
+        print("\n[17] Reviews")
+        pending_review_resp = request("GET", "/api/v1/reviews/pending")
+        test("GET /api/v1/reviews/pending returns 200",
+             pending_review_resp is not None and pending_review_resp.status_code == 200,
+             f"got status {pending_review_resp.status_code if pending_review_resp else 'None'}")
+        if pending_review_resp is not None:
+            reviews = pending_review_resp.json().get("reviews", [])
+            test("Pending reviews is a list", isinstance(reviews, list))
+
+        # 18. Project graph and snapshot
+        print("\n[18] Project Graph & Snapshot")
+        graph_resp = request("GET", f"/api/v1/projects/{project_id}/graph")
+        test("GET /api/v1/projects/:id/graph returns 200",
+             graph_resp is not None and graph_resp.status_code == 200)
+        if graph_resp is not None:
+            test("Graph has project field", "project" in graph_resp.json())
+            test("Graph has tasks field", "tasks" in graph_resp.json())
+
+        snapshot_resp = request("GET", f"/api/v1/projects/{project_id}/snapshot")
+        test("GET /api/v1/projects/:id/snapshot returns 200",
+             snapshot_resp is not None and snapshot_resp.status_code == 200)
+        if snapshot_resp is not None:
+            test("Snapshot has project field", "project" in snapshot_resp.json())
+            test("Snapshot has task field", "task" in snapshot_resp.json())
+
+        # 19. Cleanup: delete project
+        print("\n[19] Cleanup")
+        if project_id:
+            del_resp = request("DELETE", f"/api/v1/projects/{project_id}")
+            test("DELETE /api/v1/projects/:id deletes project",
+                 del_resp is not None and del_resp.status_code == 200)
+            if del_resp is not None:
+                test("Delete returns deleted status",
+                     del_resp.json().get("status") == "deleted")
+            verify_del = request("GET", f"/api/v1/projects/{project_id}")
+            test("Deleted project returns 404",
+                 verify_del is not None and verify_del.status_code == 404)
+
+        # 20. Edge Offline Scenario
+        print("\n[20] Edge Offline Scenario")
+        offline_agent_id = f"e2e-offline-agent-{int(time.time())}"
+        offline_register_resp = request("POST", "/api/v1/agents/register",
+                                        json={
+                                            "agent_id": offline_agent_id,
+                                            "user_id": "e2e-user",
+                                            "capabilities": ["testing"],
+                                            "version": "1.0.0"
+                                        })
+        test("POST /api/v1/agents/register registers offline test agent",
+             offline_register_resp is not None and offline_register_resp.status_code == 200)
+        if offline_register_resp is not None and offline_register_resp.status_code == 200:
+            test("Offline agent registered with online status",
+                 offline_register_resp.json().get("status") == "online")
+
+        print("  Waiting 15 seconds for offline timeout...")
+        time.sleep(15)
+
+        agents_after_timeout_resp = request("GET", "/api/v1/agents")
+        if agents_after_timeout_resp is None:
+            agents_after_timeout_resp = request("GET", "/api/v1/agents/")
+        test("GET /api/v1/agents still returns 200 after timeout",
+             agents_after_timeout_resp is not None and agents_after_timeout_resp.status_code == 200)
+        if agents_after_timeout_resp is not None:
+            online_agents = agents_after_timeout_resp.json().get("agents", [])
+            offline_agent_still_online = any(a.get("agent_id") == offline_agent_id for a in online_agents)
+            test("Offline agent is no longer listed as online",
+                 not offline_agent_still_online,
+                 f"Agent {offline_agent_id} still found in online agents")
+
+        # 21. Empty State Tests
+        print("\n[21] Empty State Tests")
+        empty_reviews_resp = request("GET", "/api/v1/reviews/pending")
+        test("GET /api/v1/reviews/pending returns 200 (empty state)",
+             empty_reviews_resp is not None and empty_reviews_resp.status_code == 200)
+        if empty_reviews_resp is not None:
+            empty_reviews = empty_reviews_resp.json().get("reviews", [])
+            test("Pending reviews returns a list in empty state",
+                 isinstance(empty_reviews, list))
+
+        empty_tasks_resp = request("GET", "/api/v1/tasks/available")
+        test("GET /api/v1/tasks/available returns 200 (empty state)",
+             empty_tasks_resp is not None and empty_tasks_resp.status_code == 200)
+        if empty_tasks_resp is not None:
+            empty_tasks = empty_tasks_resp.json().get("tasks", [])
+            test("Available tasks returns a list in empty state",
+                 isinstance(empty_tasks, list))
+
+        # 22. Error Handling
+        print("\n[22] Error Handling")
+        empty_name_resp = request("POST", "/api/v1/projects",
+                                  json={"project_name": "", "description": "Invalid project"})
+        test("POST /api/v1/projects with empty project_name returns 400",
+             empty_name_resp is not None and empty_name_resp.status_code == 400,
+             f"got status {empty_name_resp.status_code if empty_name_resp else 'None'}")
+
+        nonexistent_resp = request("GET", "/api/v1/projects/nonexistent")
+        test("GET /api/v1/projects/nonexistent returns 404",
+             nonexistent_resp is not None and nonexistent_resp.status_code == 404,
+             f"got status {nonexistent_resp.status_code if nonexistent_resp else 'None'}")
+
+        no_agent_id_resp = request("POST", "/api/v1/agents/register",
+                                   json={"user_id": "e2e-user", "capabilities": ["testing"]})
+        test("POST /api/v1/agents/register without agent_id returns 400",
+             no_agent_id_resp is not None and no_agent_id_resp.status_code == 400,
+             f"got status {no_agent_id_resp.status_code if no_agent_id_resp else 'None'}")
+
+        # 23. Review Workflow
+        print("\n[23] Review Workflow")
+        create_resp2 = request("POST", "/api/v1/projects",
+                              json={"project_name": "Review Test Project", "description": "For review workflow test"})
+        if create_resp2 is not None and create_resp2.status_code == 200:
+            project_id2 = create_resp2.json()["project_id"]
+            task_resp2 = request("POST", f"/api/v1/projects/{project_id2}/tasks",
+                                json={"pipeline_name": "review-pipeline"})
+            if task_resp2 is not None and task_resp2.status_code == 200:
+                task_id2 = task_resp2.json()["task_id"]
+            else:
+                task_id2 = None
+        else:
+            task_id2 = None
+
+        agent_id2 = f"e2e-review-agent-{int(time.time())}"
+
+        if task_id2:
+            _ = request("POST", "/api/v1/agents/register",
+                       json={"agent_id": agent_id2, "user_id": "e2e-user", "capabilities": ["reviewing"], "version": "1.0.0"})
+
+            review_submit_resp = request("POST", "/api/v1/reviews/submit",
+                                         json={
+                                             "task_id": task_id2,
+                                             "agent_id": agent_id2,
+                                             "review_data": {
+                                                 "quality_score": 4,
+                                                 "comments": "Good work",
+                                                 "suggestions": ["Improve documentation"]
+                                             }
+                                         })
+            test("POST /api/v1/reviews/submit returns 200",
+                 review_submit_resp is not None and review_submit_resp.status_code == 200,
+                 f"got status {review_submit_resp.status_code if review_submit_resp else 'None'}")
+            if review_submit_resp is not None and review_submit_resp.status_code == 200:
+                test("Review submit returns status ok",
+                     review_submit_resp.json().get("status") == "ok",
+                     f"got: {review_submit_resp.json()}")
+            elif review_submit_resp is not None and review_submit_resp.status_code == 404:
+                test("POST /api/v1/reviews/submit endpoint found (404 expected without task)",
+                     True)
+
+            time.sleep(1)
+
+            reviews_after_submit_resp = request("GET", "/api/v1/reviews/pending")
+            test("GET /api/v1/reviews/pending returns 200 after submit",
+                 reviews_after_submit_resp is not None and reviews_after_submit_resp.status_code == 200)
+            if reviews_after_submit_resp is not None:
+                reviews_after = reviews_after_submit_resp.json().get("reviews", [])
+                test("Pending reviews is a list after submit",
+                     isinstance(reviews_after, list))
+
+                if review_submit_resp is not None and review_submit_resp.status_code == 200:
+                    review_id = review_submit_resp.json().get("review_id", "")
+                    test("Submitted review appears in pending list",
+                         any(r.get("review_id") == review_id for r in reviews_after),
+                         f"review_id={review_id} not found in {len(reviews_after)} reviews")
+
+        if project_id2:
+            _ = request("DELETE", f"/api/v1/projects/{project_id2}")
+
+        # 24. LLM Config Persistence
+        print("\n[24] LLM Config Persistence")
+        get_config_resp = request("GET", "/api/v1/config/llm")
+        test("GET /api/v1/config/llm returns 200 (persistence test)",
+             get_config_resp is not None and get_config_resp.status_code == 200)
+        original_config = {}
+        if get_config_resp is not None:
+            original_config = get_config_resp.json()
+
+        update_full_resp = request("PUT", "/api/v1/config/llm",
+                                   json={
+                                       "provider": "persist-test-provider",
+                                       "model": "persist-test-model",
+                                       "base_url": "http://persist-test.example.com"
+                                   })
+        test("PUT /api/v1/config/llm with full config returns 200",
+             update_full_resp is not None and update_full_resp.status_code == 200,
+             f"got status {update_full_resp.status_code if update_full_resp else 'None'}")
+
+        if update_full_resp is not None and update_full_resp.status_code == 200:
+            test("Full update provider is persisted",
+                 update_full_resp.json().get("provider") == "persist-test-provider")
+            test("Full update model is persisted",
+                 update_full_resp.json().get("model") == "persist-test-model")
+            test("Full update base_url is persisted",
+                 update_full_resp.json().get("base_url") == "http://persist-test.example.com")
+
+        get_after_full_resp = request("GET", "/api/v1/config/llm")
+        test("GET /api/v1/config/llm returns 200 after full update",
+             get_after_full_resp is not None and get_after_full_resp.status_code == 200)
+        if get_after_full_resp is not None:
+            test("Full update persisted in GET (provider)",
+                 get_after_full_resp.json().get("provider") == "persist-test-provider")
+            test("Full update persisted in GET (model)",
+                 get_after_full_resp.json().get("model") == "persist-test-model")
+            test("Full update persisted in GET (base_url)",
+                 get_after_full_resp.json().get("base_url") == "http://persist-test.example.com")
+
+        update_partial_resp = request("PUT", "/api/v1/config/llm",
+                                      json={"model": "partial-update-model"})
+        test("PUT /api/v1/config/llm with partial fields returns 200",
+             update_partial_resp is not None and update_partial_resp.status_code == 200,
+             f"got status {update_partial_resp.status_code if update_partial_resp else 'None'}")
+        if update_partial_resp is not None and update_partial_resp.status_code == 200:
+            test("Partial update returns new model",
+                 update_partial_resp.json().get("model") == "partial-update-model")
+            test("Partial update preserves existing provider",
+                 update_partial_resp.json().get("provider") == "persist-test-provider",
+                 f"got: {update_partial_resp.json().get('provider')}")
+            test("Partial update preserves existing base_url",
+                 update_partial_resp.json().get("base_url") == "http://persist-test.example.com",
+                 f"got: {update_partial_resp.json().get('base_url')}")
+
+        # Restore original config
+        if original_config.get("provider"):
+            request("PUT", "/api/v1/config/llm",
+                    json={
+                        "provider": original_config.get("provider", ""),
+                        "model": original_config.get("model", ""),
+                        "base_url": original_config.get("base_url", "")
+                    })
+
+        # 25. Pagination
+        print("\n[25] Pagination")
+        pagination_project_ids = []
+        for i in range(3):
+            p_name = f"e2e-pagination-{i}-{int(time.time())}"
+            p_resp = request("POST", "/api/v1/projects",
+                             json={"project_name": p_name, "description": f"Pagination test {i}"})
+            if p_resp is not None and p_resp.status_code == 200:
+                pagination_project_ids.append(p_resp.json().get("project_id", ""))
+
+        test("Created 3 test projects for pagination",
+             len(pagination_project_ids) == 3,
+             f"created {len(pagination_project_ids)} projects")
+
+        all_projects_resp = request("GET", "/api/v1/projects")
+        test("GET /api/v1/projects returns 200 (all projects)",
+             all_projects_resp is not None and all_projects_resp.status_code == 200)
+        if all_projects_resp is not None:
+            all_projects = all_projects_resp.json().get("projects", [])
+            all_count = len(all_projects)
+            test(f"Total projects count >= 3 for pagination",
+                 all_count >= 3,
+                 f"got {all_count} projects")
+
+        limited_resp = request("GET", "/api/v1/projects?limit=2")
+        test("GET /api/v1/projects?limit=2 returns 200",
+             limited_resp is not None and limited_resp.status_code == 200)
+        if limited_resp is not None:
+            limited_projects = limited_resp.json().get("projects", [])
+            limited_count = len(limited_projects)
+            test(f"Limited projects count <= 2 (limit=2)",
+                 limited_count <= 2,
+                 f"got {limited_count} projects")
+
+        offset_resp = request("GET", "/api/v1/projects?limit=2&offset=1")
+        test("GET /api/v1/projects?limit=2&offset=1 returns 200",
+             offset_resp is not None and offset_resp.status_code == 200)
+        if offset_resp is not None:
+            offset_projects = offset_resp.json().get("projects", [])
+            offset_count = len(offset_projects)
+            test(f"Offset projects count <= 2 (limit=2, offset=1)",
+                 offset_count <= 2,
+                 f"got {offset_count} projects")
+
+        # Cleanup pagination projects
+        for pid in pagination_project_ids:
+            request("DELETE", f"/api/v1/projects/{pid}")
+
+        # 26. Agent Registration Edge Cases
+        print("\n[26] Agent Registration Edge Cases")
+        duplicate_resp = request("POST", "/api/v1/agents/register",
+                                 json={
+                                     "agent_id": agent_id,
+                                     "user_id": "e2e-user",
+                                     "capabilities": ["coding"],
+                                     "version": "1.0.0"
+                                 })
+        test("POST /api/v1/agents/register with duplicate agent_id returns expected status",
+             duplicate_resp is not None and duplicate_resp.status_code in (200, 409),
+             f"got status {duplicate_resp.status_code if duplicate_resp else 'None'}")
+
+        empty_caps_agent_id = f"e2e-no-caps-{int(time.time())}"
+        empty_caps_resp = request("POST", "/api/v1/agents/register",
+                                  json={
+                                      "agent_id": empty_caps_agent_id,
+                                      "user_id": "e2e-user",
+                                      "capabilities": [],
+                                      "version": "1.0.0"
+                                  })
+        test("POST /api/v1/agents/register with empty capabilities returns 200",
+             empty_caps_resp is not None and empty_caps_resp.status_code == 200,
+             f"got status {empty_caps_resp.status_code if empty_caps_resp else 'None'}")
+        if empty_caps_resp is not None and empty_caps_resp.status_code == 200:
+            test("Agent with empty capabilities registers successfully",
+                 empty_caps_resp.json().get("status") == "online",
+                 f"got: {empty_caps_resp.json()}")
+
+    print_summary()
+
+
+def print_summary():
+    print("\n" + "=" * 60)
+    print(f"Results: {passed} passed, {failed} failed")
+    print("=" * 60)
+    if errors:
+        for e in errors:
+            print(e)
+    if failed > 0:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

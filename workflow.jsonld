@@ -1,0 +1,200 @@
+{
+  "@context": {
+    "@version": 1.1,
+    "@vocab": "https://pdca-agent.org/ontology/workflow#",
+    "wf": "https://pdca-agent.org/ontology/workflow#",
+    "agent": "https://pdca-agent.org/ontology/agent#"
+  },
+  "@graph": [
+    {
+      "@id": "wf:software-dev-pipeline",
+      "@type": "Workflow",
+      "wf:name": "软件工程标准交付流水线",
+      "wf:description": "涵盖设计→编码→测试→审查→部署的完整软件交付 DAG 工作流",
+      "wf:version": "2.0.0",
+      "wf:entryNode": "step_init",
+      "wf:nodes": [
+        {"@id": "step_init"},
+        {"@id": "step_design"},
+        {"@id": "step_module_a"},
+        {"@id": "step_module_b"},
+        {"@id": "step_module_c"},
+        {"@id": "step_merge_check"},
+        {"@id": "step_fix"},
+        {"@id": "step_integration_test"},
+        {"@id": "step_code_review"},
+        {"@id": "step_qa_approval"},
+        {"@id": "step_deploy"},
+        {"@id": "step_summary"}
+      ]
+    },
+    {
+      "@id": "step_init",
+      "@type": "AgentNode",
+      "wf:agentRole": "Plan",
+      "wf:objective": "分析用户需求，制定项目计划和技术方案，确定模块划分",
+      "wf:tools": ["file_read", "web_search", "tool_search"],
+      "wf:successCriteria": "输出应包含：技术栈选型、模块划分、估算工时",
+      "wf:next": "step_design",
+      "wf:inputMapping": {
+        "wf:mappings": {
+          "task": "$.system.original_task",
+          "workspace": "$.system.workspace"
+        },
+        "wf:contextTemplate": "## 用户任务\n{task}\n## 工作目录\n{workspace}\n\n请分析需求并制定详细执行计划。"
+      }
+    },
+    {
+      "@id": "step_design",
+      "@type": "AgentNode",
+      "wf:agentRole": "Do",
+      "wf:objective": "编写详细设计文档，包含架构图(Mermaid)、数据流、接口定义",
+      "wf:dependencies": ["step_init"],
+      "wf:tools": ["file_write", "bash", "file_read"],
+      "wf:successCriteria": "设计文档应包含 Mermaid 架构图、模块接口定义、数据流说明",
+      "wf:timeoutSecs": 300,
+      "wf:nextNodes": ["step_module_a", "step_module_b", "step_module_c"]
+    },
+    {
+      "@id": "step_module_a",
+      "@type": "AgentNode",
+      "wf:agentRole": "Do",
+      "wf:objective": "实现模块A的核心功能代码和单元测试，遵循设计文档中的接口规范",
+      "wf:dependencies": ["step_design"],
+      "wf:tools": ["file_write", "bash", "file_read", "code_execute"],
+      "wf:successCriteria": "模块A代码完整、单元测试通过、覆盖率 > 80%",
+      "wf:retryCount": 2,
+      "wf:retryDelaySecs": 10,
+      "wf:timeoutSecs": 600
+    },
+    {
+      "@id": "step_module_b",
+      "@type": "AgentNode",
+      "wf:agentRole": "Do",
+      "wf:objective": "实现模块B的核心功能代码和单元测试，遵循设计文档中的接口规范",
+      "wf:dependencies": ["step_design"],
+      "wf:tools": ["file_write", "bash", "file_read", "code_execute"],
+      "wf:successCriteria": "模块B代码完整、单元测试通过、覆盖率 > 80%",
+      "wf:retryCount": 2,
+      "wf:retryDelaySecs": 10,
+      "wf:timeoutSecs": 600,
+      "wf:branchOnFailure": {
+        "wf:condition": "$.result.status == 'failed'",
+        "wf:target": "step_fix"
+      }
+    },
+    {
+      "@id": "step_module_c",
+      "@type": "AgentNode",
+      "wf:agentRole": "Do",
+      "wf:objective": "实现模块C的核心功能代码和单元测试，遵循设计文档中的接口规范",
+      "wf:dependencies": ["step_design"],
+      "wf:tools": ["file_write", "bash", "file_read", "code_execute"],
+      "wf:successCriteria": "模块C代码完整、单元测试通过、覆盖率 > 80%",
+      "wf:retryCount": 2,
+      "wf:retryDelaySecs": 10,
+      "wf:timeoutSecs": 600
+    },
+    {
+      "@id": "step_merge_check",
+      "@type": "AgentNode",
+      "wf:agentRole": "Do",
+      "wf:objective": "合并三个模块的代码，解决模块间接口冲突，确保整体编译通过",
+      "wf:dependencies": ["step_module_a", "step_module_b", "step_module_c"],
+      "wf:tools": ["bash", "file_read", "file_write", "grep_search"],
+      "wf:successCriteria": "三模块合并后编译通过、基础集成测试通过",
+      "wf:retryCount": 1,
+      "wf:timeoutSecs": 300,
+      "wf:branchOnFailure": {
+        "wf:condition": "$.result.status == 'failed'",
+        "wf:target": "step_fix"
+      }
+    },
+    {
+      "@id": "step_fix",
+      "@type": "AgentNode",
+      "wf:agentRole": "Do",
+      "wf:objective": "修复失败的模块代码，定位问题并修复编译/测试错误",
+      "wf:dependencies": ["step_merge_check"],
+      "wf:tools": ["bash", "file_read", "file_write", "grep_search"],
+      "wf:successCriteria": "修复后编译测试均通过",
+      "wf:retryCount": 3,
+      "wf:retryDelaySecs": 5,
+      "wf:timeoutSecs": 300,
+      "wf:branchOnFailure": {
+        "wf:condition": "$.result.status == 'failed'",
+        "wf:target": "step_fix"
+      }
+    },
+    {
+      "@id": "step_integration_test",
+      "@type": "AgentNode",
+      "wf:agentRole": "Do",
+      "wf:objective": "编写集成测试并执行，验证模块间交互正确性，生成测试报告",
+      "wf:dependencies": ["step_merge_check"],
+      "wf:tools": ["bash", "file_write", "file_read", "code_execute"],
+      "wf:successCriteria": "集成测试全部通过、测试报告完整",
+      "wf:retryCount": 1,
+      "wf:timeoutSecs": 300,
+      "wf:branchOnFailure": {
+        "wf:condition": "$.result.status == 'failed'",
+        "wf:target": "step_fix"
+      }
+    },
+    {
+      "@id": "step_code_review",
+      "@type": "AgentNode",
+      "wf:agentRole": "Check",
+      "wf:objective": "审查全部代码质量：检查代码风格、错误处理、安全性、性能、文档完整性",
+      "wf:dependencies": ["step_integration_test"],
+      "wf:tools": ["file_read", "bash", "grep_search", "glob_search"],
+      "wf:successCriteria": "审查应覆盖：代码质量、测试覆盖率、安全漏洞、文档完整性",
+      "wf:inputMapping": {
+        "wf:mappings": {
+          "design_summary": "$.nodes.step_design.summary",
+          "test_results": "$.nodes.step_integration_test.summary"
+        },
+        "wf:contextTemplate": "## 设计文档摘要\n{design_summary}\n## 测试结果\n{test_results}\n\n请全面审查代码质量。"
+      },
+      "wf:branchOnFailure": {
+        "wf:condition": "问题",
+        "wf:target": "step_fix"
+      }
+    },
+    {
+      "@id": "step_qa_approval",
+      "@type": "AgentNode",
+      "wf:agentRole": "Check",
+      "wf:objective": "综合评估项目质量：确认设计、编码、测试全流程达标，输出质量报告",
+      "wf:dependencies": ["step_code_review"],
+      "wf:tools": ["file_read", "glob_search"],
+      "wf:successCriteria": "质量评估应包含：设计完整性、代码质量、测试覆盖、文档完备度四个维度"
+    },
+    {
+      "@id": "step_deploy",
+      "@type": "AgentNode",
+      "wf:agentRole": "Act",
+      "wf:objective": "执行最终部署：打包产物、生成版本标签、输出部署说明",
+      "wf:dependencies": ["step_qa_approval"],
+      "wf:tools": ["bash", "file_write", "http_request"],
+      "wf:successCriteria": "部署包完整、部署说明清晰"
+    },
+    {
+      "@id": "step_summary",
+      "@type": "AgentNode",
+      "wf:agentRole": "Act",
+      "wf:objective": "汇总全流程交付物，输出项目总结报告，包含技术决策回顾和经验教训",
+      "wf:dependencies": ["step_deploy"],
+      "wf:tools": ["file_write", "file_read"],
+      "wf:successCriteria": "总结报告应包含：交付清单、技术决策回顾、改进建议",
+      "wf:finalNode": "true",
+      "wf:inputMapping": {
+        "wf:mappings": {
+          "all_results": "$.nodes",
+          "user_task": "$.system.original_task"
+        },
+        "wf:contextTemplate": "## 原始任务\n{user_task}\n\n## 各节点执行结果\n{all_results}\n\n请输出完整的项目总结报告。"
+      }
+    }
+  ]
+}

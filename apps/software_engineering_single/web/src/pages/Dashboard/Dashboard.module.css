@@ -1,0 +1,513 @@
+.container {
+  padding: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.pageTitle {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.88);
+}
+
+.pageSubtitle {
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.statCard {
+  border-radius: 12px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.statCard:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.statInner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.statIcon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.statInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.statValue {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.statTitle {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  margin-top: 2px;
+}
+
+.cardTitle {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.healthCard {
+  border-radius: 12px;
+}
+
+.healthList {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.healthItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.02);
+  transition: background 0.2s;
+}
+
+.healthItem:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.healthIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.healthInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.healthLabel {
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.88);
+}
+
+.healthDetail {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipelineStats {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
+.pipelineDonut {
+  flex-shrink: 0;
+  width: 140px;
+  height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.donutSvg {
+  width: 140px;
+  height: 140px;
+}
+
+.donutSegment {
+  transition: stroke-dasharray 0.6s ease, stroke-dashoffset 0.6s ease;
+}
+
+.donutCenterValue {
+  font-size: 22px;
+  font-weight: 700;
+  fill: rgba(0, 0, 0, 0.88);
+}
+
+.donutCenterLabel {
+  font-size: 11px;
+  fill: rgba(0, 0, 0, 0.45);
+}
+
+.pipelineBars {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pipelineBar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pipelineBarHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pipelineBarDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.pipelineBarLabel {
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.65);
+  flex: 1;
+}
+
+.pipelineBarCount {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.88);
+}
+
+.pipelineBarTrack {
+  height: 8px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.pipelineBarFill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.6s ease;
+  min-width: 2px;
+}
+
+.taskTotal {
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.taskTotal strong {
+  font-size: 16px;
+  color: rgba(0, 0, 0, 0.88);
+  margin-left: 4px;
+}
+
+.trendCard {
+  border-radius: 12px;
+}
+
+.trendEmpty {
+  padding: 40px 0;
+}
+
+.trendChart {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  height: 180px;
+  padding: 0 4px;
+}
+
+.trendCol {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.trendBarStack {
+  width: 100%;
+  max-width: 36px;
+  height: 140px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  border-radius: 4px 4px 0 0;
+  overflow: hidden;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.trendBarStack:hover {
+  opacity: 0.8;
+}
+
+.trendBarSegment {
+  width: 100%;
+  min-height: 0;
+  transition: height 0.4s ease;
+}
+
+.trendLabel {
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 48px;
+  text-align: center;
+}
+
+.trendTotal {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.trendLegend {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.legendDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.resourceList {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.resourceItem {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.resourceHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.resourceLabel {
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.resourceValue {
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.88);
+  font-variant-numeric: tabular-nums;
+}
+
+.activityCard {
+  border-radius: 12px;
+}
+
+.activityList {
+  display: flex;
+  flex-direction: column;
+}
+
+.activityItem {
+  display: flex;
+  align-items: flex-start;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.activityItem:last-child {
+  border-bottom: none;
+}
+
+.activityIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 12px;
+  flex-shrink: 0;
+  font-size: 16px;
+}
+
+.activityContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.activityTitle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+
+.activityName {
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+.activityDesc {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.activityTime {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.35);
+  margin-top: 4px;
+}
+
+.quickActions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.quickActionBtn {
+  height: 44px !important;
+  border-radius: 10px !important;
+  font-size: 14px !important;
+}
+
+.recentProjectList {
+  display: flex;
+  flex-direction: column;
+}
+
+.recentProjectItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  cursor: pointer;
+  transition: background 0.2s;
+  border-radius: 6px;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.recentProjectItem:hover {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.recentProjectItem:last-child {
+  border-bottom: none;
+}
+
+.recentProjectInfo {
+  flex: 1;
+  min-width: 0;
+  margin-right: 12px;
+}
+
+.recentProjectName {
+  font-weight: 500;
+  font-size: 14px;
+  margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recentProjectDesc {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1200px) {
+  .pipelineStats {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .pipelineDonut {
+    width: 120px;
+    height: 120px;
+  }
+
+  .donutSvg {
+    width: 120px;
+    height: 120px;
+  }
+
+  .pipelineBars {
+    width: 100%;
+  }
+}
+
+@media (max-width: 768px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .pipelineStats {
+    flex-direction: column;
+  }
+
+  .trendChart {
+    height: 140px;
+  }
+
+  .trendBarStack {
+    height: 100px;
+  }
+}

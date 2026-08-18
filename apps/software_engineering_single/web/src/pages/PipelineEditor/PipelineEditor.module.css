@@ -1,0 +1,169 @@
+.container {
+  padding: 0;
+  height: calc(100vh - 64px - 32px - 48px);
+}
+
+.editorLayout {
+  display: flex;
+  height: 100%;
+}
+
+.canvasArea {
+  flex: 1;
+  height: 100%;
+}
+
+.sidePanel {
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  background: #fafafa;
+  border-left: 1px solid #f0f0f0;
+  overflow-y: auto;
+}
+
+.paletteCard {
+  flex-shrink: 0;
+}
+
+.propertyCard {
+  flex: 1;
+}
+
+.paletteGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.paletteItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 8px;
+  border: 2px solid #d9d9d9;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.paletteItem:hover {
+  background: #f5f5f5;
+  transform: translateY(-2px);
+}
+
+.paletteIcon {
+  font-size: 20px;
+  margin-bottom: 4px;
+}
+
+.paletteLabel {
+  font-size: 12px;
+  color: #666;
+}
+
+.stageNode {
+  background: #fff;
+  border: 2px solid #d9d9d9;
+  border-radius: 8px;
+  min-width: 150px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.nodeHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  color: #fff;
+  border-radius: 6px 6px 0 0;
+}
+
+.nodeTitle {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.nodeContent {
+  padding: 8px 12px;
+}
+
+.nodeStatus {
+  margin-bottom: 8px;
+}
+
+.nodeFlags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.nodeMeta {
+  font-size: 11px;
+  color: #999;
+}
+
+.propertyForm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.formItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.formItem label {
+  font-size: 13px;
+  color: #666;
+}
+
+.formValue {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.handle {
+  width: 12px !important;
+  height: 12px !important;
+  border: 2px solid #fff !important;
+  border-radius: 50% !important;
+  z-index: 10 !important;
+}
+
+.handle:hover {
+  transform: scale(1.2);
+}
+
+.nodeDescription {
+  font-size: 11px;
+  color: #888;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.propertySection {
+  margin-bottom: 16px;
+}
+
+.propertySectionTitle {
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: #333;
+}
+
+.artifactTag {
+  margin: 2px;
+}
+
+.helpText {
+  padding: 8px;
+  background: #f5f5f5;
+  border-radius: 4px;
+  text-align: center;
+}

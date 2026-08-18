@@ -1,0 +1,18 @@
+grpc:
+    host: "::1"
+    port: 50051
+llm:
+    api_key: ""
+    base_url: https://api.deepseek.com
+    model: gpt-4o
+    provider: deepseek
+meta_store:
+    driver: sqlite3
+    dsn: se_center.db
+server:
+    host: 0.0.0.0
+    port: 8080
+temporal:
+    host: localhost
+    port: 7233
+    task_queue: se-center-queue

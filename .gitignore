@@ -1,0 +1,58 @@
+# Rust build outputs (all levels)
+target/
+
+# Generated protobuf files
+apps/wild_code/target/
+
+# PR resources
+PR-res/
+
+# application data
+data/
+
+# logs
+logs/
+
+# test data
+.trae*/
+
+# Rust backup files
+**/*.rs.bk
+
+# Windows debug symbols
+*.pdb
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# K8s 真实密钥(仅提交 secret.example.yaml)
+deploy/k8s/secret.yaml
+
+# Runtime data
+data/l0/
+data/logs/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+*.orig
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Python (used by some tooling)
+__pycache__/
+*.pyc
+
+# Node (used by some tooling)
+node_modules/
+
+# Cargo lock
+Cargo.lock

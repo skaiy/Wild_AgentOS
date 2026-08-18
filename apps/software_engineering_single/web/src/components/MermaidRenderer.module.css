@@ -1,0 +1,75 @@
+.container {
+  background: #1e1e1e;
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #3d3d3d;
+}
+
+.languageTag {
+  font-size: 12px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.svgWrapper {
+  padding: 16px;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  background: #1e1e1e;
+}
+
+.svgWrapper :global(svg) {
+  max-width: 100%;
+  height: auto;
+}
+
+.errorContent {
+  padding: 12px;
+}
+
+.fallbackCode {
+  margin-top: 8px;
+  padding: 8px;
+  background: #2d2d2d;
+  border-radius: 4px;
+  color: #d4d4d4;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+@media (prefers-color-scheme: light) {
+  .container {
+    background: #ffffff;
+  }
+
+  .header {
+    background: #f6f8fa;
+    border-bottom: 1px solid #d0d7de;
+  }
+
+  .languageTag {
+    color: #6e7781;
+  }
+
+  .svgWrapper {
+    background: #ffffff;
+  }
+
+  .fallbackCode {
+    background: #f6f8fa;
+    color: #1e1e1e;
+  }
+}

@@ -1,0 +1,998 @@
+// ============================================================================
+// PDCA Agent System V2 - gRPC Protocol Definition
+// ============================================================================
+// 
+// This protocol defines the interface between:
+// - Rust Semantic Core (Server)
+// - Python/TypeScript Orchestration Layer (Client)
+//
+// Design Principles:
+// 1. Minimal surface area - only essential operations exposed
+// 2. JSON-LD as the universal data format
+// 3. Size constraints enforced at protocol level
+// 4. Event-driven for async coordination
+// ============================================================================
+
+syntax = "proto3";
+
+package pdca_core;
+
+option go_package = "github.com/pdca-agent/pdca-core/v2;pdca_core";
+option java_package = "org.pdca.agent.core.v2";
+option java_multiple_files = true;
+
+// ============================================================================
+// Service Definition
+// ============================================================================
+
+service PDCACoreService {
+    // -------------------------------------------
+    // 1. Task Lifecycle Management
+    // -------------------------------------------
+    
+    /// Initialize a new task, returns task_iri
+    rpc InitTask(InitTaskRequest) returns (InitTaskResponse);
+    
+    /// Get task status and metadata
+    rpc GetTaskStatus(GetTaskStatusRequest) returns (GetTaskStatusResponse);
+    
+    /// Complete a task and archive to L0
+    rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse);
+    
+    // -------------------------------------------
+    // 2. L2 Blackboard Operations
+    // -------------------------------------------
+    
+    /// Write a semantic node to blackboard (enforces < 2KB)
+    rpc WriteNode(WriteNodeRequest) returns (WriteNodeResponse);
+    
+    /// Read a node by IRI
+    rpc ReadNode(ReadNodeRequest) returns (ReadNodeResponse);
+    
+    /// Query nodes by SPARQL SELECT
+    rpc QueryNodes(QueryNodesRequest) returns (QueryNodesResponse);
+    
+    /// Delete a node from blackboard
+    rpc DeleteNode(DeleteNodeRequest) returns (DeleteNodeResponse);
+    
+    /// Get all nodes for a task
+    rpc GetTaskNodes(GetTaskNodesRequest) returns (GetTaskNodesResponse);
+    
+    // -------------------------------------------
+    // 3. L3 Projection (SPARQL CONSTRUCT)
+    // -------------------------------------------
+    
+    /// Execute SPARQL CONSTRUCT for minimal projection
+    rpc GetProjection(GetProjectionRequest) returns (GetProjectionResponse);
+    
+    /// List available projection frames
+    rpc ListProjectionFrames(ListProjectionFramesRequest) returns (ListProjectionFramesResponse);
+    
+    // -------------------------------------------
+    // 4. Skill Registry
+    // -------------------------------------------
+    
+    /// List available skills for an agent role
+    rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
+    
+    /// Get skill metadata and compiled template
+    rpc GetSkill(GetSkillRequest) returns (GetSkillResponse);
+    
+    /// Validate skill input against schema
+    rpc ValidateSkillInput(ValidateSkillInputRequest) returns (ValidateSkillInputResponse);
+    
+    /// Register a new skill
+    rpc RegisterSkill(RegisterSkillRequest) returns (RegisterSkillResponse);
+    
+    // -------------------------------------------
+    // 5. Event System
+    // -------------------------------------------
+    
+    /// Emit an event
+    rpc EmitEvent(EmitEventRequest) returns (EmitEventResponse);
+    
+    /// Subscribe to events (server streaming)
+    rpc SubscribeEvents(SubscribeEventsRequest) returns (stream EventNotification);
+    
+    /// Get event history
+    rpc GetEventHistory(GetEventHistoryRequest) returns (GetEventHistoryResponse);
+    
+    // -------------------------------------------
+    // 6. L0 Long-term Memory
+    // -------------------------------------------
+    
+    /// Store to L0 (archive)
+    rpc ArchiveToL0(ArchiveToL0Request) returns (ArchiveToL0Response);
+    
+    /// Query L0 for similar experiences
+    rpc QueryL0(QueryL0Request) returns (QueryL0Response);
+    
+    /// Retrieve from L0 by IRI
+    rpc RetrieveFromL0(RetrieveFromL0Request) returns (RetrieveFromL0Response);
+    
+    // -------------------------------------------
+    // 7. Health & Metrics
+    // -------------------------------------------
+    
+    /// Health check
+    rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+    
+    /// Get system metrics
+    rpc GetMetrics(GetMetricsRequest) returns (GetMetricsResponse);
+    
+    // -------------------------------------------
+    // 8. LLM Output Validation (One Roundtrip, Double Harvest)
+    // -------------------------------------------
+    
+    /// Validate and convert LLM output metadata to JSON-LD
+    rpc ValidateAndConvertMeta(ValidateAndConvertMetaRequest) returns (ValidateAndConvertMetaResponse);
+    
+    /// Compress session to L2 node
+    rpc CompressSession(CompressSessionRequest) returns (CompressSessionResponse);
+    
+    /// Reorganize nodes into a view
+    rpc ReorganizeNodes(ReorganizeNodesRequest) returns (ReorganizeNodesResponse);
+    
+    /// Evaluate context quality
+    rpc EvaluateContextQuality(EvaluateContextQualityRequest) returns (EvaluateContextQualityResponse);
+
+    // -------------------------------------------
+    // 9. Checkpoint (Session Save/Restore)
+    // -------------------------------------------
+
+    /// Create a checkpoint of the current session state
+    rpc CreateCheckpoint(CreateCheckpointRequest) returns (CreateCheckpointResponse);
+
+    /// Restore a session from a checkpoint
+    rpc RestoreCheckpoint(RestoreCheckpointRequest) returns (RestoreCheckpointResponse);
+
+    /// List available checkpoints
+    rpc ListCheckpoints(ListCheckpointsRequest) returns (ListCheckpointsResponse);
+
+    /// Delete a checkpoint
+    rpc DeleteCheckpoint(DeleteCheckpointRequest) returns (DeleteCheckpointResponse);
+
+    // -------------------------------------------
+    // 10. SA Agent Session Management (L1 Access)
+    // -------------------------------------------
+
+    /// Get agent session (L1) - for SA monitoring
+    rpc GetAgentSession(GetAgentSessionRequest) returns (GetAgentSessionResponse);
+
+    /// Inject message to agent session (L1) - for SA intervention
+    rpc InjectMessage(InjectMessageRequest) returns (InjectMessageResponse);
+}
+
+// ============================================================================
+// Messages: Task Lifecycle
+// ============================================================================
+
+message InitTaskRequest {
+    /// User's original input
+    string user_input = 1;
+    
+    /// Path to agent.md configuration
+    string agent_md_path = 2;
+    
+    /// Optional parent task IRI (for subtasks)
+    string parent_task_iri = 3;
+    
+    /// Initial context as JSON-LD
+    string context_json_ld = 4;
+    
+    /// Task priority (1-10, default 5)
+    int32 priority = 5;
+    
+    /// Requested agent role to start
+    string initial_agent_role = 6;
+}
+
+message InitTaskResponse {
+    /// Assigned task IRI (e.g., "iri://task_0042")
+    string task_iri = 1;
+    
+    /// Creation timestamp (ISO 8601)
+    string created_at = 2;
+    
+    /// Initial L3 projection for starting agent
+    string initial_projection = 3;
+    
+    /// Success status
+    bool success = 4;
+    
+    /// Error message if failed
+    string error_message = 5;
+}
+
+message GetTaskStatusRequest {
+    string task_iri = 1;
+}
+
+message GetTaskStatusResponse {
+    string task_iri = 1;
+    string status = 2;  // pending, planning, executing, checking, acting, completed, failed
+    string current_phase = 3;  // plan, do, check, act
+    string current_agent_iri = 4;
+    int32 cycle_count = 5;
+    string created_at = 6;
+    string updated_at = 7;
+    int32 node_count = 8;
+    string summary_json = 9;
+}
+
+message CompleteTaskRequest {
+    string task_iri = 1;
+    string final_status = 2;  // completed, failed, cancelled
+    string summary_json_ld = 3;
+    bool archive_to_l0 = 4;
+}
+
+message CompleteTaskResponse {
+    bool success = 1;
+    string l0_archive_iri = 2;  // IRI in long-term memory if archived
+    string message = 3;
+}
+
+// ============================================================================
+// Messages: L2 Blackboard
+// ============================================================================
+
+message WriteNodeRequest {
+    /// Task IRI this node belongs to
+    string task_iri = 1;
+    
+    /// JSON-LD document (must be < 2048 bytes)
+    string json_ld_document = 2;
+    
+    /// Node type hint
+    string node_type = 3;
+    
+    /// Tags for indexing
+    repeated string tags = 4;
+    
+    /// Agent IRI that created this node
+    string created_by = 5;
+}
+
+message WriteNodeResponse {
+    /// Whether the write was accepted
+    bool accepted = 1;
+    
+    /// Assigned node IRI
+    string node_iri = 2;
+    
+    /// Rejection reason if not accepted
+    string reject_reason = 3;
+    
+    /// Actual size in bytes
+    int32 size_bytes = 4;
+}
+
+message ReadNodeRequest {
+    /// Node IRI to read
+    string node_iri = 1;
+    
+    /// Whether to include metadata
+    bool include_metadata = 2;
+}
+
+message ReadNodeResponse {
+    /// JSON-LD document
+    string json_ld_document = 1;
+    
+    /// Whether node was found
+    bool found = 2;
+    
+    /// Node metadata
+    map<string, string> metadata = 3;
+}
+
+message QueryNodesRequest {
+    /// SPARQL SELECT query
+    string sparql_query = 1;
+    
+    /// Maximum results to return
+    int32 limit = 2;
+    
+    /// Task IRI to scope query
+    string task_iri = 3;
+}
+
+message QueryNodesResponse {
+    /// Results as JSON array
+    string results_json = 1;
+    
+    /// Number of results
+    int32 count = 2;
+    
+    /// Query execution time in ms
+    int32 execution_time_ms = 3;
+}
+
+message DeleteNodeRequest {
+    string node_iri = 1;
+    string task_iri = 2;
+}
+
+message DeleteNodeResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message GetTaskNodesRequest {
+    string task_iri = 1;
+    repeated string node_types = 2;  // Filter by types
+    int32 limit = 3;
+}
+
+message GetTaskNodesResponse {
+    repeated NodeSummary nodes = 1;
+    int32 total_count = 2;
+}
+
+message NodeSummary {
+    string node_iri = 1;
+    string node_type = 2;
+    string created_at = 3;
+    string created_by = 4;
+    int32 size_bytes = 5;
+    string preview = 6;  // First 100 chars
+}
+
+// ============================================================================
+// Messages: L3 Projection
+// ============================================================================
+
+message GetProjectionRequest {
+    /// Task IRI
+    string task_iri = 1;
+    
+    /// Predefined frame name (e.g., "ca_review", "pa_init")
+    string frame_name = 2;
+    
+    /// Dynamic parameters for frame
+    map<string, string> params = 3;
+    
+    /// Custom SPARQL CONSTRUCT (overrides frame_name)
+    string custom_sparql = 4;
+    
+    /// Maximum size in bytes (default 500)
+    int32 max_size_bytes = 5;
+}
+
+message GetProjectionResponse {
+    /// Projection JSON (guaranteed < max_size_bytes)
+    string projection_json = 1;
+    
+    /// Actual size in bytes
+    int32 size_bytes = 2;
+    
+    /// Frame used
+    string frame_used = 3;
+    
+    /// Execution time in ms
+    int32 execution_time_ms = 4;
+}
+
+message ListProjectionFramesRequest {
+    /// Filter by target agent role
+    string target_role = 1;
+}
+
+message ListProjectionFramesResponse {
+    repeated ProjectionFrame frames = 1;
+}
+
+message ProjectionFrame {
+    string name = 1;
+    string description = 2;
+    string target_role = 3;
+    repeated string required_params = 4;
+    string sparql_template = 5;
+}
+
+// ============================================================================
+// Messages: Skill Registry
+// ============================================================================
+
+message ListSkillsRequest {
+    /// Filter by agent role
+    string agent_role = 1;
+    
+    /// Filter by category
+    string category = 2;
+}
+
+message ListSkillsResponse {
+    repeated SkillMeta skills = 1;
+    int32 total_count = 2;
+}
+
+message SkillMeta {
+    /// Skill IRI
+    string skill_iri = 1;
+    
+    /// Human-readable name
+    string name = 2;
+    
+    /// Description
+    string description = 3;
+    
+    /// Category
+    string category = 4;
+    
+    /// Security level (normal, high, critical)
+    string security_level = 5;
+    
+    /// Pre-compiled JSON template for LLM fill-in
+    string compiled_json_template = 6;
+    
+    /// Required parameters
+    repeated string required_params = 7;
+    
+    /// Version
+    string version = 8;
+}
+
+message GetSkillRequest {
+    string skill_iri = 1;
+}
+
+message GetSkillResponse {
+    SkillMeta skill = 1;
+    string input_schema_json = 2;
+    string output_schema_json = 3;
+    string json_ld_definition = 4;
+}
+
+message ValidateSkillInputRequest {
+    string skill_iri = 1;
+    
+    /// LLM-filled JSON
+    string filled_json = 2;
+    
+    /// Agent IRI making the request
+    string agent_iri = 3;
+}
+
+message ValidateSkillInputResponse {
+    bool valid = 1;
+    
+    /// Normalized JSON-LD if valid
+    string normalized_json_ld = 2;
+    
+    /// Validation errors if invalid
+    repeated ValidationError errors = 3;
+    
+    /// Security check passed
+    bool security_check_passed = 4;
+}
+
+message ValidationError {
+    string field = 1;
+    string message = 2;
+    string error_code = 3;
+}
+
+message RegisterSkillRequest {
+    /// JSON-LD skill definition
+    string json_ld_definition = 1;
+    
+    /// Override existing if true
+    bool override = 2;
+}
+
+message RegisterSkillResponse {
+    bool success = 1;
+    string skill_iri = 2;
+    string message = 3;
+}
+
+// ============================================================================
+// Messages: Event System
+// ============================================================================
+
+message EmitEventRequest {
+    string task_iri = 1;
+    
+    /// Event type (e.g., "PLAN_COMPLETED", "DO_FAILED")
+    string event_type = 2;
+    
+    /// Agent IRI that emitted the event
+    string source_agent_iri = 3;
+    
+    /// Event payload as JSON-LD
+    string payload_json_ld = 4;
+    
+    /// Priority (1-10)
+    int32 priority = 5;
+}
+
+message EmitEventResponse {
+    bool success = 1;
+    string event_iri = 2;
+    string timestamp = 3;
+}
+
+message SubscribeEventsRequest {
+    /// Filter by task IRI
+    string task_iri = 1;
+    
+    /// Filter by event types
+    repeated string event_types = 2;
+    
+    /// Subscriber ID for tracking
+    string subscriber_id = 3;
+    
+    /// Include historical events
+    bool include_history = 4;
+}
+
+message EventNotification {
+    string event_iri = 1;
+    string event_type = 2;
+    string task_iri = 3;
+    string source_agent_iri = 4;
+    string payload_json_ld = 5;
+    string timestamp = 6;
+    int32 sequence_number = 7;
+}
+
+message GetEventHistoryRequest {
+    string task_iri = 1;
+    repeated string event_types = 2;
+    int32 limit = 3;
+    string since_timestamp = 4;
+}
+
+message GetEventHistoryResponse {
+    repeated EventNotification events = 1;
+    int32 total_count = 2;
+}
+
+// ============================================================================
+// Messages: L0 Long-term Memory
+// ============================================================================
+
+message ArchiveToL0Request {
+    string task_iri = 1;
+    
+    /// Summary JSON-LD
+    string summary_json_ld = 2;
+    
+    /// Key artifacts to archive
+    repeated string artifact_paths = 3;
+    
+    /// Importance score (0.0-1.0)
+    double importance = 4;
+    
+    /// Tags for retrieval
+    repeated string tags = 5;
+}
+
+message ArchiveToL0Response {
+    bool success = 1;
+    string archive_iri = 2;
+    string message = 3;
+}
+
+message QueryL0Request {
+    /// Natural language query
+    string query = 1;
+    
+    /// Vector similarity search
+    bool use_semantic_search = 2;
+    
+    /// Maximum results
+    int32 limit = 3;
+    
+    /// Filter by tags
+    repeated string tags = 4;
+    
+    /// Minimum similarity threshold (0.0-1.0)
+    double similarity_threshold = 5;
+}
+
+message QueryL0Response {
+    repeated L0SearchResult results = 1;
+    int32 total_count = 2;
+}
+
+message L0SearchResult {
+    string archive_iri = 1;
+    string summary = 2;
+    double similarity = 3;
+    string created_at = 4;
+    repeated string tags = 5;
+}
+
+message RetrieveFromL0Request {
+    string archive_iri = 1;
+}
+
+message RetrieveFromL0Response {
+    string json_ld_document = 1;
+    bool found = 2;
+    map<string, string> metadata = 3;
+}
+
+// ============================================================================
+// Messages: Health & Metrics
+// ============================================================================
+
+message HealthCheckRequest {
+    /// Include detailed status
+    bool detailed = 1;
+}
+
+message HealthCheckResponse {
+    /// Overall health status
+    string status = 1;  // healthy, degraded, unhealthy
+    
+    /// Component statuses
+    map<string, string> components = 2;
+    
+    /// Uptime in seconds
+    int64 uptime_seconds = 3;
+    
+    /// Version
+    string version = 4;
+}
+
+message GetMetricsRequest {
+    /// Metric categories to include
+    repeated string categories = 1;
+}
+
+message GetMetricsResponse {
+    /// L2 Blackboard metrics
+    L2Metrics l2_metrics = 1;
+    
+    /// L0 Storage metrics
+    L0Metrics l0_metrics = 2;
+    
+    /// Event metrics
+    EventMetrics event_metrics = 3;
+    
+    /// Performance metrics
+    PerformanceMetrics performance_metrics = 4;
+    
+    /// Timestamp
+    string timestamp = 5;
+}
+
+message L2Metrics {
+    int64 total_nodes = 1;
+    int64 total_bytes = 2;
+    int64 nodes_by_type_count = 3;
+    map<string, int64> nodes_by_type = 4;
+    int64 active_tasks = 5;
+}
+
+message L0Metrics {
+    int64 total_archives = 1;
+    int64 total_bytes = 2;
+    int64 vector_index_size = 3;
+}
+
+message EventMetrics {
+    int64 total_events = 1;
+    int64 events_per_minute = 2;
+    int64 active_subscribers = 3;
+}
+
+message PerformanceMetrics {
+    double avg_query_time_ms = 1;
+    double avg_projection_time_ms = 2;
+    double avg_write_time_ms = 3;
+    int64 cache_hit_rate = 4;
+    int64 memory_usage_mb = 5;
+}
+
+// ============================================================================
+// Messages: LLM Output Validation (One Roundtrip, Double Harvest)
+// ============================================================================
+
+message ValidateAndConvertMetaRequest {
+    /// Content type: plan, code, review, research, decision
+    string content_type = 1;
+    
+    /// Metadata JSON from LLM output
+    string meta_json = 2;
+    
+    /// Task IRI for context
+    string task_iri = 3;
+}
+
+message ValidateAndConvertMetaResponse {
+    /// Whether validation passed
+    bool valid = 1;
+    
+    /// Converted JSON-LD node
+    string json_ld = 2;
+    
+    /// Validation errors if invalid
+    repeated ValidationError errors = 3;
+    
+    /// Generated node IRI
+    string node_iri = 4;
+}
+
+message CompressSessionRequest {
+    /// Task IRI
+    string task_iri = 1;
+    
+    /// Session messages as JSON array
+    string messages_json = 2;
+    
+    /// Agent role
+    string agent_role = 3;
+}
+
+message CompressSessionResponse {
+    /// Compressed JSON-LD node
+    string json_ld = 1;
+    
+    /// Original size in bytes
+    int32 original_size = 2;
+    
+    /// Compressed size in bytes
+    int32 compressed_size = 3;
+    
+    /// Compression ratio
+    double compression_ratio = 4;
+}
+
+message ReorganizeNodesRequest {
+    /// Node IRIs to reorganize
+    repeated string node_iris = 1;
+    
+    /// Target view type: project_structure, error_history, experience_graph, decision_chain
+    string target_view = 2;
+    
+    /// Task IRI for context
+    string task_iri = 3;
+}
+
+message ReorganizeNodesResponse {
+    /// Reorganized JSON-LD document
+    string reorganized_json_ld = 1;
+    
+    /// Number of nodes processed
+    int32 nodes_processed = 2;
+}
+
+message EvaluateContextQualityRequest {
+    /// Task IRI
+    string task_iri = 1;
+    
+    /// Agent ID
+    string agent_id = 2;
+}
+
+message EvaluateContextQualityResponse {
+    /// Information density score (0.0-1.0)
+    float information_density = 1;
+    
+    /// Information freshness score (0.0-1.0)
+    float information_freshness = 2;
+    
+    /// Information consistency score (0.0-1.0)
+    float information_consistency = 3;
+    
+    /// Information relevance score (0.0-1.0)
+    float information_relevance = 4;
+    
+    /// Experience coverage score (0.0-1.0)
+    float experience_coverage = 5;
+    
+    /// Overall quality score (0.0-1.0)
+    float overall_score = 6;
+    
+    /// Recommendations for improvement
+    repeated string recommendations = 7;
+}
+
+// ============================================================================
+// Messages: Checkpoint (Session Save/Restore)
+// ============================================================================
+
+message CreateCheckpointRequest {
+    /// Task IRI to checkpoint
+    string task_iri = 1;
+
+    /// Checkpoint name/description
+    string name = 2;
+
+    /// Session messages as JSON array
+    string session_messages_json = 3;
+
+    /// Agent state as JSON
+    string agent_state_json = 4;
+
+    /// Tags for the checkpoint
+    repeated string tags = 5;
+}
+
+message CreateCheckpointResponse {
+    /// Checkpoint IRI
+    string checkpoint_iri = 1;
+
+    /// Number of nodes snapshoted
+    int32 node_count = 2;
+
+    /// Total size in bytes
+    int32 total_size_bytes = 3;
+
+    /// Creation timestamp
+    string created_at = 4;
+}
+
+message RestoreCheckpointRequest {
+    /// Checkpoint IRI to restore
+    string checkpoint_iri = 1;
+
+    /// Whether to clear current state before restore
+    bool clear_current_state = 2;
+}
+
+message RestoreCheckpointResponse {
+    /// Restored task IRI
+    string task_iri = 1;
+
+    /// Number of nodes restored
+    int32 node_count = 2;
+
+    /// Session messages as JSON array
+    string session_messages_json = 3;
+
+    /// Agent state as JSON
+    string agent_state_json = 4;
+
+    /// Whether restore was successful
+    bool success = 5;
+
+    /// Error message if failed
+    string error_message = 6;
+}
+
+message ListCheckpointsRequest {
+    /// Filter by task IRI
+    string task_iri = 1;
+
+    /// Maximum results
+    int32 limit = 2;
+}
+
+message ListCheckpointsResponse {
+    repeated CheckpointInfo checkpoints = 1;
+    int32 total_count = 2;
+}
+
+message CheckpointInfo {
+    string checkpoint_iri = 1;
+    string task_iri = 2;
+    string name = 3;
+    int32 node_count = 4;
+    int32 total_size_bytes = 5;
+    string created_at = 6;
+    repeated string tags = 7;
+}
+
+message DeleteCheckpointRequest {
+    string checkpoint_iri = 1;
+}
+
+message DeleteCheckpointResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+// ============================================================================
+// Messages: SA Agent Session Management (L1 Access)
+// ============================================================================
+
+message GetAgentSessionRequest {
+    /// Task IRI
+    string task_iri = 1;
+    
+    /// Target Agent ID
+    string agent_id = 2;
+    
+    /// Whether to include message content
+    bool include_messages = 3;
+    
+    /// Maximum number of messages to return
+    int32 message_limit = 4;
+}
+
+message GetAgentSessionResponse {
+    /// Whether agent was found
+    bool found = 1;
+    
+    /// Agent ID
+    string agent_id = 2;
+    
+    /// Agent status: idle, running, completed, error
+    string status = 3;
+    
+    /// Number of messages in session
+    int32 message_count = 4;
+    
+    /// Session messages
+    repeated SessionMessage messages = 5;
+    
+    /// LLM-generated session summary
+    string session_summary = 6;
+    
+    /// Current turn number
+    int32 current_turn = 7;
+    
+    /// Session start time
+    string started_at = 8;
+    
+    /// Last activity time
+    string last_activity_at = 9;
+}
+
+message SessionMessage {
+    /// Message role: system, user, assistant, tool
+    string role = 1;
+    
+    /// Message content
+    string content = 2;
+    
+    /// Timestamp
+    string timestamp = 3;
+    
+    /// Token count (if available)
+    int32 token_count = 4;
+    
+    /// Tool calls (if role is assistant with tools)
+    repeated ToolCallInfo tool_calls = 5;
+}
+
+message ToolCallInfo {
+    /// Tool call ID
+    string id = 1;
+    
+    /// Tool name
+    string name = 2;
+    
+    /// Tool arguments as JSON
+    string arguments_json = 3;
+}
+
+message InjectMessageRequest {
+    /// Task IRI
+    string task_iri = 1;
+    
+    /// Target Agent ID
+    string target_agent_id = 2;
+    
+    /// Message role: system (for system directives), user (for user guidance)
+    string message_role = 3;
+    
+    /// Message content
+    string message_content = 4;
+    
+    /// Whether to interrupt current LLM call
+    bool interrupt = 5;
+    
+    /// Message priority (for ordering)
+    int32 priority = 6;
+}
+
+message InjectMessageResponse {
+    /// Whether injection was successful
+    bool success = 1;
+    
+    /// Status message
+    string message = 2;
+    
+    /// Whether current execution was interrupted
+    bool was_interrupted = 3;
+    
+    /// Injection timestamp
+    string injected_at = 4;
+}

@@ -1,0 +1,134 @@
+{
+  "name": "agentos-daemon",
+  "displayName": "AgentOS Daemon",
+  "description": "%ext.description%",
+  "version": "0.1.0",
+  "publisher": "agent-os",
+  "icon": "assets/muniuliuma.jpg",
+  "engines": {
+    "vscode": "^1.120.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "vscode:prepublish": "npm run build:webview && npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "tsc --noEmit --pretty",
+    "build:webview": "esbuild webview/chatPanel.entry.js --bundle --outfile=webview/chatPanel.bundle.js --format=iife --target=es2020 --minify",
+    "package": "npm run build:webview && vsce package",
+    "publish": "npm run build:webview && vsce publish"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "agentos.connect",
+        "title": "%cmd.connect%"
+      },
+      {
+        "command": "agentos.disconnect",
+        "title": "%cmd.disconnect%"
+      },
+      {
+        "command": "agentos.refreshTasks",
+        "title": "%cmd.refreshTasks%"
+      },
+      {
+        "command": "agentos.openChat",
+        "title": "%cmd.openChat%"
+      },
+      {
+        "command": "agentos.openGraph",
+        "title": "%cmd.openGraph%"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agentos-sidebar",
+          "title": "%viewsContainer.title%",
+          "icon": "assets/muniuliuma.jpg"
+        }
+      ]
+    },
+    "views": {
+      "agentos-sidebar": [
+        {
+          "id": "agentos.tasks",
+          "name": "%view.tasks%"
+        },
+        {
+          "id": "agentos.status",
+          "name": "%view.status%"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "%config.title%",
+      "properties": {
+        "agentos.daemonUrl": {
+          "type": "string",
+          "default": "http://localhost:7890",
+          "description": "%config.daemonUrl%"
+        },
+        "agentos.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.autoConnect%"
+        },
+        "agentos.heartbeatInterval": {
+          "type": "number",
+          "default": 30,
+          "description": "%config.heartbeatInterval%"
+        },
+        "agentos.llm.apiKey": {
+          "type": "string",
+          "default": "",
+          "editPresentation": "password",
+          "description": "%config.llm.apiKey%"
+        },
+        "agentos.llm.baseUrl": {
+          "type": "string",
+          "default": "https://api.openai.com/v1",
+          "description": "%config.llm.baseUrl%",
+          "pattern": "https?://.*",
+          "patternErrorMessage": "%config.llm.baseUrl.patternError%"
+        },
+        "agentos.llm.model": {
+          "type": "string",
+          "default": "gpt-4o",
+          "description": "%config.llm.model%"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "agentos.openChat",
+        "key": "ctrl+shift+c",
+        "when": "!notebookEditorFocused"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/vscode": "^1.120.0",
+    "@vscode/vsce": "^3.9.1",
+    "esbuild": "^0.28.0",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "beautiful-mermaid": "^1.1.3",
+    "htm": "^3.1.1",
+    "prism-react-renderer": "^2.4.1",
+    "react": "^18.3.1",
+    "react-diff-viewer-continued": "^4.2.2",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.0"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "@context": {
+    "schema": "https://schema.org/",
+    "skill": "https://agent-harness.os/skill#"
+  },
+  "@id": "iri://skills/test_skill",
+  "@type": [
+    "skill:Skill",
+    "skill:Atomic"
+  ],
+  "schema:description": "Test skill",
+  "schema:name": "test_skill",
+  "skill:5W2H": {
+    "skill:how": {
+      "skill:approach": "Direct execution"
+    },
+    "skill:howMuch": {
+      "skill:avgDuration": 0,
+      "skill:avgTokenCost": 0
+    },
+    "skill:what": "Test",
+    "skill:when": {
+      "skill:applicablePhase": [
+        "Plan",
+        "Do"
+      ],
+      "skill:triggerCondition": null
+    },
+    "skill:who": {
+      "skill:requiredRole": "DA",
+      "skill:roleName": "DA"
+    },
+    "skill:why": "Verify"
+  },
+  "skill:graphMeta": {
+    "skill:avgTokenConsumption": 0,
+    "skill:successRate": 1.0,
+    "skill:usageCount": 0
+  },
+  "skill:links": [],
+  "skill:maturity": "stable",
+  "skill:tags": [
+    "test"
+  ],
+  "skill:version": "1.0.0"
+}

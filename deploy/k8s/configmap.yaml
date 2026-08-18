@@ -1,0 +1,23 @@
+# 非敏感配置(端口/嵌入模型端点/日志级别)。密钥见 secret.example.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wild-agentos-core-env
+  namespace: wild-agentos
+data:
+  AGENT_OS_HTTP_PORT: "8080"
+  AGENT_OS_API_GRPC_ADDR: "0.0.0.0:50051"
+  RUST_LOG: "info"
+  # 网关端点(非密钥) — DeepSeek OpenAI 兼容
+  AGENT_OS_GATEWAY_BASE_URL: "https://api.deepseek.com"
+  AGENT_OS_GATEWAY_DEFAULT_MODEL: "deepseek-v4-flash"
+  # Embedding(OneAPI 兼容: 硅基流动)
+  AGENT_OS_EMBEDDING_ENABLED: "true"
+  AGENT_OS_EMBEDDING_PROVIDER: "oneapi"
+  AGENT_OS_EMBEDDING_ONEAPI_BASE_URL: "https://api.siliconflow.cn/v1"
+  AGENT_OS_EMBEDDING_ONEAPI_MODEL: "Qwen/Qwen3-Embedding-4B"
+---
+# 完整 config.yaml 以 ConfigMap 挂载到 /app/config.yaml
+# 生成: kubectl -n wild-agentos create configmap wild-agentos-core-config \
+#         --from-file=config.yaml=config.yaml --dry-run=client -o yaml | kubectl apply -f -
+# 此处留占位说明,实际由上面命令生成,避免在此重复维护 config.yaml。

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Questions & Discussions
+    url: https://github.com/skaiy/wild_agentos/discussions
+    about: Ask usage questions, share ideas, or discuss the roadmap here.
+  - name: 🔒 Report a Security Vulnerability
+    url: https://github.com/skaiy/wild_agentos/security/advisories/new
+    about: Please report security issues privately, never as a public issue.
+  - name: 📄 Commercial Licensing
+    url: https://github.com/skaiy/wild_agentos/blob/main/LICENSE-COMMERCIAL.md
+    about: For commercial use that cannot comply with the AGPLv3.

@@ -1,0 +1,79 @@
+syntax = "proto3";
+package seapp;
+option go_package = "github.com/agent-os/se-center/proto/seapp";
+
+service SeKernelService {
+    rpc ExecuteStage(ExecuteStageRequest) returns (ExecuteStageResponse);
+    rpc ValidateContract(ValidateContractRequest) returns (ValidateContractResponse);
+    rpc FlattenToFrontend(FlattenRequest) returns (FlattenResponse);
+    rpc SubmitHumanApproval(SubmitApprovalRequest) returns (SubmitApprovalResponse);
+    rpc ChatStream(ChatStreamRequest) returns (stream ChatStreamChunk);
+}
+
+message ExecuteStageRequest {
+    string stage_id = 1;
+    string stage_type = 2;
+    string prompt = 3;
+    string project_dir = 4;
+    string task_iri = 5;
+    string llm_api_key = 6;
+    string llm_base_url = 7;
+    string llm_model = 8;
+}
+
+message ExecuteStageResponse {
+    string status = 1;
+    string summary = 2;
+    bytes output_json = 3;
+    string output_iri = 4;
+    repeated string artifacts = 5;
+    repeated string errors = 6;
+}
+
+message ValidateContractRequest {
+    string output_iri = 1;
+    string schema_name = 2;
+    bytes output_json = 3;
+}
+
+message ValidateContractResponse {
+    bool valid = 1;
+    repeated string violations = 2;
+}
+
+message FlattenRequest {
+    string iri = 1;
+    string frame_type = 2;
+}
+
+message FlattenResponse {
+    string frontend_json = 1;
+}
+
+message SubmitApprovalRequest {
+    string request_id = 1;
+    string workflow_id = 2;
+    string stage_id = 3;
+    bool approved = 4;
+    string comments = 5;
+    string reviewer = 6;
+}
+
+message SubmitApprovalResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message ChatStreamRequest {
+    string prompt = 1;
+    string task_iri = 2;
+    string llm_api_key = 3;
+    string llm_base_url = 4;
+    string llm_model = 5;
+}
+
+message ChatStreamChunk {
+    string content = 1;
+    bool done = 2;
+    string status = 3;
+}

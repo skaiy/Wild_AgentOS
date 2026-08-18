@@ -1,0 +1,126 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::SystemTime;
+
+use serde_json::Value;
+
+use crate::templates::template_engine::TemplateEngine;
+use crate::utils::data_paths::{resolve_project_subpath, resolve_user_subpath};
+
+fn builtin_fallback(role: &str) -> &'static str {
+    match role {
+        "pa" => "You are the Planning Agent (PA). Analyze the task and create an execution plan. Output JSON-formatted results when done.",
+        "da" => "You are the Doing Agent (DA). Execute the task and create artifacts. Prioritize using web_search for current information. Output JSON-formatted results when done.",
+        "ca" => "You are the Checking Agent (CA). Verify whether execution results meet requirements. Output JSON-formatted results when done.",
+        "aa" => "You are the Acting Agent (AA). Make final decisions and summaries based on audit results. Output JSON-formatted results when done.",
+        _ => "",
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PromptConfig {
+    pub user_prefix: Option<String>,
+    pub role_overrides: HashMap<String, String>,
+    pub env_refs: Vec<String>,
+}
+
+pub struct PromptLoader {
+    config: PromptConfig,
+    engine: Arc<TemplateEngine>,
+    /// (content, mtime) cache, indexed by file path
+    file_cache: std::sync::Mutex<HashMap<PathBuf, (String, SystemTime)>>,
+}
+
+impl PromptLoader {
+    pub fn new(config: PromptConfig, engine: Arc<TemplateEngine>) -> Self {
+        Self {
+            config,
+            engine,
+            file_cache: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// File read cache with mtime check. Skips IO when file hasn't changed.
+    fn read_cached(&self, path: &PathBuf) -> Option<String> {
+        let metadata = std::fs::metadata(path).ok()?;
+        let modified = metadata.modified().ok()?;
+
+        if let Ok(cache) = self.file_cache.lock() {
+            if let Some((cached_content, cached_mtime)) = cache.get(path) {
+                if *cached_mtime == modified {
+                    return Some(cached_content.clone());
+                }
+            }
+        }
+
+        let content = std::fs::read_to_string(path).ok()?;
+        if let Ok(mut cache) = self.file_cache.lock() {
+            cache.insert(path.clone(), (content.clone(), modified));
+        }
+        Some(content)
+    }
+
+    pub fn load(&self, role: &str, template: &str, vars: &HashMap<String, Value>) -> String {
+        let fname = format!("{}/{}.md", role, template);
+
+        if let Some(path) = resolve_user_subpath(&format!("prompts/{fname}")) {
+            if let Some(content) = self.read_cached(&path) {
+                return self.post_process(role, &Self::render_string(&content, vars));
+            }
+        }
+
+        if let Some(proj_path) = resolve_project_subpath(&format!("prompts/{fname}")) {
+            if let Some(content) = self.read_cached(&proj_path) {
+                return self.post_process(role, &Self::render_string(&content, vars));
+            }
+        }
+
+        if let Ok(content) = self.engine.render_prompt(role, template, vars, false, None) {
+            return self.post_process(role, &content);
+        }
+
+        let fallback = builtin_fallback(role);
+        self.post_process(role, &Self::render_string(fallback, vars))
+    }
+
+    fn post_process(&self, role: &str, content: &str) -> String {
+        let mut result = content.to_string();
+
+        for ref_name in &self.config.env_refs {
+            if let Ok(val) = std::env::var(ref_name) {
+                result = result.replace(&format!("${{{}}}", ref_name), &val);
+            }
+        }
+
+        if let Some(ref prefix) = self.config.user_prefix {
+            result = format!("{}\n\n{}", prefix, result);
+        }
+
+        if let Some(ref override_content) = self.config.role_overrides.get(role) {
+            result = format!(
+                "{}\n\n---\n\n## User Additional Constraints\n{}",
+                result, override_content
+            );
+        }
+
+        result
+    }
+
+    pub fn render_string(template: &str, variables: &HashMap<String, Value>) -> String {
+        let mut result = template.to_string();
+        for (key, value) in variables {
+            let placeholder = format!("{{{}}}", key);
+            let replacement = match value {
+                Value::String(s) => s.clone(),
+                Value::Object(_) | Value::Array(_) => {
+                    serde_json::to_string_pretty(value).unwrap_or_default()
+                }
+                Value::Null => String::new(),
+                _ => value.to_string(),
+            };
+            result = result.replace(&placeholder, &replacement);
+        }
+        result
+    }
+}

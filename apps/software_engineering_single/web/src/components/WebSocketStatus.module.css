@@ -1,0 +1,20 @@
+.container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.connected {
+  color: #52c41a;
+  font-size: 14px;
+}
+
+.disconnected {
+  color: #ff4d4f;
+  font-size: 14px;
+}
+
+.text {
+  font-size: 12px;
+  color: #666;
+}

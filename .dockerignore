@@ -1,0 +1,6 @@
+# 避免把多 GB 的 target/ 与运行时数据上传进 buildx 构建上下文
+target/
+.git/
+data/
+logs/
+*.log

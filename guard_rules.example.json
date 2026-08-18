@@ -1,0 +1,152 @@
+{
+  "categories": {
+    "FileRead": {
+      "pre_injections": [
+        {
+          "enforcement": "Must",
+          "instruction": "读取文件时必须获取完整内容，不得截断或跳行。读取后检查顶部的 use / import / mod 声明，发现引用的关联文件需在同一轮或下一轮读取。",
+          "tool_names": []
+        },
+        {
+          "enforcement": "Should",
+          "instruction": "优先读取不超过 5000 行的文件。超大文件请先 grep 搜索定位目标后再读取。",
+          "tool_names": []
+        }
+      ],
+      "validations": [
+        {
+          "validator": "file_length_check",
+          "params": { "min_ratio": 0.95 },
+          "fix_instruction": "文件读取不完整。请使用单个 read 请求读取全部内容而非分片。",
+          "max_retries": 2
+        }
+      ]
+    },
+    "FileWrite": {
+      "pre_injections": [
+        {
+          "enforcement": "Must",
+          "instruction": "写入前必须确认目标目录存在（如不存在需先创建）。写入后建议立即 file_read 验证内容正确。",
+          "tool_names": []
+        }
+      ],
+      "validations": []
+    },
+    "Search": {
+      "pre_injections": [
+        {
+          "enforcement": "Must",
+          "instruction": "搜索需获取所有匹配结果。检查返回的 num_matches / num_files 是否与实际结果一致。结果过多时应使用更精确的关键词。",
+          "tool_names": []
+        }
+      ],
+      "validations": [
+        {
+          "validator": "search_count_check",
+          "params": {},
+          "fix_instruction": "搜索返回不完整。请增大 head_limit 或使用更精确的关键词。",
+          "max_retries": 1
+        }
+      ]
+    },
+    "CodeExecution": {
+      "pre_injections": [
+        {
+          "enforcement": "Must",
+          "instruction": "命令执行后必须检查 exit_code。若 exit_code ≠ 0，必须分析 stderr 完整内容，不得以非零退出码的输出作为有效结果。",
+          "tool_names": ["bash", "powershell"]
+        },
+        {
+          "enforcement": "Should",
+          "instruction": "安装依赖或修改系统配置的命令，请先确认目标环境（OS / 包管理器），避免运行错误的命令。",
+          "tool_names": ["bash"]
+        }
+      ],
+      "validations": [
+        {
+          "validator": "exit_code_check",
+          "params": {},
+          "fix_instruction": "命令退出码非零。请分析 stderr 错误信息，修复问题后重试。",
+          "max_retries": 2
+        }
+      ]
+    },
+    "KnowledgeGraph": {
+      "pre_injections": [
+        {
+          "enforcement": "Should",
+          "instruction": "SPARQL 查询结果为空时，请尝试移除 FILTER 条件或使用更宽松的匹配模式。",
+          "tool_names": ["knowledge_query"]
+        },
+        {
+          "enforcement": "Should",
+          "instruction": "知识图谱邻居遍历时 depth 参数建议至少为 2，以获得有意义的上下文。",
+          "tool_names": ["knowledge_neighbors"]
+        }
+      ],
+      "validations": [
+        {
+          "validator": "knowledge_empty_check",
+          "params": {},
+          "fix_instruction": "查询结果为空。请尝试移除 FILTER 或使用更宽松的匹配。",
+          "max_retries": 1
+        },
+        {
+          "validator": "knowledge_depth_check",
+          "params": {},
+          "fix_instruction": "遍历深度不足。请设置 depth 至少为 2。",
+          "max_retries": 1
+        }
+      ]
+    },
+    "KnowledgeExtract": {
+      "pre_injections": [
+        {
+          "enforcement": "Must",
+          "instruction": "抽取结果必须包含 entities 和 relations 数组。所有实体需有唯一 id。文本过长（超 4000 字符）需分段抽取后合并去重。",
+          "tool_names": []
+        }
+      ],
+      "validations": [
+        {
+          "validator": "extract_empty_check",
+          "params": {},
+          "fix_instruction": "未抽取到任何实体。请确认文本包含可抽取的结构化信息后重试。",
+          "max_retries": 1
+        }
+      ]
+    },
+    "HttpRequest": {
+      "pre_injections": [
+        {
+          "enforcement": "Must",
+          "instruction": "检查 HTTP 状态码。status_code ≥ 400 时必须分析错误原因并报告，不得忽略。",
+          "tool_names": ["web_fetch", "http_request"]
+        },
+        {
+          "enforcement": "Info",
+          "instruction": "网络请求可能耗时较长。请设置合理的 timeout。",
+          "tool_names": []
+        }
+      ],
+      "validations": [
+        {
+          "validator": "http_status_check",
+          "params": {},
+          "fix_instruction": "HTTP 请求返回错误状态码。请检查 URL 是否正确或是否需要认证信息。",
+          "max_retries": 1
+        }
+      ]
+    },
+    "Meta": {
+      "pre_injections": [
+        {
+          "enforcement": "Must",
+          "instruction": "创建技能时必须确保名称唯一且符合命名规范（小写字母、数字、下划线）。",
+          "tool_names": ["create_skill", "convert_skill"]
+        }
+      ],
+      "validations": []
+    }
+  }
+}

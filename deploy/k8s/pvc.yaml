@@ -1,0 +1,18 @@
+# 数据持久卷 — 嵌入式存储(redb/oxigraph/向量库)落此
+# 前提: 集群已配置默认 StorageClass;否则请显式指定 storageClassName
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wild-agentos
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wild-agentos-core-data
+  namespace: wild-agentos
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+  # storageClassName: local-path   # 视集群实际 StorageClass 取消注释
