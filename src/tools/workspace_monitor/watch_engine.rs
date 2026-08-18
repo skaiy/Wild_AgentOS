@@ -5,10 +5,13 @@ use std::time::Duration;
 use notify::RecursiveMode;
 use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer};
 use parking_lot::RwLock;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use crate::core::event_bus::EventBus;
 use crate::tools::workspace_monitor::inventory::FileInventory;
+
+/// Minimum time between events for the same path before the watcher re-emits it.
+const MIN_EVENT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
 
 /// Configuration for the WatchEngine.
 #[derive(Debug, Clone)]
@@ -193,25 +196,91 @@ impl WatchEngine {
         inventory: Option<Arc<RwLock<FileInventory>>>,
     ) -> Result<Debouncer<notify::RecommendedWatcher>, String> {
         let debounce = Duration::from_millis(config.debounce_ms);
-        let eb = event_bus.clone();
         let root_owned = root.to_string();
         let exclude = config.exclude_patterns.clone();
+        let rt_handle = tokio::runtime::Handle::try_current().ok();
+
+        // Per-path cooldown prevents feedback loops: when the app's own output
+        // (e.g. a mirrored log file) lives inside the watched workspace, every
+        // emitted event produces new log lines that re-trigger the watcher.
+        let last_emit =
+            std::sync::Mutex::new(std::collections::HashMap::<String, std::time::Instant>::new());
 
         let mut debouncer = new_debouncer(debounce, move |result: DebounceEventResult| {
+            let now = std::time::Instant::now();
+            let approved: Vec<notify_debouncer_mini::DebouncedEvent> = match &result {
+                Ok(events) => {
+                    let mut last = last_emit.lock().unwrap();
+                    let mut out = Vec::new();
+                    for event in events {
+                        let Some(path) = event.path.to_str() else {
+                            continue;
+                        };
+                        if Self::is_path_excluded(path, &exclude) {
+                            debug!(path = %path, "WatchEngine: excluded event");
+                            continue;
+                        }
+                        if Self::within_cooldown(&mut last, path, now) {
+                            continue;
+                        }
+                        last.insert(path.to_string(), now);
+                        out.push(event.clone());
+                    }
+                    out
+                }
+                Err(_) => Vec::new(),
+            };
+
             // update inventory directly from the watcher thread (no tokio::spawn needed)
             if let Some(ref inv) = inventory {
-                if let Ok(events) = &result {
-                    for event in events {
-                        if let Some(path) = event.path.to_str() {
-                            if !Self::is_path_excluded(path, &exclude) {
-                                inv.read().mark_stale(path);
-                            }
-                        }
+                for event in &approved {
+                    if let Some(path) = event.path.to_str() {
+                        inv.read().mark_stale(path);
                     }
                 }
             }
-            if let Err(e) = Self::handle_debounced_events(result, &eb, &exclude) {
-                error!(error = %e, "WatchEngine: event handler error");
+
+            for event in &approved {
+                let (event_type_str, path_opt) = Self::map_event(event);
+                let Some(path) = path_opt else { continue };
+                let payload = serde_json::json!({
+                    "path": path,
+                    "kind": event_type_str,
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                })
+                .to_string();
+                match &rt_handle {
+                    Some(handle) => {
+                        let eb = event_bus.clone();
+                        let event_type_owned = event_type_str.clone();
+                        handle.spawn(async move {
+                            let _ = eb
+                                .emit(
+                                    "iri://workspace",
+                                    &event_type_owned,
+                                    "iri://workspace_monitor",
+                                    &payload,
+                                )
+                                .await;
+                        });
+                        debug!(
+                            event_type = %event_type_str,
+                            path = %path,
+                            "WatchEngine: event dispatched"
+                        );
+                    }
+                    None => {
+                        debug!(
+                            event_type = %event_type_str,
+                            path = %path,
+                            "WatchEngine: no runtime handle, event dropped"
+                        );
+                    }
+                }
+            }
+
+            if let Err(e) = result {
+                warn!(error = %e, "WatchEngine: debouncer error");
             }
         })
         .map_err(|e| format!("Failed to create debouncer: {}", e))?;
@@ -244,48 +313,15 @@ impl WatchEngine {
         false
     }
 
-    fn handle_debounced_events(
-        result: DebounceEventResult,
-        event_bus: &EventBus,
-        exclude_patterns: &[String],
-    ) -> Result<(), String> {
-        match result {
-            Ok(events) => {
-                for event in events {
-                    let path_str = match event.path.to_str() {
-                        Some(p) => p.to_string(),
-                        None => continue,
-                    };
-                    if Self::is_path_excluded(&path_str, exclude_patterns) {
-                        debug!(path = %path_str, "WatchEngine: excluded event");
-                        continue;
-                    }
-                    let (event_type_str, path_str) = Self::map_event(&event);
-                    if let Some(path) = path_str {
-                        let payload = serde_json::json!({
-                            "path": path,
-                            "kind": event_type_str,
-                            "timestamp": chrono::Utc::now().to_rfc3339(),
-                        });
-                        std::mem::drop(event_bus.emit(
-                            "iri://workspace",
-                            &event_type_str,
-                            "iri://workspace_monitor",
-                            &payload.to_string(),
-                        ));
-                        debug!(
-                            event_type = %event_type_str,
-                            path = %path,
-                            "WatchEngine: event emitted"
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "WatchEngine: debouncer error");
-            }
+    fn within_cooldown(
+        last_emit: &mut std::collections::HashMap<String, std::time::Instant>,
+        path: &str,
+        now: std::time::Instant,
+    ) -> bool {
+        match last_emit.get(path) {
+            Some(prev) => now.duration_since(*prev) < MIN_EVENT_INTERVAL,
+            None => false,
         }
-        Ok(())
     }
 
     fn map_event(event: &notify_debouncer_mini::DebouncedEvent) -> (String, Option<String>) {
@@ -314,6 +350,8 @@ impl WatchEngine {
         let handle = tokio::spawn(async move {
             let mut last_mtimes: std::collections::HashMap<String, i64> =
                 std::collections::HashMap::new();
+            let mut last_emit: std::collections::HashMap<String, std::time::Instant> =
+                std::collections::HashMap::new();
             let mut interval_timer = tokio::time::interval(interval);
             interval_timer.tick().await;
 
@@ -321,6 +359,7 @@ impl WatchEngine {
                 interval_timer.tick().await;
 
                 let mut changed = Vec::new();
+                let now = std::time::Instant::now();
                 for entry in walkdir::WalkDir::new(&root)
                     .into_iter()
                     .filter_map(|e| e.ok())
@@ -338,7 +377,11 @@ impl WatchEngine {
                                 let mtime = duration.as_millis() as i64;
                                 let prev = last_mtimes.get(&path).copied().unwrap_or(0);
                                 if mtime > prev {
+                                    if WatchEngine::within_cooldown(&mut last_emit, &path, now) {
+                                        continue;
+                                    }
                                     last_mtimes.insert(path.clone(), mtime);
+                                    last_emit.insert(path.clone(), now);
                                     changed.push(path);
                                 }
                             }
@@ -352,12 +395,14 @@ impl WatchEngine {
                         "kind": "WORKSPACE_FILE_MODIFIED",
                         "timestamp": chrono::Utc::now().to_rfc3339(),
                     });
-                    std::mem::drop(event_bus.emit(
-                        "iri://workspace",
-                        "WORKSPACE_FILE_MODIFIED",
-                        "iri://workspace_monitor",
-                        &payload.to_string(),
-                    ));
+                    let _ = event_bus
+                        .emit(
+                            "iri://workspace",
+                            "WORKSPACE_FILE_MODIFIED",
+                            "iri://workspace_monitor",
+                            &payload.to_string(),
+                        )
+                        .await;
                 }
             }
         });
@@ -472,5 +517,32 @@ mod tests {
         let mut config = WatchConfig::default();
         config.load_gitignore(dir.path()); // should not panic
         assert!(config.exclude_patterns.is_empty());
+    }
+
+    #[test]
+    fn test_within_cooldown_suppresses_rapid_repeats() {
+        let mut last_emit = std::collections::HashMap::new();
+        let t0 = std::time::Instant::now();
+        let path = "/tmp/ws/log.txt".to_string();
+
+        assert!(!WatchEngine::within_cooldown(&mut last_emit, &path, t0));
+        last_emit.insert(path.clone(), t0);
+        assert!(WatchEngine::within_cooldown(&mut last_emit, &path, t0));
+
+        let later = t0 + std::time::Duration::from_millis(2000);
+        assert!(!WatchEngine::within_cooldown(&mut last_emit, &path, later));
+    }
+
+    #[test]
+    fn test_within_cooldown_is_per_path() {
+        let mut last_emit = std::collections::HashMap::new();
+        let t0 = std::time::Instant::now();
+        last_emit.insert("/tmp/ws/a.txt".to_string(), t0);
+
+        assert!(!WatchEngine::within_cooldown(
+            &mut last_emit,
+            "/tmp/ws/b.txt",
+            t0
+        ));
     }
 }

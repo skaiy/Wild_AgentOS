@@ -23,7 +23,7 @@ use unicode_width::UnicodeWidthStr;
 use wild_agent_os_core::core::agent_runner::TaskResult;
 use wild_agent_os_core::core::event_bus::EventBus;
 use wild_agent_os_core::core::execution_event::{ExecutionEvent, ExecutionEventKind};
-use wild_agent_os_core::gateway::unified_gateway::ChatMessage;
+use wild_agent_os_core::gateway::unified_gateway::{ChatContent, ChatMessage};
 
 use crate::config::CliConfig;
 use crate::log_buffer::LogBuffer;
@@ -760,13 +760,14 @@ impl App {
                             "assistant" => MessageRole::Assistant,
                             _ => continue,
                         };
+                        let content = msg.content.as_text();
                         app.messages.push(Message {
                             role,
-                            content: msg.content.clone(),
+                            mermaid_blocks: extract_mermaid_blocks(&content),
+                            content,
                             full_raw: msg.reasoning_content.clone(),
                             can_expand: msg.reasoning_content.is_some(),
                             timestamp: timestamp(),
-                            mermaid_blocks: extract_mermaid_blocks(&msg.content),
                         });
                     }
                 }
@@ -1371,7 +1372,7 @@ impl App {
                 // "system" entry that BizAgent's resume code skips (skip(1)).
                 let mut conversation: Vec<ChatMessage> = vec![ChatMessage {
                     role: "system".to_string(),
-                    content: String::new(),
+                    content: ChatContent::text(String::new()),
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,
@@ -1385,7 +1386,7 @@ impl App {
                 // Current turn: user input → assistant response
                 conversation.push(ChatMessage {
                     role: "user".to_string(),
-                    content: self.last_user_input.clone(),
+                    content: ChatContent::text(self.last_user_input.clone()),
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,
@@ -1393,7 +1394,7 @@ impl App {
                 });
                 conversation.push(ChatMessage {
                     role: "assistant".to_string(),
-                    content: output_text.to_string(),
+                    content: ChatContent::text(output_text),
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,

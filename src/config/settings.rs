@@ -196,6 +196,10 @@ pub struct GatewaySettings {
     pub max_retries: u32,
     #[serde(default = "default_retry_base_ms")]
     pub retry_base_ms: u64,
+    /// Route deepseek-v4-flash requests through the Responses API (`/v1/responses`)
+    /// instead of chat completions. Other models keep using chat completions.
+    #[serde(default)]
+    pub use_responses_api: bool,
     pub model_mapping: std::collections::HashMap<String, String>,
 }
 
@@ -1110,6 +1114,7 @@ impl Default for Settings {
                 timeout_seconds: 60,
                 max_retries: 3,
                 retry_base_ms: 500,
+                use_responses_api: false,
                 model_mapping: std::collections::HashMap::from([
                     ("planning".to_string(), "deepseek-v4-pro".to_string()),
                     ("execution".to_string(), "deepseek-v4-pro".to_string()),
@@ -1417,6 +1422,44 @@ mod tests {
         let settings: GatewaySettings = cfg.try_deserialize().unwrap();
         // retry_base_ms omitted -> serde default 500
         assert_eq!(settings.retry_base_ms, 500);
+    }
+
+    #[test]
+    fn test_gateway_settings_use_responses_api() {
+        let yaml = r#"
+            base_url: "https://api.deepseek.com"
+            api_key: "sk-test"
+            default_model: "deepseek-v4-flash"
+            timeout_seconds: 300
+            max_retries: 3
+            use_responses_api: true
+            model_mapping: {}
+        "#;
+        let cfg = Config::builder()
+            .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+            .build()
+            .unwrap();
+        let settings: GatewaySettings = cfg.try_deserialize().unwrap();
+        assert!(settings.use_responses_api);
+    }
+
+    #[test]
+    fn test_gateway_settings_use_responses_api_defaults_off() {
+        let yaml = r#"
+            base_url: "https://api.deepseek.com"
+            api_key: "sk-test"
+            default_model: "deepseek-v4-flash"
+            timeout_seconds: 300
+            max_retries: 3
+            model_mapping: {}
+        "#;
+        let cfg = Config::builder()
+            .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+            .build()
+            .unwrap();
+        let settings: GatewaySettings = cfg.try_deserialize().unwrap();
+        // 未配置时默认走 chat completions,保持向后兼容
+        assert!(!settings.use_responses_api);
     }
 
     #[test]

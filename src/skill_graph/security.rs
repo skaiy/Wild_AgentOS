@@ -282,6 +282,18 @@ impl SecurityEngine {
         }
     }
 
+    /// Construct an engine with an explicit, immutable-at-startup allowlist of
+    /// trusted built-in capabilities. User-defined skills are never included
+    /// implicitly.
+    pub fn with_whitelisted_skills(
+        graph_store: Arc<SkillGraphStore>,
+        whitelisted_skills: HashSet<String>,
+    ) -> Self {
+        let mut engine = Self::new(graph_store);
+        engine.whitelisted_skills = RwLock::new(whitelisted_skills);
+        engine
+    }
+
     fn init_default_policies(policies: &mut HashMap<String, SecurityPolicy>) {
         policies.insert(
             "default".to_string(),

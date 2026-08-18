@@ -147,6 +147,31 @@ impl ToolResultCompressor {
     }
 }
 
+/// Approximate token count of a single text. Raw `len()/4` counts UTF-8
+/// bytes, undervaluing CJK characters (3 bytes each) at 0.75 tokens/char;
+/// real tokenizers cost them ~1 token/char. CJK chars get 1 token, all
+/// other bytes stay at the 4-bytes-per-token heuristic.
+fn estimate_text_tokens(text: &str) -> usize {
+    let mut cjk_chars = 0usize;
+    let mut other_bytes = 0usize;
+    for ch in text.chars() {
+        if is_cjk_char(ch) {
+            cjk_chars += 1;
+        } else {
+            other_bytes += ch.len_utf8();
+        }
+    }
+    cjk_chars + other_bytes / 4
+}
+
+fn is_cjk_char(c: char) -> bool {
+    matches!(c as u32,
+        0x2E80..=0x9FFF   // CJK radicals, punctuation, kana, bopomofo, unified ideographs
+        | 0xAC00..=0xD7AF // Hangul syllables
+        | 0xF900..=0xFAFF // CJK compatibility ideographs
+    )
+}
+
 pub struct ContextWindowManager {
     max_messages: usize,
     max_tokens: usize,
@@ -169,17 +194,18 @@ impl ContextWindowManager {
         messages
             .iter()
             .map(|m| {
-                let mut total = m.content.as_text().len() / 4 + m.role.len() / 4;
+                let mut total =
+                    estimate_text_tokens(&m.content.as_text()) + estimate_text_tokens(&m.role);
                 if let Some(ref calls) = m.tool_calls {
                     for call in calls {
-                        total += call.function.name.len() / 4;
-                        total += call.function.arguments.len() / 4;
+                        total += estimate_text_tokens(&call.function.name);
+                        total += estimate_text_tokens(&call.function.arguments);
                         // Include tool_call_id (~36 chars per UUID)
-                        total += call.id.len() / 4;
+                        total += estimate_text_tokens(&call.id);
                     }
                 }
                 if let Some(ref id) = m.tool_call_id {
-                    total += id.len() / 4;
+                    total += estimate_text_tokens(id);
                 }
                 total
             })
@@ -488,5 +514,16 @@ mod tests {
 
         assert!(!manager.should_compress(10, &empty));
         assert!(manager.should_compress(20, &empty));
+    }
+
+    #[test]
+    fn test_estimate_text_tokens_cjk_weighting() {
+        // UTF-8 Chinese is 3 bytes/char; naive len()/4 undervalued it at
+        // 0.75 tokens/char. A 4-char phrase must cost ~4 tokens, one per char.
+        assert_eq!(estimate_text_tokens("你好世界"), 4);
+        // Plain ASCII still ~4 bytes per token.
+        assert_eq!(estimate_text_tokens("Hello, world!"), 3);
+        // Mixed content weights each part correctly.
+        assert_eq!(estimate_text_tokens("你好 world"), 3);
     }
 }

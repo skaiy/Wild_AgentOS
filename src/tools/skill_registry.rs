@@ -825,6 +825,19 @@ impl SkillRegistry {
         })
     }
 
+    /// Resolve a runtime tool name to the canonical skill IRI.
+    ///
+    /// Tool names belong to the execution protocol while IRIs belong to the
+    /// graph/evolution protocol. Keeping this lookup in the registry prevents
+    /// callers from manufacturing a second IRI namespace.
+    pub fn skill_iri_for_tool_name(&self, tool_name: &str) -> Option<String> {
+        self.skills
+            .read()
+            .values()
+            .find(|cached| cached.basic.name == tool_name)
+            .map(|cached| cached.basic.skill_iri.clone())
+    }
+
     pub fn get_skill_basic(&self, skill_iri: &str) -> Option<SkillBasic> {
         let skills = self.skills.read();
         skills.get(skill_iri).map(|c| c.basic.clone())

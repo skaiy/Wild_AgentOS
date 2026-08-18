@@ -27,6 +27,7 @@ use wild_agent_os_core::memory::memory_manager::MemoryManager;
 use wild_agent_os_core::skill_graph::discovery::SkillDiscoveryEngine;
 use wild_agent_os_core::skill_graph::graph_algorithms::SkillGraphAlgorithms;
 use wild_agent_os_core::skill_graph::graph_store::SkillGraphStore;
+use wild_agent_os_core::skill_graph::security::SecurityEngine;
 use wild_agent_os_core::snapshots::timeline::TimelineStore;
 use wild_agent_os_core::templates::template_engine::TemplateEngine;
 use wild_agent_os_core::tools::mcp_client::McpClient;
@@ -282,6 +283,41 @@ impl CodeCliEngine {
         if let Some(ref wm) = workspace_monitor {
             let mut executor = runner.tool_executor.write();
             executor.set_workspace_monitor(wm.clone());
+        }
+
+        // 用 SkillRegistry 的内建技能引导 SkillGraphStore，使安全门能解析工具对应的
+        // skill IRI；否则每次调用都会因“无可执行技能”而 fail-closed。
+        for meta in skills.list_all_skills() {
+            if skill_graph.get_skill(&meta.skill_iri).is_some() {
+                continue;
+            }
+            if let Err(e) = skill_graph.register_skill(
+                wild_agent_os_core::skill_graph::types::SkillGraphNode::from_skill_meta(&meta),
+            ) {
+                tracing::warn!("Failed to register bootstrap skill {}: {}", meta.name, e);
+            }
+        }
+
+        // 注入 SkillGraph 安全门：白名单只含已审阅的 SystemBuiltin 技能，
+        // 用户自定义技能一律走默认策略判定。
+        {
+            let executor = runner.tool_executor.write();
+            executor.set_shared_skill_registry(skills.clone());
+            let trusted_builtins = skill_graph
+                .list_all_skills()
+                .into_iter()
+                .filter(|skill| {
+                    skill.security_info.as_ref().is_some_and(|info| {
+                        info.source
+                            == wild_agent_os_core::skill_graph::types::SkillSource::SystemBuiltin
+                    })
+                })
+                .map(|skill| skill.skill_iri)
+                .collect();
+            executor.set_security_engine(Arc::new(SecurityEngine::with_whitelisted_skills(
+                skill_graph.clone(),
+                trusted_builtins,
+            )));
         }
 
         // 完成 AgentRunner 初始化接线：perception_store → WorkspaceMonitor

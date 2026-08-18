@@ -149,4 +149,134 @@ mod tests {
         assert!(!ToolExecutor::is_pa_readonly_tool("file_write"));
         assert!(!ToolExecutor::is_pa_readonly_tool("file_edit"));
     }
+
+    fn security_context() -> SecurityContext {
+        SecurityContext::new("agent:test", "DA").with_task("iri://tasks/security-test")
+    }
+
+    #[test]
+    fn tools_allowed_rejects_unlisted_tool() {
+        rt().block_on(async {
+            let executor = ToolExecutor::new();
+            let result = executor
+                .execute_with_security_context(
+                    "bash",
+                    json!({"command": "ls"}),
+                    security_context(),
+                    Some(&["file_read".to_string()]),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result["error"], "Tool not allowed: bash");
+        });
+    }
+
+    #[test]
+    fn security_context_denies_high_risk_registered_tool_and_audits_it() {
+        rt().block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let target = dir.path().join("must-not-write");
+            let executor = ToolExecutor::new();
+            let registry = Arc::new(SkillRegistry::new());
+            let graph = Arc::new(crate::skill_graph::graph_store::SkillGraphStore::new());
+            let meta = registry.get_skill("iri://skills/file_write").unwrap();
+            graph
+                .register_skill(crate::skill_graph::types::SkillGraphNode::from_skill_meta(
+                    &meta,
+                ))
+                .unwrap();
+            let security = Arc::new(SecurityEngine::new(graph.clone()));
+            executor.set_shared_skill_registry(registry);
+            executor.set_security_engine(security.clone());
+
+            let result = executor
+                .execute_with_security_context(
+                    "file_write",
+                    json!({"path": target, "content": "blocked"}),
+                    security_context(),
+                    None,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result["error"], "Security denied");
+            assert!(!target.exists());
+            let audit = security
+                .get_audit_log(Some("iri://skills/file_write"), Some("agent:test"), 10)
+                .await;
+            assert_eq!(audit.len(), 1);
+        });
+    }
+
+    #[test]
+    fn security_gate_allows_whitelisted_builtin_readers() {
+        rt().block_on(async {
+            let executor = ToolExecutor::new();
+            let registry = Arc::new(SkillRegistry::new());
+            let graph = Arc::new(crate::skill_graph::graph_store::SkillGraphStore::new());
+            let meta = registry.get_skill("iri://skills/file_read").unwrap();
+            graph
+                .register_skill(crate::skill_graph::types::SkillGraphNode::from_skill_meta(
+                    &meta,
+                ))
+                .unwrap();
+            let whitelist = HashSet::from(["iri://skills/file_read".to_string()]);
+            let security = Arc::new(SecurityEngine::with_whitelisted_skills(
+                graph.clone(),
+                whitelist,
+            ));
+            executor.set_shared_skill_registry(registry);
+            executor.set_security_engine(security.clone());
+
+            // Read-only inspection tools must never be rejected as unregistered,
+            // otherwise verify-first CA/AA cannot inspect the workspace.
+            for tool in ["file_list", "workspace_status", "rag_search", "kg_search"] {
+                let outcome = executor
+                    .execute_with_security_context(
+                        tool,
+                        json!({"path": "."}),
+                        security_context(),
+                        None,
+                    )
+                    .await;
+                let err = match outcome {
+                    Ok(result) => result
+                        .get("error")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    Err(e) => e,
+                };
+                assert!(
+                    !err.contains("no registered executable skill")
+                        && !err.contains("Security denied"),
+                    "tool {} was denied by gate: {}",
+                    tool,
+                    err
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn security_gate_fails_closed_for_unknown_tool() {
+        rt().block_on(async {
+            let executor = ToolExecutor::new();
+            let graph = Arc::new(crate::skill_graph::graph_store::SkillGraphStore::new());
+            executor.set_security_engine(Arc::new(SecurityEngine::new(graph)));
+
+            let result = executor
+                .execute_with_security_context(
+                    "unregistered_tool",
+                    json!({}),
+                    security_context(),
+                    None,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                result["error"],
+                "Security denied: tool has no registered executable skill"
+            );
+        });
+    }
 }

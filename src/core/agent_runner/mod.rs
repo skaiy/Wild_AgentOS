@@ -99,6 +99,8 @@ pub struct TaskContext {
     /// Summary of workspace file inventory (set by CodeCliEngine before passing to SA).
     /// Used by SA to decide verification-first routing when workspace has existing files.
     pub workspace_file_summary: Option<String>,
+    /// Per-step tool allowlist from the plan. None = no step-level restriction.
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 impl TaskContext {
@@ -126,7 +128,15 @@ impl TaskContext {
             tenant_id: None,
             cycle_id: String::new(),
             workspace_file_summary: None,
+            allowed_tools: None,
         }
+    }
+
+    /// Restrict this step to the planned tool set. An empty list means the
+    /// plan expressed no restriction, so the allowlist stays disabled.
+    pub fn with_allowed_tools(mut self, tools: Vec<String>) -> Self {
+        self.allowed_tools = if tools.is_empty() { None } else { Some(tools) };
+        self
     }
 
     /// 设置用户态会话隔离身份（多租户血缘），透传至 L1Session。
@@ -233,6 +243,7 @@ impl Default for TaskContext {
             tenant_id: None,
             cycle_id: String::new(),
             workspace_file_summary: None,
+            allowed_tools: None,
         }
     }
 }
@@ -353,6 +364,8 @@ impl AgentRunner {
             tool_executor: {
                 let mut exe = ToolExecutor::new();
                 exe.set_projection_engine(projection.clone());
+                // Without this the policy stays None and every tool runs ungated.
+                exe.set_default_permission_policy();
                 Arc::new(parking_lot::RwLock::new(exe))
             },
             agent_settings,

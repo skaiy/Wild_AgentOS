@@ -107,6 +107,11 @@ impl SkillSecurityInfo {
         self
     }
 
+    pub fn with_risk_score(mut self, score: f32) -> Self {
+        self.risk_score = score;
+        self
+    }
+
     pub fn with_signature(mut self, signature: &str, algorithm: &str) -> Self {
         self.signature = Some(signature.to_string());
         self.signature_algorithm = Some(algorithm.to_string());
@@ -480,6 +485,50 @@ impl SkillGraphNode {
             security_info: None,
             mcp_server_id: None,
             storage_tier: StorageTier::default(),
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
+        }
+    }
+
+    /// Build a graph node from a registry skill so the security gate can
+    /// resolve built-in tools against the same policy as graph-native skills.
+    pub fn from_skill_meta(meta: &crate::tools::skill_registry::SkillMeta) -> Self {
+        let mut tags: Vec<String> = meta.skill_types.clone();
+        if !tags.contains(&meta.category) {
+            tags.push(meta.category.clone());
+        }
+
+        let operation_risk = match meta.security_level.as_str() {
+            "critical" => 0.9,
+            "high" => 0.7,
+            "normal" => 0.3,
+            "low" => 0.1,
+            _ => 0.5,
+        };
+        let security = SkillSecurityInfo::new(SkillSource::SystemBuiltin)
+            .with_trust_level(TrustLevel::System)
+            .with_risk_score(operation_risk);
+
+        let w2h = Skill5W2H::new(&meta.name, &meta.description).with_agent_role("DA");
+
+        let now = Utc::now();
+        Self {
+            skill_iri: meta.skill_iri.clone(),
+            name: meta.name.clone(),
+            description: meta.description.clone(),
+            version: meta.version.clone(),
+            node_type: SkillNodeType::Atomic,
+            maturity: "stable".to_string(),
+            tags,
+            w2h,
+            links: Vec::new(),
+            graph_meta: SkillGraphMeta::new(),
+            content: None,
+            attached_to: None,
+            security_info: Some(security),
+            mcp_server_id: None,
+            storage_tier: StorageTier::L0Permanent,
             created_at: now,
             updated_at: now,
             last_used_at: None,

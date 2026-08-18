@@ -8,12 +8,14 @@ use serde_json::{json, Value};
 use tracing::debug;
 
 use crate::knowledge_graph::store::KnowledgeGraphStore;
+use crate::skill_graph::security::{SecurityContext, SecurityDecision, SecurityEngine};
 use crate::tools::builtin::hooks::HookRunner;
 use crate::tools::builtin::knowledge;
 #[cfg(feature = "ontology")]
 use crate::tools::builtin::ontology_tools;
 use crate::tools::builtin::permissions::{PermissionMode, PermissionOutcome, PermissionPolicy};
 use crate::tools::builtin::rag;
+use crate::tools::skill_registry::SkillRegistry;
 use crate::tools::tool_groups::ToolGroupManager;
 use crate::tools::workspace_monitor::{FileState, WorkspaceMonitor};
 
@@ -108,6 +110,10 @@ pub struct ToolExecutor {
     workspace_monitor: Arc<parking_lot::RwLock<Option<Arc<WorkspaceMonitor>>>>,
     /// 向量知识库（HyperspaceStore）：注入后 `kb_vector_search` 工具可做语义召回；None 时该工具返回空。
     vector_store: Arc<parking_lot::RwLock<Option<Arc<crate::memory::HyperspaceStore>>>>,
+    /// 注入后 `execute_with_security_context` 会对每次调用做 SkillGraph 安全判定；None 时该层跳过。
+    security_engine: Arc<parking_lot::RwLock<Option<Arc<SecurityEngine>>>>,
+    /// 运行期技能注册表：把工具名解析为规范 skill IRI，供安全门查询图上策略。
+    shared_skill_registry: Arc<parking_lot::RwLock<Option<Arc<SkillRegistry>>>>,
 }
 
 // Max micro-tool descriptions cap — removes oldest entries when exceeded.
@@ -119,6 +125,56 @@ const MICRO_TOOL_PREFIXES: &[&str] = &[
     "get_entity_details",
     "expand_relation",
 ];
+
+/// Built-ins that are executor capabilities rather than independently
+/// registered skills inherit a reviewed least-privilege SkillGraph policy.
+/// Keep this table explicit: an unknown tool must still fail closed.
+fn builtin_security_skill_iri(name: &str) -> Option<&'static str> {
+    match name {
+        "tool_search"
+        | "glob_search"
+        | "grep_search"
+        | "file_read"
+        | "file_list"
+        | "workspace_status"
+        | "rag_search"
+        | "kg_search"
+        | "kb_vector_search"
+        | "knowledge_list"
+        | "knowledge_search"
+        | "knowledge_extract_code"
+        | "knowledge_query"
+        | "knowledge_neighbors"
+        | "read_agent_output"
+        | "read_full_result"
+        | "get_entity_details"
+        | "expand_relation"
+        | "ontology_lint_turtle"
+        | "ontology_diff_turtle"
+        | "ontology_validate_turtle"
+        | "ontology_validate_shacl"
+        | "ontology_reason" => Some("iri://skills/file_read"),
+        "bash"
+        | "powershell"
+        | "file_write"
+        | "file_edit"
+        | "rag_index"
+        | "rag_chunk"
+        | "knowledge_extract"
+        | "knowledge_update"
+        | "knowledge_delete"
+        | "knowledge_bridge"
+        | "knowledge_import_file"
+        | "knowledge_import_directory"
+        | "knowledge_import_json"
+        | "ontology_register" => Some("iri://skills/file_write"),
+        "web_search" | "web_fetch" | "http_request" | "knowledge_import_url" => {
+            Some("iri://skills/http_request")
+        }
+        "llm_chat" => Some("iri://skills/llm_chat"),
+        _ => None,
+    }
+}
 
 /// Tool role filter: empty = all roles, "PA"/"DA"/"CA"/"AA" = role-specific only
 #[derive(Clone)]
@@ -153,6 +209,8 @@ impl ToolExecutor {
             tool_group_manager: None,
             workspace_monitor: Arc::new(parking_lot::RwLock::new(None)),
             vector_store: Arc::new(parking_lot::RwLock::new(None)),
+            security_engine: Arc::new(parking_lot::RwLock::new(None)),
+            shared_skill_registry: Arc::new(parking_lot::RwLock::new(None)),
         };
         exe.register_builtins();
         exe
@@ -206,6 +264,18 @@ impl ToolExecutor {
     /// 注入向量知识库，使 `kb_vector_search` 工具可对向量库做语义检索。
     pub fn set_vector_store(&mut self, store: Arc<crate::memory::HyperspaceStore>) {
         *self.vector_store.write() = Some(store);
+    }
+
+    /// Inject the SkillGraph security engine consulted by
+    /// `execute_with_security_context`.
+    pub fn set_security_engine(&self, engine: Arc<SecurityEngine>) {
+        *self.security_engine.write() = Some(engine);
+    }
+
+    /// Inject the live registry used by planning and execution so the security
+    /// gate resolves tool names against the canonical skill IRI namespace.
+    pub fn set_shared_skill_registry(&self, registry: Arc<SkillRegistry>) {
+        *self.shared_skill_registry.write() = Some(registry);
     }
 
     /// Notify workspace_monitor that a file was read externally (e.g., via read_full_result).
@@ -1113,8 +1183,10 @@ impl ToolExecutor {
             }
         }
 
-        let handler = match self.tools.get(name) {
-            Some(h) => h.clone(),
+        // Use the fallback-aware lookup so routing every caller through the
+        // permission/hook/syscall gates does not break micro-tool dispatch.
+        let handler = match self.try_get_handler(name) {
+            Some(h) => h,
             None => return Err(format!("Tool not found: {}", name)),
         };
         debug!(tool = %name, "Executing tool");
@@ -1142,6 +1214,70 @@ impl ToolExecutor {
         }
 
         result
+    }
+
+    /// Execute a tool behind the SkillGraph security gate.
+    ///
+    /// Adds two checks on top of `execute`: the caller-supplied allowlist and
+    /// the graph-backed `SecurityEngine` decision for the resolved skill IRI.
+    /// A tool without a resolvable skill fails closed.
+    pub async fn execute_with_security_context(
+        &self,
+        name: &str,
+        input: Value,
+        context: SecurityContext,
+        allowed_tools: Option<&[String]>,
+    ) -> Result<Value, String> {
+        if let Some(allowed) = allowed_tools {
+            if !allowed.iter().any(|t| t == name) {
+                return Ok(json!({"error": format!("Tool not allowed: {}", name), "tool": name}));
+            }
+        }
+
+        let security_engine = { self.security_engine.read().clone() };
+        if let Some(engine) = security_engine {
+            let skill_iri = {
+                let registry = self.shared_skill_registry.read();
+                registry
+                    .as_ref()
+                    .and_then(|registry| registry.skill_iri_for_tool_name(name))
+            }
+            .or_else(|| builtin_security_skill_iri(name).map(str::to_string))
+            // Generated result readers expose no independent side effect. They
+            // inherit the least-privilege built-in read capability instead of
+            // becoming an unregistered security bypass.
+            .or_else(|| {
+                MICRO_TOOL_PREFIXES
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+                    .then(|| "iri://skills/file_read".to_string())
+            });
+            let Some(skill_iri) = skill_iri else {
+                return Ok(
+                    json!({"error": "Security denied: tool has no registered executable skill", "tool": name}),
+                );
+            };
+            match engine.check_execution(&skill_iri, &context).await {
+                Ok(SecurityDecision::Allowed) => {}
+                Ok(SecurityDecision::Denied { reasons }) => {
+                    return Ok(
+                        json!({"error": "Security denied", "tool": name, "skill_iri": skill_iri, "reasons": reasons}),
+                    );
+                }
+                Ok(SecurityDecision::RequiresApproval { approver, reason }) => {
+                    return Ok(
+                        json!({"error": "Security approval required", "tool": name, "skill_iri": skill_iri, "approver": approver, "reason": reason}),
+                    );
+                }
+                Err(error) => {
+                    return Ok(
+                        json!({"error": format!("Security denied: {error}"), "tool": name, "skill_iri": skill_iri}),
+                    );
+                }
+            }
+        }
+
+        self.execute(name, input).await
     }
 
     /// Get tool handler (avoid holding lock across await)

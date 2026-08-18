@@ -928,14 +928,24 @@ impl super::AgentRunner {
                                 }
                             }
 
-                            let handler = {
-                                let executor = self.tool_executor.read();
-                                executor.try_get_handler(name)
-                            };
-                            let result = match handler {
-                                Some(f) => f(args).await.unwrap_or_else(|e| json!({"error": e})),
-                                None => json!({"error": format!("Tool not found: {}", name)}),
-                            };
+                            // Clone before awaiting to keep the executor lock out of the
+                            // handler's async I/O path. Unlike a direct handler call this
+                            // also applies executor security, permission, hook and
+                            // syscall policies.
+                            let executor = self.tool_executor.read().clone();
+                            let result = executor
+                                .execute_with_security_context(
+                                    name,
+                                    args,
+                                    crate::skill_graph::security::SecurityContext::new(
+                                        &agent.agent_id,
+                                        &agent.role.to_string(),
+                                    )
+                                    .with_task(&ctx.task_iri),
+                                    ctx.allowed_tools.as_deref(),
+                                )
+                                .await
+                                .unwrap_or_else(|e| json!({"error": e}));
                             let raw_result_str = serde_json::to_string(&result).unwrap_or_default();
                             let mut result_str =
                                 self.route_tool_result(&raw_result_str, name, &c.id).await;

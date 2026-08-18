@@ -4630,10 +4630,17 @@ fn ontology_store_ready(
     state: &Arc<AppState>,
 ) -> Result<crate::knowledge_graph::ontology_store::OntologyStore, (StatusCode, Json<Value>)> {
     use crate::knowledge_graph::ontology_store::OntologyStore;
-    let store = OntologyStore::with_shared_store(state.kg_store.clone())
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))))?;
+    let store = OntologyStore::with_shared_store(state.kg_store.clone()).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        )
+    })?;
     store.ensure_seeded(ONT_DOMAIN).map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e })))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        )
     })?;
     Ok(store)
 }
@@ -4648,7 +4655,11 @@ async fn upsert_object_type_handler(
         Err(e) => return e.into_response(),
     };
     match store.upsert_object_type(ONT_DOMAIN, &obj) {
-        Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok", "id": obj.id }))).into_response(),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "status": "ok", "id": obj.id })),
+        )
+            .into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     }
 }
@@ -4665,7 +4676,11 @@ async fn update_object_type_handler(
         Err(e) => return e.into_response(),
     };
     match store.upsert_object_type(ONT_DOMAIN, &obj) {
-        Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok", "id": obj.id }))).into_response(),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "status": "ok", "id": obj.id })),
+        )
+            .into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     }
 }
@@ -4699,7 +4714,11 @@ async fn upsert_link_type_handler(
         Err(e) => return e.into_response(),
     };
     match store.upsert_link_type(ONT_DOMAIN, &link) {
-        Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok", "id": link.id }))).into_response(),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "status": "ok", "id": link.id })),
+        )
+            .into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     }
 }
@@ -4716,7 +4735,11 @@ async fn update_link_type_handler(
         Err(e) => return e.into_response(),
     };
     match store.upsert_link_type(ONT_DOMAIN, &link) {
-        Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok", "id": link.id }))).into_response(),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "status": "ok", "id": link.id })),
+        )
+            .into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     }
 }
@@ -4732,7 +4755,11 @@ async fn delete_link_type_handler(
     };
     match store.delete_link_type(ONT_DOMAIN, &id) {
         Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok", "id": id }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        )
+            .into_response(),
     }
 }
 
@@ -4758,7 +4785,11 @@ async fn upsert_action_type_handler(
         Err(e) => return e.into_response(),
     };
     match store.upsert_action_type(ONT_DOMAIN, &action) {
-        Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok", "id": action.id }))).into_response(),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "status": "ok", "id": action.id })),
+        )
+            .into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     }
 }
@@ -4775,7 +4806,11 @@ async fn update_action_type_handler(
         Err(e) => return e.into_response(),
     };
     match store.upsert_action_type(ONT_DOMAIN, &action) {
-        Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok", "id": action.id }))).into_response(),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "status": "ok", "id": action.id })),
+        )
+            .into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     }
 }
@@ -4791,7 +4826,11 @@ async fn delete_action_type_handler(
     };
     match store.delete_action_type(ONT_DOMAIN, &id) {
         Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok", "id": id }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        )
+            .into_response(),
     }
 }
 
@@ -4805,7 +4844,11 @@ async fn upsert_function_def_handler(
         Err(e) => return e.into_response(),
     };
     match store.upsert_function_def(ONT_DOMAIN, &func) {
-        Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok", "id": func.id }))).into_response(),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "status": "ok", "id": func.id })),
+        )
+            .into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     }
 }
@@ -4822,7 +4865,11 @@ async fn update_function_def_handler(
         Err(e) => return e.into_response(),
     };
     match store.upsert_function_def(ONT_DOMAIN, &func) {
-        Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok", "id": func.id }))).into_response(),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "status": "ok", "id": func.id })),
+        )
+            .into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     }
 }
@@ -4838,7 +4885,11 @@ async fn delete_function_def_handler(
     };
     match store.delete_function_def(ONT_DOMAIN, &id) {
         Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok", "id": id }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        )
+            .into_response(),
     }
 }
 
@@ -4990,7 +5041,11 @@ const SANDBOX_ALLOWED_PRED_PREFIXES: &[&str] = &[
 
 /// 生成本次 invoke 的影子图 IRI。
 fn staging_graph_iri() -> String {
-    format!("{}/staging/{}", EV_PACK_GRAPH, uuid::Uuid::new_v4().simple())
+    format!(
+        "{}/staging/{}",
+        EV_PACK_GRAPH,
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 /// 把 side-effect 语句中出现的生产图 IRI 重定向到影子图。
@@ -8082,6 +8137,7 @@ mod tests {
             timeout_seconds: 30,
             max_retries: 1,
             retry_base_ms: 500,
+            use_responses_api: false,
             model_mapping: std::collections::HashMap::new(),
         })
         .unwrap()
@@ -8460,6 +8516,7 @@ mod skill_manifest_tests {
                 timeout_seconds: 30,
                 max_retries: 1,
                 retry_base_ms: 500,
+                use_responses_api: false,
                 model_mapping: std::collections::HashMap::new(),
             })
             .unwrap(),
@@ -8559,12 +8616,18 @@ mod skill_manifest_tests {
         let state = make_state(&tmp);
         let app = Router::new()
             .route("/api/v1/ontology/types", get(ontology_types_handler))
-            .route("/api/v1/ontology/object-types", post(upsert_object_type_handler))
+            .route(
+                "/api/v1/ontology/object-types",
+                post(upsert_object_type_handler),
+            )
             .route(
                 "/api/v1/ontology/object-types/:id",
                 put(update_object_type_handler).delete(delete_object_type_handler),
             )
-            .route("/api/v1/ontology/link-types", post(upsert_link_type_handler))
+            .route(
+                "/api/v1/ontology/link-types",
+                post(upsert_link_type_handler),
+            )
             .route(
                 "/api/v1/ontology/link-types/:id",
                 put(update_link_type_handler).delete(delete_link_type_handler),
@@ -8593,7 +8656,11 @@ mod skill_manifest_tests {
             "label": "小部件", "description": "测试", "icon": "Box", "color": "blue",
             "primary_key": "name", "title_property": "name", "properties": []
         });
-        let r = app.clone().oneshot(post_json("/api/v1/ontology/object-types", obj)).await.unwrap();
+        let r = app
+            .clone()
+            .oneshot(post_json("/api/v1/ontology/object-types", obj))
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::OK, "新建对象应 200");
 
         // 2) GET 可见
@@ -8607,7 +8674,9 @@ mod skill_manifest_tests {
             )
             .await
             .unwrap();
-        let bytes = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: Value = serde_json::from_slice(&bytes).unwrap();
         let has_widget = body["object_types"]
             .as_array()
@@ -8622,17 +8691,33 @@ mod skill_manifest_tests {
             "label": "自关联", "description": "", "source": "Widget", "target": "Widget",
             "cardinality": "one_to_many"
         });
-        let r = app.clone().oneshot(post_json("/api/v1/ontology/link-types", link)).await.unwrap();
+        let r = app
+            .clone()
+            .oneshot(post_json("/api/v1/ontology/link-types", link))
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::OK, "新建链接应 200");
 
         // 4) 删对象被引用 → 409
-        let r = app.clone().oneshot(del("/api/v1/ontology/object-types/Widget")).await.unwrap();
+        let r = app
+            .clone()
+            .oneshot(del("/api/v1/ontology/object-types/Widget"))
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::CONFLICT, "被链接引用应返回 409");
 
         // 5) 删链接后可删对象
-        let r = app.clone().oneshot(del("/api/v1/ontology/link-types/WidgetSelf")).await.unwrap();
+        let r = app
+            .clone()
+            .oneshot(del("/api/v1/ontology/link-types/WidgetSelf"))
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::OK);
-        let r = app.clone().oneshot(del("/api/v1/ontology/object-types/Widget")).await.unwrap();
+        let r = app
+            .clone()
+            .oneshot(del("/api/v1/ontology/object-types/Widget"))
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::OK, "无引用后应可删");
 
         std::env::remove_var("AGENTOS_DATA_DIR");
@@ -8650,17 +8735,26 @@ mod skill_manifest_tests {
         let state = make_state(&tmp);
         let app = Router::new()
             .route("/api/v1/ontology/types", get(ontology_types_handler))
-            .route("/api/v1/ontology/action-types", post(upsert_action_type_handler))
+            .route(
+                "/api/v1/ontology/action-types",
+                post(upsert_action_type_handler),
+            )
             .route(
                 "/api/v1/ontology/action-types/:id",
                 put(update_action_type_handler).delete(delete_action_type_handler),
             )
-            .route("/api/v1/ontology/function-defs", post(upsert_function_def_handler))
+            .route(
+                "/api/v1/ontology/function-defs",
+                post(upsert_function_def_handler),
+            )
             .route(
                 "/api/v1/ontology/function-defs/:id",
                 put(update_function_def_handler).delete(delete_function_def_handler),
             )
-            .route("/api/v1/ontology/actions/:id/invoke", post(invoke_action_handler))
+            .route(
+                "/api/v1/ontology/actions/:id/invoke",
+                post(invoke_action_handler),
+            )
             .with_state(state);
 
         let post_json = |uri: &str, body: Value| {
@@ -8685,7 +8779,11 @@ mod skill_manifest_tests {
             "label": "标记故障", "description": "测试自定义动作", "applies_to": "FaultCode",
             "parameters": [], "preconditions": [], "side_effects": [], "icon": "Zap"
         });
-        let r = app.clone().oneshot(post_json("/api/v1/ontology/action-types", action)).await.unwrap();
+        let r = app
+            .clone()
+            .oneshot(post_json("/api/v1/ontology/action-types", action))
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::OK, "新建动作应 200");
 
         // 2) 新建函数
@@ -8693,7 +8791,11 @@ mod skill_manifest_tests {
             "id": "FaultScore", "label": "故障评分", "description": "测试函数",
             "applies_to": "FaultCode", "returns": "number", "expression": "1 + 1"
         });
-        let r = app.clone().oneshot(post_json("/api/v1/ontology/function-defs", func)).await.unwrap();
+        let r = app
+            .clone()
+            .oneshot(post_json("/api/v1/ontology/function-defs", func))
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::OK, "新建函数应 200");
 
         // 3) applies_to 不存在对象 → 400
@@ -8702,8 +8804,16 @@ mod skill_manifest_tests {
             "label": "坏动作", "description": "", "applies_to": "NoSuchObj",
             "parameters": [], "preconditions": [], "side_effects": [], "icon": "Zap"
         });
-        let r = app.clone().oneshot(post_json("/api/v1/ontology/action-types", bad)).await.unwrap();
-        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "applies_to 不存在应 400");
+        let r = app
+            .clone()
+            .oneshot(post_json("/api/v1/ontology/action-types", bad))
+            .await
+            .unwrap();
+        assert_eq!(
+            r.status(),
+            StatusCode::BAD_REQUEST,
+            "applies_to 不存在应 400"
+        );
 
         // 4) GET 可见
         let r = app
@@ -8716,24 +8826,41 @@ mod skill_manifest_tests {
             )
             .await
             .unwrap();
-        let bytes = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: Value = serde_json::from_slice(&bytes).unwrap();
         assert!(
-            body["action_types"].as_array().unwrap().iter().any(|a| a["id"] == "TagFault"),
+            body["action_types"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a["id"] == "TagFault"),
             "新建动作应出现在 GET /types"
         );
         assert!(
-            body["functions"].as_array().unwrap().iter().any(|f| f["id"] == "FaultScore"),
+            body["functions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f["id"] == "FaultScore"),
             "新建函数应出现在 GET /types"
         );
 
         // 5) 自定义动作 invoke → 422（不可执行）
         let r = app
             .clone()
-            .oneshot(post_json("/api/v1/ontology/actions/TagFault/invoke", json!({ "dry_run": true })))
+            .oneshot(post_json(
+                "/api/v1/ontology/actions/TagFault/invoke",
+                json!({ "dry_run": true }),
+            ))
             .await
             .unwrap();
-        assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY, "自定义动作应不可执行 422");
+        assert_eq!(
+            r.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "自定义动作应不可执行 422"
+        );
 
         // 6) 内置动作 dry_run 仍可（缺必填参数 → 400，证明走到内置执行分派而非 422）
         let r = app
@@ -8751,9 +8878,17 @@ mod skill_manifest_tests {
         );
 
         // 7) 删除动作/函数
-        let r = app.clone().oneshot(del("/api/v1/ontology/action-types/TagFault")).await.unwrap();
+        let r = app
+            .clone()
+            .oneshot(del("/api/v1/ontology/action-types/TagFault"))
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::OK, "删动作应 200");
-        let r = app.clone().oneshot(del("/api/v1/ontology/function-defs/FaultScore")).await.unwrap();
+        let r = app
+            .clone()
+            .oneshot(del("/api/v1/ontology/function-defs/FaultScore"))
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::OK, "删函数应 200");
 
         std::env::remove_var("AGENTOS_DATA_DIR");
@@ -9359,7 +9494,10 @@ mod ontology_action_tests {
 
     #[test]
     fn test_redirect_to_staging_rewrites_graph_iri() {
-        let stmt = format!("INSERT DATA {{ GRAPH <{}> {{ <a> <b> <c> }} }}", EV_PACK_GRAPH);
+        let stmt = format!(
+            "INSERT DATA {{ GRAPH <{}> {{ <a> <b> <c> }} }}",
+            EV_PACK_GRAPH
+        );
         let staging = "graph:pack/ev-repair/staging/abc";
         let out = redirect_to_staging(&stmt, staging);
         assert!(out.contains(&format!("GRAPH <{}>", staging)));
@@ -9389,7 +9527,10 @@ mod ontology_action_tests {
         // 影子图应已删除（无残留）。
         let staging = report["staging_graph"].as_str().unwrap();
         let sq = format!("SELECT ?s WHERE {{ GRAPH <{}> {{ ?s ?p ?o }} }}", staging);
-        assert!(kg.query_sparql(&sq, None).unwrap().is_empty(), "影子图应已清理");
+        assert!(
+            kg.query_sparql(&sq, None).unwrap().is_empty(),
+            "影子图应已清理"
+        );
     }
 
     /// 越权谓词：护栏应拦截并回滚（返回 422），生产图零改动。

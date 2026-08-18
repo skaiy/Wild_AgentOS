@@ -80,6 +80,7 @@ impl CliConfig {
             timeout_seconds: 300,
             max_retries: 2,
             retry_base_ms: 500,
+            use_responses_api: false,
             model_mapping: HashMap::from([
                 ("planning".to_string(), model.clone()),
                 ("execution".to_string(), model.clone()),
