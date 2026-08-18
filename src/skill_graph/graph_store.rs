@@ -89,6 +89,70 @@ impl SkillGraphStore {
         self.sync_sparql(&sparql);
     }
 
+    /// 将技能节点整体写入 L0。内容是节点自身的序列化形式而非展示用 JSON-LD，
+    /// 因为 `to_json_ld()` 是有损投影、无法还原节点，重启后链接会丢失。
+    fn persist_skill_to_l0(&self, skill: &SkillGraphNode) -> Result<(), CoreError> {
+        let Some(ref l0_store) = self.l0_store else {
+            return Ok(());
+        };
+        if skill.storage_tier == StorageTier::L1Session {
+            return Ok(());
+        }
+
+        let content = serde_json::to_string(skill).map_err(|e| CoreError::StorageError {
+            message: format!("Failed to serialize skill for L0: {e}"),
+        })?;
+        let now = Utc::now();
+        let entry = crate::memory::l0_store::L0Entry {
+            iri: skill.skill_iri.clone(),
+            content,
+            importance: skill.graph_meta.success_rate,
+            access_count: 0,
+            created_at: skill.created_at,
+            last_accessed: now,
+            tags: skill.tags.clone(),
+            metadata: serde_json::Map::new(),
+            mesi_state: crate::memory::l0_store::MesiState::Shared,
+            content_hash: String::new(),
+            named_graph: Some(SKILL_GRAPH_NAMED_GRAPH.to_string()),
+            jsonld_context: None,
+            jsonld_types: vec!["skill:Skill".to_string()],
+            hyperspace_point_id: None,
+        };
+        l0_store.store_entry(&entry)?;
+        debug!("Skill written to L0 store: {}", skill.skill_iri);
+        Ok(())
+    }
+
+    /// 从 L0 重建技能图，返回恢复的技能数。无法解析的历史条目跳过并告警，
+    /// 不静默计入成功数。
+    pub fn hydrate_from_l0(&self) -> Result<usize, CoreError> {
+        let l0 = self.l0_store.as_ref().ok_or_else(|| CoreError::Internal {
+            message: "L0 store not configured — cannot hydrate".to_string(),
+        })?;
+
+        let mut restored = 0usize;
+        for entry in l0.query_by_named_graph(SKILL_GRAPH_NAMED_GRAPH)? {
+            match serde_json::from_str::<SkillGraphNode>(&entry.content) {
+                Ok(skill) => {
+                    self.index.index_skill(&skill);
+                    self.sync_skill_insert(&skill);
+                    self.skills.write().insert(skill.skill_iri.clone(), skill);
+                    restored += 1;
+                }
+                Err(e) => {
+                    warn!(
+                        "Skipping unparsable skill entry during hydration: {} ({})",
+                        entry.iri, e
+                    );
+                }
+            }
+        }
+
+        info!(count = restored, "Skill graph hydrated from L0");
+        Ok(restored)
+    }
+
     pub fn register_skill(&self, skill: SkillGraphNode) -> Result<(), CoreError> {
         let iri = skill.skill_iri.clone();
         info!("Registering skill to graph: {} ({})", skill.name, iri);
@@ -103,31 +167,10 @@ impl SkillGraphStore {
         self.skills.write().insert(iri.clone(), skill);
 
         // P0-1: sync to Oxigraph
-        if let Some(skill) = self.skills.read().get(&iri) {
+        let stored = self.skills.read().get(&iri).cloned();
+        if let Some(ref skill) = stored {
             self.sync_skill_insert(skill);
-        }
-
-        if let Some(ref l0_store) = self.l0_store {
-            let now = Utc::now();
-            let entry = crate::memory::l0_store::L0Entry {
-                iri: iri.clone(),
-                content: format!("skill:{}", iri),
-                importance: 0.5,
-                access_count: 0,
-                created_at: now,
-                last_accessed: now,
-                tags: vec!["skill".to_string(), "skill_graph".to_string()],
-                metadata: serde_json::Map::new(),
-                mesi_state: crate::memory::l0_store::MesiState::Shared,
-                content_hash: String::new(),
-                named_graph: Some(SKILL_GRAPH_NAMED_GRAPH.to_string()),
-
-                jsonld_context: None,
-                jsonld_types: vec!["skill:Skill".to_string()],
-                hyperspace_point_id: None,
-            };
-            l0_store.store(&iri, &serde_json::to_string(&entry).unwrap_or_default())?;
-            debug!("Skill written to L0 store: {}", iri);
+            self.persist_skill_to_l0(skill)?;
         }
 
         Ok(())
@@ -144,6 +187,7 @@ impl SkillGraphStore {
             // P0-1: sync update to Oxigraph (delete old + insert new)
             self.sync_skill_delete(&iri);
             self.sync_skill_insert(&skill);
+            self.persist_skill_to_l0(&skill)?;
             self.skills.write().insert(iri, skill);
             Ok(())
         } else {
@@ -158,6 +202,9 @@ impl SkillGraphStore {
             self.index.remove_skill(skill_iri);
             // P0-1: sync delete from Oxigraph
             self.sync_skill_delete(skill_iri);
+            if let Some(ref l0_store) = self.l0_store {
+                l0_store.delete(skill_iri)?;
+            }
             info!("Skill removed from graph: {}", skill_iri);
             Ok(())
         } else {
@@ -195,6 +242,7 @@ impl SkillGraphStore {
                 self.index.update_skill(&skill);
                 // P0-1: sync link triple to Oxigraph
                 self.sync_skill_insert(&skill);
+                self.persist_skill_to_l0(&skill)?;
             }
             Ok(())
         } else {
@@ -202,6 +250,54 @@ impl SkillGraphStore {
                 iri: format!("Source skill not found: {}", source_iri),
             })
         }
+    }
+
+    /// 删除一条精确匹配的关系。强度与描述参与身份判定，因为图允许同类型平行边。
+    pub fn remove_link(
+        &self,
+        source_iri: &str,
+        target_iri: &str,
+        link_type: SkillLinkType,
+        strength: LinkStrength,
+        description: &str,
+    ) -> Result<(), CoreError> {
+        let mut skills = self.skills.write();
+
+        let Some(source) = skills.get_mut(source_iri) else {
+            return Err(CoreError::SkillNotFound {
+                iri: format!("Source skill not found: {}", source_iri),
+            });
+        };
+
+        let before = source.links.len();
+        source.links.retain(|link| {
+            !(link.target_iri == target_iri
+                && link.link_type == link_type
+                && link.strength == strength
+                && link.description == description)
+        });
+        if source.links.len() == before {
+            return Err(CoreError::ValidationFailed {
+                message: format!(
+                    "Link not found: {} -> {} ({:?})",
+                    source_iri, target_iri, link_type
+                ),
+            });
+        }
+        debug!(
+            "Removing link: {} -> {} ({:?})",
+            source_iri, target_iri, link_type
+        );
+
+        let updated = skills.get(source_iri).cloned();
+        drop(skills);
+        if let Some(skill) = updated {
+            self.index.update_skill(&skill);
+            self.sync_skill_delete(source_iri);
+            self.sync_skill_insert(&skill);
+            self.persist_skill_to_l0(&skill)?;
+        }
+        Ok(())
     }
 
     pub fn traverse_links(
@@ -610,40 +706,26 @@ impl SkillGraphStore {
             return Ok(0);
         }
 
-        let l0 = self.l0_store.as_ref().ok_or_else(|| CoreError::Internal {
-            message: "L0 store not configured — cannot archive".to_string(),
-        })?;
+        if self.l0_store.is_none() {
+            return Err(CoreError::Internal {
+                message: "L0 store not configured — cannot archive".to_string(),
+            });
+        }
 
         let mut archived = 0usize;
         for iri in &cold_iris {
-            // Serialize the skill as JSON-LD for L0 storage
-            let mut skills = self.skills.write();
-            if let Some(skill) = skills.get_mut(iri) {
-                skill.storage_tier = StorageTier::L0Permanent;
-
-                let now = Utc::now();
-                let entry = crate::memory::l0_store::L0Entry {
-                    iri: iri.clone(),
-                    content: serde_json::to_string(&skill.to_json_ld()).unwrap_or_default(),
-                    importance: skill.graph_meta.success_rate,
-                    access_count: 0,
-                    created_at: skill.created_at,
-                    last_accessed: now,
-                    tags: skill.tags.clone(),
-                    metadata: serde_json::Map::new(),
-                    mesi_state: crate::memory::l0_store::MesiState::Exclusive,
-                    content_hash: String::new(),
-                    named_graph: Some(
-                        crate::skill_graph::graph_store::SKILL_GRAPH_NAMED_GRAPH.to_string(),
-                    ),
-                    jsonld_context: None,
-                    jsonld_types: vec!["skill:Skill".to_string()],
-                    hyperspace_point_id: None,
-                };
-                let json = serde_json::to_string(&entry).map_err(|e| CoreError::Internal {
-                    message: format!("Serialization error during archive: {e}"),
-                })?;
-                l0.store(iri, &json)?;
+            let cold = {
+                let mut skills = self.skills.write();
+                match skills.get_mut(iri) {
+                    Some(skill) => {
+                        skill.storage_tier = StorageTier::L0Permanent;
+                        Some(skill.clone())
+                    }
+                    None => None,
+                }
+            };
+            if let Some(skill) = cold {
+                self.persist_skill_to_l0(&skill)?;
                 archived += 1;
             }
         }

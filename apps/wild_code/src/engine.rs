@@ -25,6 +25,7 @@ use wild_agent_os_core::memory::l2_blackboard::Blackboard;
 use wild_agent_os_core::memory::l3_projection::ProjectionEngine;
 use wild_agent_os_core::memory::memory_manager::MemoryManager;
 use wild_agent_os_core::skill_graph::discovery::SkillDiscoveryEngine;
+use wild_agent_os_core::skill_graph::evolution::EvolutionProposalStore;
 use wild_agent_os_core::skill_graph::graph_algorithms::SkillGraphAlgorithms;
 use wild_agent_os_core::skill_graph::graph_store::SkillGraphStore;
 use wild_agent_os_core::skill_graph::security::SecurityEngine;
@@ -285,6 +286,10 @@ impl CodeCliEngine {
             executor.set_workspace_monitor(wm.clone());
         }
 
+        if let Err(error) = skill_graph.hydrate_from_l0() {
+            tracing::warn!(%error, "技能图 L0 恢复失败，改用引导技能继续启动");
+        }
+
         // 用 SkillRegistry 的内建技能引导 SkillGraphStore，使安全门能解析工具对应的
         // skill IRI；否则每次调用都会因“无可执行技能”而 fail-closed。
         for meta in skills.list_all_skills() {
@@ -295,6 +300,23 @@ impl CodeCliEngine {
                 wild_agent_os_core::skill_graph::types::SkillGraphNode::from_skill_meta(&meta),
             ) {
                 tracing::warn!("Failed to register bootstrap skill {}: {}", meta.name, e);
+            }
+        }
+
+        // 图恢复与引导节点就位后，再结算进程中断时留下的 Applying 提案。这里只
+        // 终结或补偿既有的持久记录，不新建提案，也不自动批准。
+        match EvolutionProposalStore::new(l0.clone()).recover_inflight(skill_graph.as_ref()) {
+            Ok(recovery) if recovery.committed + recovery.rolled_back + recovery.failed > 0 => {
+                info!(
+                    committed = recovery.committed,
+                    rolled_back = recovery.rolled_back,
+                    failed = recovery.failed,
+                    "已结算中断的演化提案"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, "结算中断的演化提案失败");
             }
         }
 
@@ -649,6 +671,40 @@ impl CodeCliEngine {
         results.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         results.truncate(20);
         Ok(results)
+    }
+
+    /// 列出本工作区中可供人工评审的持久演化提案。
+    pub fn list_evolution_proposals(
+        &self,
+    ) -> anyhow::Result<Vec<wild_agent_os_core::skill_graph::EvolutionProposal>> {
+        Ok(EvolutionProposalStore::new(self.l0.clone()).list()?)
+    }
+
+    /// 记录一次显式的本地操作者评审。`approver` 是审计标签，不是身份认证手段。
+    pub fn approve_evolution_proposal(
+        &self,
+        proposal_id: &str,
+        approver: &str,
+        comment: Option<String>,
+    ) -> anyhow::Result<wild_agent_os_core::skill_graph::EvolutionProposal> {
+        Ok(EvolutionProposalStore::new(self.l0.clone()).approve(proposal_id, approver, comment)?)
+    }
+
+    pub fn validate_evolution_proposal(
+        &self,
+        proposal_id: &str,
+    ) -> anyhow::Result<wild_agent_os_core::skill_graph::EvolutionProposal> {
+        Ok(EvolutionProposalStore::new(self.l0.clone())
+            .validate_for_commit(proposal_id, self.skill_graph.as_ref())?)
+    }
+
+    /// 在持久批准与校验之后提交受治理的链接补丁。没有任何自动路径会调用它。
+    pub fn commit_evolution_proposal(
+        &self,
+        proposal_id: &str,
+    ) -> anyhow::Result<wild_agent_os_core::skill_graph::EvolutionProposal> {
+        Ok(EvolutionProposalStore::new(self.l0.clone())
+            .commit_validated_link_patch(proposal_id, self.skill_graph.as_ref())?)
     }
 
     pub async fn resume_task(&mut self, task_iri: &str) -> anyhow::Result<TaskResult> {
