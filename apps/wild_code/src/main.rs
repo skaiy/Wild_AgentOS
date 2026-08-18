@@ -145,6 +145,26 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    // The daemon builds its own WorkerConfig from env, so it must not go through
+    // the CLI gateway config (and its API key check) at all.
+    if cli.daemon {
+        return run_daemon();
+    }
+
+    // --list-checkpoints only reads the local checkpoint store, so a missing API
+    // key must not block it.
+    if cli.list_checkpoints {
+        let config = wild_code_cli::config::CliConfig::from_env_and_args_offline(
+            cli.model,
+            cli.workspace.clone(),
+            cli.max_iterations,
+            cli.max_pdca_cycles,
+            cli.workflow,
+        );
+        list_checkpoints(&config)?;
+        return Ok(());
+    }
+
     let config = wild_code_cli::config::CliConfig::from_env_and_args(
         cli.model,
         cli.workspace.clone(),
@@ -152,15 +172,6 @@ fn main() -> anyhow::Result<()> {
         cli.max_pdca_cycles,
         cli.workflow,
     );
-
-    if cli.daemon {
-        return run_daemon();
-    }
-
-    if cli.list_checkpoints {
-        list_checkpoints(&config)?;
-        return Ok(());
-    }
 
     if let Some(ref task_iri) = cli.resume {
         resume_task(config, task_iri, log_buffer)?;

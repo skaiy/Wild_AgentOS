@@ -49,6 +49,7 @@ pub struct CliConfig {
 }
 
 impl CliConfig {
+    /// Build the config for commands that call the LLM. Exits when no API key is set.
     pub fn from_env_and_args(
         model: String,
         workspace: String,
@@ -56,13 +57,53 @@ impl CliConfig {
         max_pdca_cycles: u32,
         workflow_path: Option<String>,
     ) -> Self {
-        let api_key = std::env::var("DEEPSEEK_API_KEY")
-            .or_else(|_| std::env::var("AGENT_OS_GATEWAY_API_KEY"))
-            .unwrap_or_else(|_| {
-                eprintln!("错误: 请设置 DEEPSEEK_API_KEY 或 AGENT_OS_GATEWAY_API_KEY 环境变量");
-                std::process::exit(1);
-            });
+        let api_key = Self::api_key_from_env().unwrap_or_else(|| {
+            eprintln!("错误: 请设置 DEEPSEEK_API_KEY 或 AGENT_OS_GATEWAY_API_KEY 环境变量");
+            std::process::exit(1);
+        });
+        Self::build(
+            model,
+            workspace,
+            max_iterations,
+            max_pdca_cycles,
+            workflow_path,
+            api_key,
+        )
+    }
 
+    /// Build the config for read-only commands (e.g. `--list-checkpoints`) that never
+    /// reach the gateway, so a missing API key must not block them.
+    pub fn from_env_and_args_offline(
+        model: String,
+        workspace: String,
+        max_iterations: u32,
+        max_pdca_cycles: u32,
+        workflow_path: Option<String>,
+    ) -> Self {
+        Self::build(
+            model,
+            workspace,
+            max_iterations,
+            max_pdca_cycles,
+            workflow_path,
+            Self::api_key_from_env().unwrap_or_default(),
+        )
+    }
+
+    fn api_key_from_env() -> Option<String> {
+        std::env::var("DEEPSEEK_API_KEY")
+            .or_else(|_| std::env::var("AGENT_OS_GATEWAY_API_KEY"))
+            .ok()
+    }
+
+    fn build(
+        model: String,
+        workspace: String,
+        max_iterations: u32,
+        max_pdca_cycles: u32,
+        workflow_path: Option<String>,
+        api_key: String,
+    ) -> Self {
         let base_url = std::env::var("DEEPSEEK_API_URL")
             .or_else(|_| std::env::var("AGENT_OS_GATEWAY_BASE_URL"))
             .unwrap_or_else(|_| "https://api.deepseek.com".to_string());

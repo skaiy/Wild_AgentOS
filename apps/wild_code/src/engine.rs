@@ -7,7 +7,7 @@ use tracing::{info, warn};
 use wild_agent_os_core::causal::engine::CausalEngine;
 use wild_agent_os_core::causal::fused::FusedRootCauseEngine;
 use wild_agent_os_core::causal::store::CausalModelStore;
-use wild_agent_os_core::config::{AgentSettings, McpServerConfig, McpStdioServerConfig};
+use wild_agent_os_core::config::{McpServerConfig, McpStdioServerConfig};
 use wild_agent_os_core::core::agent_runner::TaskResult;
 use wild_agent_os_core::core::event_bus::{Event, EventBus};
 use wild_agent_os_core::core::sa::SupervisorAgent;
