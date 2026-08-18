@@ -3,6 +3,14 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::jsonld::context::URI_SKILL;
+
+/// SPARQL `PREFIX` 声明头，使 `skill:x` 展开为 `URI_SKILL` 下的完整 IRI，
+/// 与 `tools::skill_registry` 及 `core::syscall_gate` 落在同一命名空间。
+pub fn skill_sparql_prefix() -> String {
+    format!("PREFIX skill: <{}>\n", URI_SKILL)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SkillNodeType {
     #[default]
@@ -215,14 +223,16 @@ pub enum SkillLinkType {
 }
 
 impl SkillLinkType {
+    /// 返回 `skill:` 前缀形式，需配合 `SKILL_SPARQL_PREFIX` 使用。不带尖括号——
+    /// 尖括号会让 SPARQL 按 opaque IRI 原样存储，导致谓词无法与其他图 join。
     pub fn as_sparql_uri(&self) -> &'static str {
         match self {
-            Self::Prerequisite => "<skill:Prerequisite>",
-            Self::Composition => "<skill:Composition>",
-            Self::Related => "<skill:Related>",
-            Self::Alternative => "<skill:Alternative>",
-            Self::Extends => "<skill:Extends>",
-            Self::Generalization => "<skill:Generalization>",
+            Self::Prerequisite => "skill:Prerequisite",
+            Self::Composition => "skill:Composition",
+            Self::Related => "skill:Related",
+            Self::Alternative => "skill:Alternative",
+            Self::Extends => "skill:Extends",
+            Self::Generalization => "skill:Generalization",
         }
     }
 }
@@ -717,7 +727,7 @@ impl SkillGraphNode {
 
         let _ = write!(
             triples,
-            "<{}> a <skill:CognitiveSkill> ;\n  <skill:name> '{}' ;\n  <skill:description> '{}' .\n",
+            "<{}> a skill:CognitiveSkill ;\n  skill:name '{}' ;\n  skill:description '{}' .\n",
             self.skill_iri,
             self.name.replace('\'', "\\'"),
             self.description.replace('\'', "\\'"),
@@ -725,7 +735,7 @@ impl SkillGraphNode {
 
         let _ = write!(
             triples,
-            "<{}> <skill:what> '{}' ;\n  <skill:why> '{}' .\n",
+            "<{}> skill:what '{}' ;\n  skill:why '{}' .\n",
             self.skill_iri,
             self.w2h.what.replace('\'', "\\'"),
             self.w2h.why.replace('\'', "\\'"),
@@ -734,7 +744,7 @@ impl SkillGraphNode {
         for link in &self.links {
             let _ = writeln!(
                 triples,
-                "<{}> <{}> <{}> .",
+                "<{}> {} <{}> .",
                 self.skill_iri,
                 link.link_type.as_sparql_uri(),
                 link.target_iri
@@ -743,14 +753,19 @@ impl SkillGraphNode {
 
         let _ = write!(
             triples,
-            "<{}> <skill:usageCount> {} ;\n  <skill:successRate> \"{}\"^^<http://www.w3.org/2001/XMLSchema#float> ;\n  <skill:maturity> '{}' .\n",
+            "<{}> skill:usageCount {} ;\n  skill:successRate \"{}\"^^<http://www.w3.org/2001/XMLSchema#float> ;\n  skill:maturity '{}' .\n",
             self.skill_iri,
             self.graph_meta.usage_count,
             self.graph_meta.success_rate,
             self.maturity,
         );
 
-        format!("INSERT DATA {{ GRAPH <{}> {{ {} }} }}", graph, triples)
+        format!(
+            "{}INSERT DATA {{ GRAPH <{}> {{ {} }} }}",
+            skill_sparql_prefix(),
+            graph,
+            triples
+        )
     }
 
     pub fn to_json_ld(&self) -> serde_json::Value {
@@ -1692,22 +1707,45 @@ mod tests {
     fn test_skill_link_type_sparql_uri() {
         assert_eq!(
             SkillLinkType::Prerequisite.as_sparql_uri(),
-            "<skill:Prerequisite>"
+            "skill:Prerequisite"
         );
         assert_eq!(
             SkillLinkType::Composition.as_sparql_uri(),
-            "<skill:Composition>"
+            "skill:Composition"
         );
-        assert_eq!(SkillLinkType::Related.as_sparql_uri(), "<skill:Related>");
+        assert_eq!(SkillLinkType::Related.as_sparql_uri(), "skill:Related");
         assert_eq!(
             SkillLinkType::Alternative.as_sparql_uri(),
-            "<skill:Alternative>"
+            "skill:Alternative"
         );
-        assert_eq!(SkillLinkType::Extends.as_sparql_uri(), "<skill:Extends>");
+        assert_eq!(SkillLinkType::Extends.as_sparql_uri(), "skill:Extends");
         assert_eq!(
             SkillLinkType::Generalization.as_sparql_uri(),
-            "<skill:Generalization>"
+            "skill:Generalization"
         );
+    }
+
+    #[test]
+    fn test_sparql_insert_predicates_are_namespaced() {
+        let mut skill = SkillGraphNode::new("iri://skills/ns", "NS", "namespace check");
+        skill.links.push(SkillLink {
+            target_iri: "iri://skills/other".to_string(),
+            link_type: SkillLinkType::Prerequisite,
+            strength: LinkStrength::Required,
+            description: String::new(),
+        });
+        let sparql = skill.to_sparql_insert("system:skill_graph");
+
+        assert!(
+            sparql.starts_with(&skill_sparql_prefix()),
+            "必须带 PREFIX 声明，否则 skill: 会被当作 opaque scheme"
+        );
+        assert!(
+            !sparql.contains("<skill:"),
+            "不得出现尖括号包裹的 opaque IRI：{sparql}"
+        );
+        assert!(sparql.contains("a skill:CognitiveSkill"));
+        assert!(sparql.contains("skill:Prerequisite"));
     }
 
     #[test]

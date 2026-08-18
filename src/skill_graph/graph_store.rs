@@ -1171,6 +1171,7 @@ impl Default for SkillGraphStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jsonld::context::URI_SKILL;
 
     #[test]
     fn test_register_and_get_skill() {
@@ -1523,6 +1524,40 @@ mod tests {
             )
             .await;
         assert!(results.is_empty(), "Empty store should return no results");
+    }
+
+    #[test]
+    fn test_oxigraph_predicates_join_across_graphs() {
+        let oxi = Arc::new(Store::new().unwrap());
+        let store = SkillGraphStore::new().with_oxi_store(oxi.clone());
+        store
+            .register_skill(SkillGraphNode::new("iri://skills/joinable", "J", "join"))
+            .unwrap();
+
+        // syscall_gate 风格：用完整 IRI 直接命中技能图写入的谓词
+        let full_iri_query = format!(
+            "SELECT ?n WHERE {{ GRAPH <{}> {{ <iri://skills/joinable> <{}name> ?n }} }}",
+            SKILL_GRAPH_NAMED_GRAPH, URI_SKILL
+        );
+        let hits = match oxi.query(full_iri_query.as_str()).unwrap() {
+            oxigraph::sparql::QueryResults::Solutions(s) => s.count(),
+            _ => 0,
+        };
+        assert_eq!(
+            hits, 1,
+            "谓词必须展开为 {URI_SKILL}name，否则无法与其他图 join"
+        );
+
+        // 旧的 opaque 形态必须查不到
+        let opaque_query = format!(
+            "SELECT ?n WHERE {{ GRAPH <{}> {{ <iri://skills/joinable> <skill:name> ?n }} }}",
+            SKILL_GRAPH_NAMED_GRAPH
+        );
+        let stale = match oxi.query(opaque_query.as_str()).unwrap() {
+            oxigraph::sparql::QueryResults::Solutions(s) => s.count(),
+            _ => 0,
+        };
+        assert_eq!(stale, 0, "不应再残留 opaque `skill:name` 谓词");
     }
 
     #[test]
