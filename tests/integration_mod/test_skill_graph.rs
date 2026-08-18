@@ -4,9 +4,9 @@ use wild_agent_os_core::skill_graph::*;
 use wild_agent_os_core::tools::{SkillRegistry, ToolExecutor};
 
 const AXURE_TO_VUE2_SKILL_MD: &str =
-    include_str!("../../.trae-test-skills/axure-to-vue2-skill/SKILL.md");
+    include_str!("../fixtures/skills/axure-to-vue2-skill/SKILL.md");
 const AXURE_VUE2_REFACTOR_SKILL_MD: &str =
-    include_str!("../../.trae-test-skills/axure-vue2-refactor/SKILL.md");
+    include_str!("../fixtures/skills/axure-vue2-refactor/SKILL.md");
 
 fn create_test_graph_with_skills() -> Arc<SkillGraphStore> {
     let store = Arc::new(SkillGraphStore::new());
