@@ -20,8 +20,9 @@ pub use conflict::{ConflictDetectionEngine, ConflictReport, ConflictRule, Confli
 pub use discovery::{SkillDiscoveryEngine, SkillMatch, Task5W2H};
 pub use embedding::SkillGraphEmbedder;
 pub use evolution::{
-    EvolutionSuggestion, EvolutionSuggestionType, HealthStatus, SkillEvolutionEngine,
-    SkillHealthReport, SkillUsageStats, UsageRecord,
+    is_methodology_iri, EvolutionApproval, EvolutionPatch, EvolutionSuggestion,
+    EvolutionSuggestionType, HealthStatus, SkillEvolutionEngine, SkillHealthReport,
+    SkillUsageStats, UsageRecord, METHODOLOGY_IRI_PREFIX,
 };
 pub use graph_algorithms::SkillGraphAlgorithms;
 pub use graph_store::SkillGraphStore;

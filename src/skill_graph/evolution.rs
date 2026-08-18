@@ -66,6 +66,49 @@ pub struct EvolutionSuggestion {
     pub skill_iri: String,
     pub description: String,
     pub confidence: f32,
+    pub patch: Option<EvolutionPatch>,
+    /// 带补丁的建议仍然只是提案，必须先有独立记录的人工批准才能改图。
+    pub approval: EvolutionApproval,
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum EvolutionApproval {
+    #[default]
+    Pending,
+    Approved {
+        approver: String,
+        approved_at: chrono::DateTime<chrono::Utc>,
+        comment: Option<String>,
+    },
+    Rejected {
+        reviewer: String,
+        rejected_at: chrono::DateTime<chrono::Utc>,
+        reason: String,
+    },
+}
+
+impl EvolutionApproval {
+    pub fn status(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Approved { .. } => "approved",
+            Self::Rejected { .. } => "rejected",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum EvolutionPatch {
+    AddLink {
+        source_iri: String,
+        target_iri: String,
+        link_type: SkillLinkType,
+        strength: LinkStrength,
+        description: String,
+    },
+    /// 方法论调整建议的治理记录。对应的技能 IRI 是合成的
+    /// (`iri://methodology/<methodology_id>`)，不需要图节点。
+    Methodology { methodology_id: String },
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +119,15 @@ pub enum EvolutionSuggestionType {
     Deprecate,
     Merge,
     Split,
+    /// 方法论调整建议，以合成技能 IRI 记录。
+    Methodology,
+}
+
+/// 提案中代表方法论的合成技能 IRI 前缀。这些 IRI 永远不对应图节点。
+pub const METHODOLOGY_IRI_PREFIX: &str = "iri://methodology/";
+
+pub fn is_methodology_iri(iri: &str) -> bool {
+    iri.starts_with(METHODOLOGY_IRI_PREFIX)
 }
 
 pub struct SkillEvolutionEngine {
@@ -211,6 +263,8 @@ impl SkillEvolutionEngine {
                         skill_iri, error, error_class, inference.confidence
                     ),
                     confidence: inference.confidence,
+                    patch: None,
+                    approval: EvolutionApproval::Pending,
                 });
                 return;
             }
@@ -264,6 +318,8 @@ impl SkillEvolutionEngine {
                 skill_iri, error, error_class
             ),
             confidence: 0.7,
+            patch: None,
+            approval: EvolutionApproval::Pending,
         });
     }
 
@@ -434,6 +490,14 @@ impl SkillEvolutionEngine {
                 source_iri, target_iri, link_type, description
             ),
             confidence: 0.8,
+            patch: Some(EvolutionPatch::AddLink {
+                source_iri: source_iri.to_string(),
+                target_iri: target_iri.to_string(),
+                link_type,
+                strength: LinkStrength::Recommended,
+                description: description.to_string(),
+            }),
+            approval: EvolutionApproval::Pending,
         });
 
         Ok(())
@@ -447,20 +511,38 @@ impl SkillEvolutionEngine {
 
         match suggestion.suggestion_type {
             EvolutionSuggestionType::AddLink => {
-                let parts: Vec<&str> = suggestion.description.split(" -> ").collect();
-                if parts.len() >= 2 {
-                    let source = parts[0];
-                    let rest = parts[1];
-                    let target_end = rest.find(" (").unwrap_or(rest.len());
-                    let target = &rest[..target_end];
-
+                // 有类型化补丁时按补丁精确落图，否则回退到描述串解析。
+                if let Some(EvolutionPatch::AddLink {
+                    source_iri,
+                    target_iri,
+                    link_type,
+                    strength,
+                    description,
+                }) = &suggestion.patch
+                {
                     self.graph_store.add_link(
-                        source,
-                        target,
-                        SkillLinkType::Related,
-                        LinkStrength::Recommended,
-                        &suggestion.description,
+                        source_iri,
+                        target_iri,
+                        *link_type,
+                        *strength,
+                        description,
                     )?;
+                } else {
+                    let parts: Vec<&str> = suggestion.description.split(" -> ").collect();
+                    if parts.len() >= 2 {
+                        let source = parts[0];
+                        let rest = parts[1];
+                        let target_end = rest.find(" (").unwrap_or(rest.len());
+                        let target = &rest[..target_end];
+
+                        self.graph_store.add_link(
+                            source,
+                            target,
+                            SkillLinkType::Related,
+                            LinkStrength::Recommended,
+                            &suggestion.description,
+                        )?;
+                    }
                 }
             }
             EvolutionSuggestionType::UpdateSuccessRate => {
@@ -478,6 +560,13 @@ impl SkillEvolutionEngine {
             EvolutionSuggestionType::Merge | EvolutionSuggestionType::Split => {
                 warn!(
                     "Skill merge/split suggestion requires manual confirmation: {}",
+                    suggestion.skill_iri
+                );
+            }
+            EvolutionSuggestionType::Methodology => {
+                // 方法论建议只作治理记录，不改技能图。
+                warn!(
+                    "Methodology adjustment suggestion requires manual confirmation: {}",
                     suggestion.skill_iri
                 );
             }
@@ -625,6 +714,8 @@ impl SkillEvolutionEngine {
                         health.health_score
                     ),
                     confidence: 0.6,
+                    patch: None,
+                    approval: EvolutionApproval::Pending,
                 });
             }
 
@@ -639,6 +730,14 @@ impl SkillEvolutionEngine {
                             target, link_type
                         ),
                         confidence,
+                        patch: Some(EvolutionPatch::AddLink {
+                            source_iri: skill.skill_iri.clone(),
+                            target_iri: target.clone(),
+                            link_type,
+                            strength: LinkStrength::Recommended,
+                            description: format!("Suggested link to {}", target),
+                        }),
+                        approval: EvolutionApproval::Pending,
                     });
                 }
             }
