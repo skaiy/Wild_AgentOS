@@ -18,7 +18,12 @@ jobs:
     - uses: actions/checkout@v4
     - name: Check namespace consistency
       run: ./scripts/check_namespace.sh
+    # build.rs compiles the gRPC protos via tonic-build, which needs protoc.
+    - name: Install protoc
+      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+    - name: Cache Cargo artifacts
+      uses: Swatinem/rust-cache@v2
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --workspace --verbose
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --workspace --verbose
