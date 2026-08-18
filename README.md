@@ -14,7 +14,7 @@
 
 ---
 
-[**English**](README.md) · [**中文**](README.zh.md) · [**Design Detail →**](docs/DESIGN_DETAIL.md)
+[**English**](README.md) · [**中文**](README.zh.md) · [**Design Detail →**](docs/13-DESIGN_DETAIL.md)
 
 </div>
 
@@ -233,7 +233,7 @@ cargo build -p wild-code-cli --release
 
 ## 📚 Documentation
 
-- **Design Detail** → [`docs/DESIGN_DETAIL.md`](docs/DESIGN_DETAIL.md) · [`docs/DESIGN_DETAIL.zh.md`](docs/DESIGN_DETAIL.zh.md) (中文)
+- **Design Detail** → [`docs/13-DESIGN_DETAIL.md`](docs/13-DESIGN_DETAIL.md) · [`docs/13-DESIGN_DETAIL.zh.md`](docs/13-DESIGN_DETAIL.zh.md) (中文)
 - **Core Design Philosophy** → [`docs/CORE_DESIGN_PHILOSOPHY.md`](docs/CORE_DESIGN_PHILOSOPHY.md) · [`docs/CORE_DESIGN_PHILOSOPHY.zh.md`](docs/CORE_DESIGN_PHILOSOPHY.zh.md) (中文)
 - **gRPC Proto** → [`proto/pdca_core.proto`](proto/pdca_core.proto)
 
