@@ -35,8 +35,17 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
 
+          # Intel Mac — built natively on the x86_64 runner rather than
+          # cross-compiled, so the C deps (ring, aws-lc-sys) resolve normally.
+          - os: macos-13
+            target: x86_64-apple-darwin
+
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+
+          # ARM Windows — native runner for the same reason as Intel Mac.
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +68,7 @@ jobs:
       # ----- Zig & Protoc Setup -----
       - name: Setup Zig
         if: matrix.use_zigbuild
-        uses: goto-bus-stop/setup-zig@v1
+        uses: mlugg/setup-zig@v2
         with:
           version: 0.13.0
 
