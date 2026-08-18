@@ -309,7 +309,7 @@ impl SyscallGate {
         if let Some(iris) = self.agent_whitelist.get(agent_id) {
             for iri in iris {
                 let sparql = format!(
-                    "INSERT DATA {{ GRAPH <{graph}> {{ <{iri}> <https://agent-harness.os/skill#accessibleTool> \"true\" . }} }}",
+                    "INSERT DATA {{ GRAPH <{graph}> {{ <{iri}> <https://wildagentos.org/ontology/skill#accessibleTool> \"true\" . }} }}",
                     graph = graph, iri = iri
                 );
                 blackboard.sparql_update(&sparql)?;
@@ -327,7 +327,7 @@ impl SyscallGate {
     ) -> Result<Vec<String>, CoreError> {
         let graph = format!("iri://whitelist/{}", agent_id);
         let sparql = format!(
-            "SELECT ?iri WHERE {{ GRAPH <{graph}> {{ ?iri a <https://agent-harness.os/skill#AccessibleTool> }} }}",
+            "SELECT ?iri WHERE {{ GRAPH <{graph}> {{ ?iri a <https://wildagentos.org/ontology/skill#AccessibleTool> }} }}",
             graph = graph
         );
         let results = blackboard.query(&sparql)?;

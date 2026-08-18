@@ -153,7 +153,7 @@ impl ProjectionEngine {
                 params: vec![],
                 jsonld_frame: Some(
                     FrameTemplate::new(serde_json::json!({
-                        "agent": "https://agent-harness.os/agent#"
+                        "agent": "https://wildagentos.org/ontology/agent#"
                     }))
                     .with_include_properties(vec!["summary".to_string(), "status".to_string()])
                     .with_max_depth(1),
@@ -207,8 +207,8 @@ impl ProjectionEngine {
                 params: vec!["task_iri".to_string()],
                 jsonld_frame: Some(
                     FrameTemplate::new(serde_json::json!({
-                        "exec": "https://agent-harness.os/exec#",
-                        "task": "https://agent-harness.os/task#"
+                        "exec": "https://wildagentos.org/ontology/exec#",
+                        "task": "https://wildagentos.org/ontology/task#"
                     }))
                     .with_embed_rule("task:subTasks".to_string(), EmbedDirective::Always)
                     .with_embed_rule("exec:assignedTo".to_string(), EmbedDirective::Link)
@@ -255,8 +255,8 @@ impl ProjectionEngine {
                 params: vec!["plan_iri".to_string()],
                 jsonld_frame: Some(
                     FrameTemplate::new(serde_json::json!({
-                        "exec": "https://agent-harness.os/exec#",
-                        "task": "https://agent-harness.os/task#"
+                        "exec": "https://wildagentos.org/ontology/exec#",
+                        "task": "https://wildagentos.org/ontology/task#"
                     }))
                     .with_embed_rule("task:inputData".to_string(), EmbedDirective::Always)
                     .with_embed_rule("task:resources".to_string(), EmbedDirective::Link)
@@ -302,8 +302,8 @@ impl ProjectionEngine {
                 params: vec!["artifact_iri".to_string()],
                 jsonld_frame: Some(
                     FrameTemplate::new(serde_json::json!({
-                        "exec": "https://agent-harness.os/exec#",
-                        "task": "https://agent-harness.os/task#"
+                        "exec": "https://wildagentos.org/ontology/exec#",
+                        "task": "https://wildagentos.org/ontology/task#"
                     }))
                     .with_embed_rule("exec:results".to_string(), EmbedDirective::Always)
                     .with_embed_rule("exec:validationRules".to_string(), EmbedDirective::Always)
@@ -342,8 +342,8 @@ impl ProjectionEngine {
                 params: vec!["review_iri".to_string()],
                 jsonld_frame: Some(
                     FrameTemplate::new(serde_json::json!({
-                        "exec": "https://agent-harness.os/exec#",
-                        "task": "https://agent-harness.os/task#"
+                        "exec": "https://wildagentos.org/ontology/exec#",
+                        "task": "https://wildagentos.org/ontology/task#"
                     }))
                     .with_embed_rule("exec:reviewResults".to_string(), EmbedDirective::Always)
                     .with_embed_rule("exec:alternatives".to_string(), EmbedDirective::Link)
@@ -829,17 +829,17 @@ impl ProjectionEngine {
             return prop.replace('_', " ");
         }
 
-        if let Some(prop) = predicate.strip_prefix("https://wildagentos.org/ontology/") {
-            return prop.to_string();
-        }
-
         for prefix in &[
-            "https://agent-harness.os/task#",
-            "https://agent-harness.os/exec#",
+            "https://wildagentos.org/ontology/task#",
+            "https://wildagentos.org/ontology/exec#",
         ] {
             if let Some(prop) = predicate.strip_prefix(prefix) {
                 return prop.to_string();
             }
+        }
+
+        if let Some(prop) = predicate.strip_prefix("https://wildagentos.org/ontology/") {
+            return prop.to_string();
         }
 
         predicate.to_string()
@@ -1193,7 +1193,7 @@ impl ProjectionEngine {
         let mut current_tokens = 0;
 
         let default_frame = FrameTemplate::new(serde_json::json!({
-            "agent": "https://agent-harness.os/agent#"
+            "agent": "https://wildagentos.org/ontology/agent#"
         }))
         .with_max_depth(3);
 
@@ -1222,7 +1222,7 @@ impl ProjectionEngine {
         projection.insert(
             "@context".to_string(),
             serde_json::json!({
-                "agent": "https://agent-harness.os/agent#"
+                "agent": "https://wildagentos.org/ontology/agent#"
             }),
         );
         projection.insert("task_iri".to_string(), Value::String(task_iri.to_string()));
@@ -1367,7 +1367,7 @@ mod tests {
         );
 
         let frame = FrameTemplate::new(serde_json::json!({
-            "task": "https://agent-harness.os/task#"
+            "task": "https://wildagentos.org/ontology/task#"
         }))
         .with_include_properties(vec!["summary".to_string(), "status".to_string()])
         .with_max_depth(2);

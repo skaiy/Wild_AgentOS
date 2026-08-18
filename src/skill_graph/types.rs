@@ -768,7 +768,7 @@ impl SkillGraphNode {
 
         json!({
             "@context": {
-                "skill": "https://agent-harness.os/skill#",
+                "skill": "https://wildagentos.org/ontology/skill#",
                 "schema": "https://schema.org/"
             },
             "@id": self.skill_iri,

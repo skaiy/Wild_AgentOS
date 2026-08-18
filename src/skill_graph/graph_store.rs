@@ -1524,4 +1524,47 @@ mod tests {
             .await;
         assert!(results.is_empty(), "Empty store should return no results");
     }
+
+    #[test]
+    fn test_hydrate_skips_stale_placeholder_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let l0 = Arc::new(L0Store::new(dir.path().to_str().unwrap()).unwrap());
+
+        let store = SkillGraphStore::new().with_l0_store(l0.clone());
+        store
+            .register_skill(SkillGraphNode::new(
+                "iri://skills/fresh",
+                "Fresh",
+                "New format",
+            ))
+            .unwrap();
+
+        // 历史格式：仅写入占位串 `skill:<iri>`，无法反序列化为节点
+        let stale = crate::memory::l0_store::L0Entry {
+            iri: "iri://skills/stale".to_string(),
+            content: "skill:iri://skills/stale".to_string(),
+            importance: 0.0,
+            access_count: 0,
+            created_at: Utc::now(),
+            last_accessed: Utc::now(),
+            tags: vec![],
+            metadata: serde_json::Map::new(),
+            mesi_state: crate::memory::l0_store::MesiState::Shared,
+            content_hash: String::new(),
+            named_graph: Some(SKILL_GRAPH_NAMED_GRAPH.to_string()),
+            jsonld_context: None,
+            jsonld_types: vec!["skill:Skill".to_string()],
+            hyperspace_point_id: None,
+        };
+        l0.store_entry(&stale).unwrap();
+
+        let restored = SkillGraphStore::new().with_l0_store(l0);
+        assert_eq!(
+            restored.hydrate_from_l0().unwrap(),
+            1,
+            "占位串条目不得计入成功数"
+        );
+        assert!(restored.get_skill("iri://skills/fresh").is_some());
+        assert!(restored.get_skill("iri://skills/stale").is_none());
+    }
 }

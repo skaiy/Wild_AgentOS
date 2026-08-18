@@ -69,8 +69,7 @@ impl OntologyStore {
 
     /// 内存态构造（测试用）。
     pub fn new() -> Result<Self, String> {
-        let store =
-            Store::new().map_err(|e| format!("failed to create Oxigraph Store: {}", e))?;
+        let store = Store::new().map_err(|e| format!("failed to create Oxigraph Store: {}", e))?;
         Ok(Self {
             store: Arc::new(store),
         })
@@ -137,7 +136,11 @@ impl OntologyStore {
         let mut triples: Vec<String> = Vec::new();
         // domain 标记（挂在一个稳定的 domain 节点上，供 is_seeded 判定与列举）。
         let domain_iri = format!("{}domain/{}", META_NS, iri_frag(&def.domain));
-        triples.push(fmt_lit(&domain_iri, &format!("{}domain", META_NS), &def.domain));
+        triples.push(fmt_lit(
+            &domain_iri,
+            &format!("{}domain", META_NS),
+            &def.domain,
+        ));
         triples.push(fmt_iri(
             &domain_iri,
             RDF_TYPE,
@@ -488,7 +491,13 @@ impl OntologyStore {
         }
         let _ = self.backup_meta_graph();
         let value = serde_json::to_value(action).map_err(|e| e.to_string())?;
-        self.write_element(MetaKind::ActionType, &action.id, &action.label, value, domain)
+        self.write_element(
+            MetaKind::ActionType,
+            &action.id,
+            &action.label,
+            value,
+            domain,
+        )
     }
 
     /// 删除 ActionType（动作无下游引用，直接删）。写前备份。
@@ -529,7 +538,12 @@ fn fmt_iri(s: &str, p: &str, o: &str) -> String {
 
 /// 构造 `<s> <p> "lit" .` 三元组（对象为字符串字面量）。
 fn fmt_lit(s: &str, p: &str, lit: &str) -> String {
-    format!("<{}> <{}> \"{}\" .", s, p, OntologyStore::escape_literal(lit))
+    format!(
+        "<{}> <{}> \"{}\" .",
+        s,
+        p,
+        OntologyStore::escape_literal(lit)
+    )
 }
 
 /// 构造 `<s> <p> "n"^^xsd:integer .` 三元组（对象为整数字面量）。
@@ -666,7 +680,11 @@ mod tests {
         let n2 = store.load_ids(MetaKind::ObjectType).unwrap().len();
         assert_eq!(n2, n1, "同 id upsert 应替换而非新增");
         let loaded = store.load_definition("ev-repair").unwrap();
-        let got = loaded.object_types.iter().find(|o| o.id == "TestGizmo").unwrap();
+        let got = loaded
+            .object_types
+            .iter()
+            .find(|o| o.id == "TestGizmo")
+            .unwrap();
         assert_eq!(got.label, "改名后");
     }
 
@@ -675,8 +693,12 @@ mod tests {
         let store = OntologyStore::new().unwrap();
         store.ensure_seeded("ev-repair").unwrap();
         // 新增对象 A、B 与一条 A→B 链接，再删 A 应被拦截。
-        store.upsert_object_type("ev-repair", &sample_obj("Aaa")).unwrap();
-        store.upsert_object_type("ev-repair", &sample_obj("Bbb")).unwrap();
+        store
+            .upsert_object_type("ev-repair", &sample_obj("Aaa"))
+            .unwrap();
+        store
+            .upsert_object_type("ev-repair", &sample_obj("Bbb"))
+            .unwrap();
         let link = LinkType {
             id: "AaaToBbb".into(),
             iri: super::super::ontology_layer::ev("AaaToBbb"),
@@ -709,7 +731,10 @@ mod tests {
             target: "AlsoNone".into(),
             cardinality: super::super::ontology_layer::Cardinality::OneToOne,
         };
-        assert!(store.upsert_link_type("ev-repair", &link).is_err(), "引用不存在对象应拒绝");
+        assert!(
+            store.upsert_link_type("ev-repair", &link).is_err(),
+            "引用不存在对象应拒绝"
+        );
     }
 
     fn sample_action(id: &str, applies_to: &str) -> ActionType {
@@ -757,7 +782,11 @@ mod tests {
         let n2 = store.load_ids(MetaKind::ActionType).unwrap().len();
         assert_eq!(n2, n1, "同 id upsert 应替换而非新增");
         let loaded = store.load_definition("ev-repair").unwrap();
-        let got = loaded.action_types.iter().find(|a| a.id == "TestAct").unwrap();
+        let got = loaded
+            .action_types
+            .iter()
+            .find(|a| a.id == "TestAct")
+            .unwrap();
         assert_eq!(got.label, "改名后");
 
         // 删除。
