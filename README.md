@@ -16,6 +16,8 @@
 
 [**English**](README.md) · [**中文**](README.zh.md) · [**Design Detail →**](docs/13-DESIGN_DETAIL.md)
 
+<img src="assets/github-readme.png" alt="Wild AgentOS" width="100%" />
+
 </div>
 
 ---
